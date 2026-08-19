@@ -1,0 +1,15 @@
+error[E0061]: this method takes 2 arguments but 1 argument was supplied
+  --> tests/ui/unlock_without_proof.rs:14:27
+   |
+14 |     let _session = locked.unlock(&mut env);
+   |                           ^^^^^^ -------- argument #1 of type `AuthProof` is missing
+   |
+note: method defined here
+  --> src/lib.rs
+   |
+   |     pub fn unlock(self, proof: AuthProof, env: &mut impl CompositorEnv) -> Compositor<Session> {
+   |            ^^^^^^
+help: provide the argument
+   |
+14 |     let _session = locked.unlock(/* AuthProof */, &mut env);
+   |                                  ++++++++++++++++

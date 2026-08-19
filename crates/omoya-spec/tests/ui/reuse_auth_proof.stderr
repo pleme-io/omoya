@@ -1,0 +1,11 @@
+error[E0382]: use of moved value: `proof`
+  --> tests/ui/reuse_auth_proof.rs:12:34
+   |
+ 8 |     let proof = env.authenticate("luis", "grapheme").unwrap();
+   |         ----- move occurs because `proof` has type `AuthProof`, which does not implement the `Copy` trait
+ 9 |
+10 |     let locked = entrance.enter_session(proof, &mut env).lock(&mut env);
+   |                                         ----- value moved here
+11 |     // `proof` was spent above. Spending it again is the bug this prevents.
+12 |     let _session = locked.unlock(proof, &mut env);
+   |                                  ^^^^^ value used here after move

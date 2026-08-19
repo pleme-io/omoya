@@ -1,0 +1,25 @@
+error[E0277]: the trait bound `Kiosk: omoya_spec::sealed::Sealed` is not satisfied
+ --> tests/ui/foreign_mode_state.rs:8:20
+  |
+8 | impl ModeState for Kiosk {
+  |                    ^^^^^ unsatisfied trait bound
+  |
+help: the trait `omoya_spec::sealed::Sealed` is not implemented for `Kiosk`
+ --> tests/ui/foreign_mode_state.rs:6:1
+  |
+6 | struct Kiosk;
+  | ^^^^^^^^^^^^
+  = help: the following other types implement trait `omoya_spec::sealed::Sealed`:
+            Entrance
+            Locked
+            Session
+note: required by a bound in `ModeState`
+ --> src/lib.rs
+  |
+  | pub trait ModeState: sealed::Sealed {
+  |                      ^^^^^^^^^^^^^^ required by this bound in `ModeState`
+  = note: `ModeState` is a "sealed trait", because to implement it you also need to implement `omoya_spec::sealed::Sealed`, which is not accessible; this is usually done to force you to use one of the provided types that already implement it
+  = help: the following types implement the trait:
+            omoya_spec::Entrance
+            omoya_spec::Session
+            omoya_spec::Locked

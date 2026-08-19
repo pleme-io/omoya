@@ -1,0 +1,22 @@
+[package]
+name = "omoya-spec"
+description = "omoya's typed mode machine — the compositor's Entrance/Session/Locked spine, with no platform dependencies"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+# ★ THE DEPENDENCY SET IS THE POINT. No smithay, no wayland, no libc, no wgpu.
+# This crate is the half of omoya that can be tested on a Mac, in CI, with no
+# GPU and no seat — which is exactly what makes the mode machine's invariants
+# checkable before any of the hard platform work exists.
+[dependencies]
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+# trybuild — the seals. Each `tests/ui/*.rs` is an illegal state, and its
+# committed `.stderr` is the PROOF that the compiler refuses it. A seal without
+# a recorded red run is a claim; these are receipts.
+trybuild = "1"

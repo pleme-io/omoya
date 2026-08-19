@@ -1,0 +1,7 @@
+error: cannot construct `DrmMaster` with struct literal syntax due to private fields
+ --> tests/ui/forge_drm_master.rs:7:19
+  |
+7 |     let _second = DrmMaster {};
+  |                   ^^^^^^^^^
+  |
+  = note: private field `_private` that was not provided

@@ -1,0 +1,7 @@
+error: cannot construct `AuthProof` with struct literal syntax due to private fields
+ --> tests/ui/forge_auth_proof.rs:7:19
+  |
+7 |     let _forged = AuthProof {};
+  |                   ^^^^^^^^^
+  |
+  = note: private field `_private` that was not provided
