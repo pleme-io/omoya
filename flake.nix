@@ -19,11 +19,7 @@
   #
   # `pending-substrate-flake: omoya has no releasable artifact yet`
   outputs =
-    {
-      nixpkgs,
-      flake-utils,
-      ...
-    }:
+    { nixpkgs, flake-utils, ... }:
     flake-utils.lib.eachDefaultSystem (
       system:
       let
@@ -66,6 +62,39 @@
           libGL
           vulkan-loader
         ];
+        # ── THE M4 SET — DRM/KMS on real hardware ──────────────────────────
+        # Deliberately a SEPARATE shell, not an addition to the default one.
+        # The M2 trim was measured, not stylistic: libinput drags
+        # libwacom → libgudev → umockdev → libpcap → libnl, and on plo that
+        # whole subtree missed the binary cache and compiled for 40+ minutes —
+        # a device-mocking framework and a packet-capture library, built for a
+        # compositor that reads its input from winit. Keeping the sets apart
+        # means the M2 dev loop never pays for M4's hardware access.
+        #
+        # `nix develop .#drm` is what M4 builds in. Everything here is used by
+        # `backend_drm` + `backend_session_libseat` + `backend_udev` +
+        # `backend_libinput`, and nothing here is used before then.
+        # ★ SCANOUT ONLY, and the split is MEASURED rather than tidy-minded.
+        # M4's first done-predicate is "drives the monitor at its native mode",
+        # which needs no input at all. Dry-run on plo, 2026-08-19:
+        #
+        #   libdrm + libgbm + udev + seatd + mesa  ->  nothing to build
+        #   the same set PLUS libinput             ->  11 derivations
+        #
+        # Those 11 are the libinput chain (libnl, libpcap, umockdev, libgudev,
+        # libwacom) plus graphviz and source-highlight pulled in to build them.
+        # So scanout is FREE and input is the thing that costs — which makes
+        # "M4a scanout, M4b input" a real boundary rather than a bookkeeping
+        # one. libinput joins this list when M4b starts; the chain has been
+        # pre-built on plo so that day costs nothing either.
+        drmDeps = with pkgs; [
+          libdrm # the KMS ioctls themselves
+          libgbm # buffer allocation for the scanout path
+          udev # device discovery + hotplug
+          seatd # libseat — session/VT arbitration (talks to logind here)
+          mesa # the GL/EGL userspace, for when the dumb-buffer path grows one
+        ];
+
         # ── THE WITNESS SET ────────────────────────────────────────────────
         # Answering "does omoya composite?" needs a display to composite ONTO
         # and a way to read the pixels back. Xvfb supplies the first without a
@@ -101,6 +130,23 @@
           buildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux compositorDeps;
           LD_LIBRARY_PATH = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux (
             pkgs.lib.makeLibraryPath compositorDeps
+          );
+        };
+
+        # `nix develop .#drm` — M4a's environment (scanout). See `drmDeps` for
+        # why it is separate from the default shell, and for the measurement
+        # that makes scanout-vs-input the right place to split it.
+        devShells.drm = pkgs.mkShell {
+          name = "omoya-drm";
+          nativeBuildInputs = with pkgs; [
+            rustc
+            cargo
+            clippy
+            pkg-config
+          ];
+          buildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux (compositorDeps ++ drmDeps);
+          LD_LIBRARY_PATH = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux (
+            pkgs.lib.makeLibraryPath (compositorDeps ++ drmDeps)
           );
         };
 
