@@ -20,11 +20,11 @@
 use smithay::{
     backend::input::{
         AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputBackend, InputEvent,
-        KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent,
+        KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent,
     },
     input::{
         keyboard::FilterResult,
-        pointer::{AxisFrame, ButtonEvent, MotionEvent},
+        pointer::{AxisFrame, ButtonEvent, MotionEvent, RelativeMotionEvent},
     },
     reexports::wayland_protocols::xdg::shell::server::xdg_toplevel,
     utils::SERIAL_COUNTER,
@@ -82,6 +82,64 @@ impl Omoya {
                     );
                 }
             }
+            // ── ★ RELATIVE MOTION: WHAT A MOUSE ACTUALLY SENDS ────────────
+            // This arm did not exist, and its absence was invisible for a
+            // structural reason worth recording: libinput emits
+            // `PointerMotion` (a DELTA) for mice, and winit emits only
+            // `PointerMotionAbsolute`. So the nested backend — the one used
+            // for development — exercised the absolute arm exclusively, while
+            // the DRM backend on a real seat sent deltas straight into the
+            // catch-all `_ => {}` below. A mouse on plo moved nothing, and no
+            // amount of testing in the nested backend could have shown it.
+            InputEvent::PointerMotion { event, .. } => {
+                let Some(pointer) = self.seat.get_pointer() else {
+                    return;
+                };
+
+                // Accumulate, then clamp to the output. Without the clamp the
+                // pointer walks off the edge and never comes back: nothing
+                // else bounds it, and `surface_under` on an off-screen point
+                // simply finds nothing, so the seat looks frozen rather than
+                // wrong.
+                let mut loc = self.pointer_location + event.delta();
+                if let Some(output) = self.space.outputs().next().cloned()
+                    && let Some(geo) = self.space.output_geometry(&output)
+                {
+                    let max_x = f64::from(geo.loc.x + geo.size.w);
+                    let max_y = f64::from(geo.loc.y + geo.size.h);
+                    loc.x = loc.x.clamp(f64::from(geo.loc.x), max_x);
+                    loc.y = loc.y.clamp(f64::from(geo.loc.y), max_y);
+                }
+                self.pointer_location = loc;
+
+                let serial = SERIAL_COUNTER.next_serial();
+                let under = self.surface_under(loc);
+                pointer.motion(
+                    self,
+                    under.clone(),
+                    &MotionEvent {
+                        location: loc,
+                        serial,
+                        time: event.time_msec(),
+                    },
+                );
+                // ★ `relative_motion` IN ADDITION to `motion`, not instead.
+                // `motion` is what moves the cursor; `relative_motion` is the
+                // zwp_relative_pointer protocol, which is how a game or a 3D
+                // viewport gets un-clamped deltas after locking the pointer.
+                // Sending only the first makes those clients unusable in a way
+                // that looks like the compositor ignoring them.
+                pointer.relative_motion(
+                    self,
+                    under,
+                    &RelativeMotionEvent {
+                        delta: event.delta(),
+                        delta_unaccel: event.delta_unaccel(),
+                        utime: event.time(),
+                    },
+                );
+                pointer.frame(self);
+            }
             InputEvent::PointerMotionAbsolute { event, .. } => {
                 let Some(output) = self.space.outputs().next().cloned() else {
                     return;
@@ -90,6 +148,12 @@ impl Omoya {
                     return;
                 };
                 let pos = event.position_transformed(output_geo.size) + output_geo.loc.to_f64();
+                // ★ Keep the shared location current. Both arms move the same
+                // pointer, so an absolute event that did not write here would
+                // leave the next relative delta accumulating from wherever the
+                // mouse last was — the cursor would jump backwards the moment
+                // someone touched a tablet and then moved a mouse.
+                self.pointer_location = pos;
                 let serial = SERIAL_COUNTER.next_serial();
                 let Some(pointer) = self.seat.get_pointer() else {
                     return;

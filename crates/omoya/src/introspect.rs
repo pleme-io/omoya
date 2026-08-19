@@ -78,6 +78,19 @@ pub struct OmoyaIntrospect {
     /// Whether libinput attached. An agent debugging "I cannot type" should be
     /// able to ask this rather than infer it from a log line.
     pub input_attached: AtomicU64,
+    /// Whether logind/libseat currently considers this session active.
+    ///
+    /// ★ 1 while the seat is ours, 0 while another VT holds it. Published
+    /// because "why is the screen not updating" and "another VT has the seat"
+    /// are indistinguishable from outside — and this is the surface that tells
+    /// them apart without someone walking to the machine.
+    pub session_active: AtomicU64,
+    /// Session activate/pause events observed since start.
+    ///
+    /// ★ Zero after a VT switch means the notifier is not wired — the exact
+    /// defect this counter was added alongside. A count that never moves is
+    /// the symptom; before the fix it could not have moved at all.
+    pub session_events: AtomicU64,
     /// The Wayland socket clients connect on.
     pub socket: std::sync::OnceLock<String>,
     /// Seat mode, as `SeatMode::name()` spells it.
@@ -120,6 +133,10 @@ impl Introspect for OmoyaIntrospect {
             "input_attached" => Ok(serde_json::json!(
                 self.input_attached.load(Ordering::Relaxed) == 1
             )),
+            "session_active" => Ok(serde_json::json!(
+                self.session_active.load(Ordering::Relaxed) == 1
+            )),
+            "session_events" => Ok(n(&self.session_events)),
             "socket" => Ok(g(&self.socket)),
             "mode" => Ok(g(&self.mode)),
             "output" => Ok(serde_json::json!({
@@ -155,6 +172,8 @@ impl Introspect for OmoyaIntrospect {
             "windows",
             "owed_vt_switches",
             "input_attached",
+            "session_active",
+            "session_events",
             "socket",
             "mode",
             "output",

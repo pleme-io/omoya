@@ -201,13 +201,74 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // console this may be, degrading to "visible but not typeable"
             // beats degrading to "black".
             match smithay::backend::session::libseat::LibSeatSession::new() {
-                Ok((session, _notifier)) => {
+                Ok((session, notifier)) => {
                     if let Err(e) = crate::drm::attach_input(&mut event_loop, session) {
                         tracing::error!(error = %e, "input attach failed — seat is look-only");
                     } else {
                         introspect
                             .input_attached
                             .store(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+
+                    // ── ★ THE NOTIFIER IS THE SESSION'S ONLY STRONG REFERENCE ──
+                    // It was bound as `_notifier` and dropped at the end of this
+                    // arm. That is not a stylistic slip: `LibSeatSessionNotifier`
+                    // holds the only `Rc<LibSeatSessionImpl>` while every
+                    // `LibSeatSession` holds a `Weak`, and `Session::open` starts
+                    // with `self.internal.upgrade()`. Dropping it makes every
+                    // later open fail with `SessionLost`.
+                    //
+                    // What that cost, precisely: `udev_assign_seat` enumerates
+                    // and opens the devices present AT STARTUP, inside this arm,
+                    // while the Rc is still alive — so the seat came up typeable
+                    // and the bug stayed invisible. It bit afterwards, on
+                    // hotplug (a keyboard plugged in later cannot be opened) and
+                    // on VT switch (device resume needs the session).
+                    //
+                    // ★ And it is ALSO an EventSource. Dropping it meant
+                    // `ActivateSession`/`PauseSession` were never delivered at
+                    // all — so on a VT switch away, omoya kept rendering to a
+                    // device whose DRM master it no longer held, with nothing
+                    // in the loop even aware the switch had happened.
+                    //
+                    // Inserting it into the event loop fixes both at once: the
+                    // loop owns it, so it outlives every open, and the events
+                    // arrive. That is why this is an insert and not a `let`
+                    // binding hoisted up the function.
+                    let session_intro = introspect.clone();
+                    match event_loop.handle().insert_source(notifier, move |event, (), _data| {
+                        use smithay::backend::session::Event as SessionEvent;
+                        match event {
+                            SessionEvent::ActivateSession => {
+                                session_intro
+                                    .session_active
+                                    .store(1, std::sync::atomic::Ordering::Relaxed);
+                                tracing::info!("session ACTIVATED — the seat is ours again");
+                            }
+                            SessionEvent::PauseSession => {
+                                session_intro
+                                    .session_active
+                                    .store(0, std::sync::atomic::Ordering::Relaxed);
+                                tracing::info!("session PAUSED — another VT holds the seat");
+                            }
+                        }
+                        session_intro
+                            .session_events
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }) {
+                        Ok(_token) => {
+                            introspect
+                                .session_active
+                                .store(1, std::sync::atomic::Ordering::Relaxed);
+                        }
+                        // Reported, not fatal — same reasoning as the arm above.
+                        // A seat that cannot observe VT switches is degraded;
+                        // a seat that refuses to start is worse.
+                        Err(e) => tracing::error!(
+                            error = %e,
+                            "session notifier not inserted — VT switches will go \
+                             unobserved and later device opens will fail"
+                        ),
                     }
                 }
                 Err(e) => tracing::error!(

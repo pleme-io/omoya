@@ -105,6 +105,19 @@ pub struct Omoya {
     pub data_device_state: DataDeviceState,
     pub popups: PopupManager,
     pub seat: Seat<Self>,
+
+    /// Where the pointer is, in logical coordinates.
+    ///
+    /// ── ★ WHY THIS HAS TO BE STATE ────────────────────────────────────────
+    /// A tablet reports an ABSOLUTE position, so the handler can compute the
+    /// location from the event alone and needs no memory. A mouse reports a
+    /// DELTA, and a delta is meaningless without the point it moves from — so
+    /// the compositor is the only thing that can hold it.
+    ///
+    /// Its absence is exactly why relative motion went unhandled: the
+    /// `PointerMotionAbsolute` arm could be written without touching state,
+    /// and the mouse arm could not, so the mouse arm was never written.
+    pub pointer_location: Point<f64, Logical>,
 }
 
 impl Omoya {
@@ -143,6 +156,11 @@ impl Omoya {
         Self {
             start_time,
             display_handle: dh,
+            // (0, 0) until the first motion. Not centred on the output,
+            // because at construction there is no output yet — the DRM backend
+            // adds one later, and a "centre" computed before that would be a
+            // guess dressed as a position.
+            pointer_location: (0.0, 0.0).into(),
             mode,
             reserved,
             owed_vt_switches: 0,
