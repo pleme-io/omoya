@@ -291,6 +291,12 @@
             # built cleanly and died instantly on plo with "cannot open shared
             # object file".
             pixman
+            # libgbm joins pixman in the "both lists" row: enabling
+            # `backend_gbm` (which DrmCompositor requires) links libgbm
+            # dynamically, so it needs the build input AND this entry. No
+            # GbmDevice is ever constructed — the runtime path is still dumb
+            # buffers — but the .so must resolve at exec time regardless.
+            libgbm
           ];
           wrapped = pkgs.symlinkJoin {
             name = "omoya-linux";
