@@ -42,20 +42,28 @@
         # the builder's "defaults to single member" path has nothing to default
         # to and picks wrong.
         member = "omoya";
-        # ★ NO buildInputs, and that is a measured answer rather than an
-        # omission. The first attempt passed
-        # `buildInputs = [ "wayland" "libxkbcommon" "libGL" ]` and rio refused
-        # it: `build input wayland does not exist`. The crate2nix layer
-        # resolves these as NAMES against its own package set rather than as
+        # ★ EXACTLY ONE build input, and the list is measured rather than
+        # guessed — it took two failed builds to get here, each narrowing it.
+        #
+        # Attempt 1 passed `[ "wayland" "libxkbcommon" "libGL" ]`, and rio
+        # refused it with `build input wayland does not exist`: the crate2nix
+        # layer resolves these as NAMES against its own package set, not as
         # nixpkgs attributes, so a plausible name is not necessarily a valid
         # one.
         #
-        # None are needed at BUILD time anyway: smithay's `wayland_frontend`
-        # uses the pure-Rust wayland-backend, so nothing here links the C
-        # libwayland. What the compositor needs are the libraries it DLOPENS at
-        # runtime, and those are the LD_LIBRARY_PATH wrap below — a different
-        # mechanism for a different problem, and conflating the two is what
-        # cost this build.
+        # Attempt 2 dropped all three, on the reasoning that smithay's
+        # `wayland_frontend` uses the pure-Rust wayland-backend and links no C
+        # libwayland. That reasoning was right about wayland and wrong about
+        # xkbcommon — the link failed with:
+        #
+        #   rust-lld: error: unable to find library -lxkbcommon
+        #
+        # So the honest split is: the `xkbcommon` crate LINKS libxkbcommon (it
+        # is in the rustc invocation as `-lxkbcommon`), while libwayland and
+        # libGL are DLOPENED and belong in the LD_LIBRARY_PATH wrap below.
+        # Link-time and dlopen-time are different mechanisms for different
+        # problems, and treating them as one list is what cost both builds.
+        buildInputs = [ "libxkbcommon" ];
       };
 
       devOutputs = flake-utils.lib.eachDefaultSystem (
