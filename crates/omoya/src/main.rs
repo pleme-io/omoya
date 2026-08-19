@@ -39,11 +39,28 @@ struct Args {
     mode: SeatMode,
     /// A command to spawn into the new seat once it is up.
     spawn: Option<Vec<String>>,
+    /// Which backend drives the pixels.
+    ///
+    /// Typed rather than auto-detected, deliberately. Guessing between "nested
+    /// in someone else's session" and "take the display" is a guess that, when
+    /// wrong in the second direction, blanks the console of a machine the
+    /// operator may be sitting in front of. An operator asks for DRM.
+    backend: Backend,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Backend {
+    /// smithay `backend_winit` — composites into a window belonging to an
+    /// existing X11 or Wayland session. Needs no DRM device, no root, no VT.
+    Nested,
+    /// smithay `backend_drm` — takes a display. M4a: scanout only, no input.
+    Drm,
 }
 
 fn parse_args() -> Result<Args, String> {
     let mut mode = SeatMode::Session;
     let mut spawn = None;
+    let mut backend = Backend::Nested;
     let mut it = std::env::args().skip(1);
 
     while let Some(arg) = it.next() {
@@ -51,6 +68,18 @@ fn parse_args() -> Result<Args, String> {
             "--mode" => {
                 let v = it.next().ok_or("--mode needs a value (entrance | session)")?;
                 mode = SeatMode::parse(&v)?;
+            }
+            "--backend" => {
+                let v = it.next().ok_or("--backend needs a value (nested | drm)")?;
+                backend = match v.as_str() {
+                    "nested" | "winit" => Backend::Nested,
+                    "drm" | "kms" => Backend::Drm,
+                    other => {
+                        return Err(format!(
+                            "unknown backend `{other}` — expected `nested` or `drm`"
+                        ));
+                    }
+                };
             }
             "--" => {
                 let rest: Vec<String> = it.by_ref().collect();
@@ -62,7 +91,10 @@ fn parse_args() -> Result<Args, String> {
             "-h" | "--help" => {
                 return Err(concat!(
                     "omoya — the pleme-io Wayland compositor\n\n",
-                    "  omoya [--mode entrance|session] [-- CMD ARGS...]\n\n",
+                    "  omoya [--mode entrance|session] [--backend nested|drm]\n",
+                    "        [-- CMD ARGS...]\n\n",
+                    "--backend nested  composite into an existing session's window\n",
+                    "--backend drm     take a display (M4a: scanout only, no input)\n\n",
                     "`lock` is not a launchable mode: it is in-process session\n",
                     "state (theory/OMOYA.md §4.2)."
                 )
@@ -71,7 +103,11 @@ fn parse_args() -> Result<Args, String> {
             other => return Err(format!("unknown argument `{other}` (try --help)")),
         }
     }
-    Ok(Args { mode, spawn })
+    Ok(Args {
+        mode,
+        spawn,
+        backend,
+    })
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -99,7 +135,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         display_handle,
     };
 
-    crate::winit::init_winit(&mut event_loop, &mut data)?;
+    match args.backend {
+        Backend::Nested => crate::winit::init_winit(&mut event_loop, &mut data)?,
+        Backend::Drm => {
+            // M4a is a SCANOUT PROBE, not yet a render loop: it opens the
+            // device, takes master, finds a connected connector and its
+            // preferred mode, and reports what it would drive. Saying that
+            // plainly is the honest rung — a `--backend drm` that silently did
+            // nothing, or that claimed a display it never programmed, is
+            // exactly the round-up this project keeps refusing.
+            let path = std::path::Path::new("/dev/dri/card0");
+            let (device, _fd) = crate::drm::open_device(path)?;
+            let target = crate::drm::probe(&device)?;
+            tracing::info!(
+                connector = %target.name,
+                mode = %format_args!("{}x{}", target.mode.size().0, target.mode.size().1),
+                refresh_hz = target.mode.vrefresh(),
+                frame_interval_us = crate::drm::frame_interval(&target).as_micros() as u64,
+                "DRM scanout target acquired — M4a probe"
+            );
+            tracing::warn!(
+                "M4a is scanout-probe only: the render loop and input (M4b) are \
+                 not built, so omoya will now exit rather than hold the display"
+            );
+            return Ok(());
+        }
+    }
 
     // Announce the socket BEFORE spawning, so a client started here finds it.
     let socket = data.state.socket_name.clone();
