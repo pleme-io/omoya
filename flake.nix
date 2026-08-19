@@ -81,6 +81,16 @@
         nativeBuildInputs = [
           "pkg-config"
           "libxkbcommon"
+          # M4a's software renderer. `renderer_pixman` links libpixman
+          # (`-lpixman-1` in the rustc invocation), so it belongs here beside
+          # xkbcommon rather than in the runtime wrap.
+          #
+          # ★ Worth noting what is NOT in this list: libdrm. smithay's
+          # `backend_drm` uses the `drm` / `drm-ffi` / `drm-sys` crates, which
+          # are pure-Rust ioctl bindings — they appear in the link line as
+          # rlibs, with no `-ldrm` anywhere. That is why the scanout dependency
+          # set measured as entirely cached: it adds no C library at all.
+          "pixman"
         ];
       };
 
