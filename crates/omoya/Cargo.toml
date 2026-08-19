@@ -29,6 +29,14 @@ awase = "0.1.10"
 # because the server had no wire into the live process.
 kanshou = "0.1"
 serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+# ── ★ D-Bus, pure Rust ────────────────────────────────────────────────────
+# zbus implements the protocol itself rather than binding libdbus, so speaking
+# logind costs no `.so` — which is the entire reason this replaces libseat
+# instead of wrapping it. Same pin as mukae-native, deliberately: two crates
+# speaking one bus should not drift on the client.
+zbus = { version = "5", default-features = false, features = ["blocking-api", "tokio"] }
+zvariant = "5"
 thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

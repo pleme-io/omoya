@@ -13,6 +13,7 @@
 //! mukae), no lock (M7), no chrome (M9). What this binary answers is the one
 //! question worth answering first — *can omoya composite at all?*
 
+mod logind;
 mod chord;
 #[cfg(target_os = "linux")]
 mod drm;
