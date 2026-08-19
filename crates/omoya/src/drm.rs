@@ -289,7 +289,12 @@ pub fn paint_background(
         // The renderer's supported formats. Pixman advertises these through the
         // dmabuf path it binds.
         [],
-        target.mode.size().0.into(),
+        // Cursor plane size, not a display dimension — I first passed the
+        // mode's width here, which is a `u16` where this wants
+        // `Size<u32, Buffer>`. 64x64 is the size every KMS driver supports for
+        // a hardware cursor; M4a draws no cursor at all (there is no input
+        // yet), so this only reserves the plane.
+        (64u32, 64u32).into(),
         None,
     )?;
 
