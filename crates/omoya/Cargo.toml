@@ -28,4 +28,14 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 [dependencies.smithay]
 version = "0.7"
 default-features = false
-features = ["backend_winit", "wayland_frontend", "desktop"]
+features = [
+  "backend_winit",
+  "wayland_frontend",
+  "desktop",
+  # M4a: the DRM/KMS scanout path. `renderer_pixman` is the software
+  # renderer OMOYA.md §5a chose FIRST — no GPU, no dmabuf, no unsafe —
+  # and on plo it is currently the ONLY path that works, since simpledrm
+  # owns the display until the nvidia stage is armed.
+  "backend_drm",
+  "renderer_pixman",
+]

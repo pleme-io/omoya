@@ -14,6 +14,8 @@
 //! question worth answering first — *can omoya composite at all?*
 
 mod chord;
+#[cfg(target_os = "linux")]
+mod drm;
 mod handlers;
 mod input;
 mod state;
