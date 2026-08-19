@@ -21,6 +21,14 @@ irodori = "0.2"
 # The chord catalog. `Reserved::fleet_linux()` is what stops omoya swallowing
 # Ctrl+Alt+F1..F12 and soft-bricking the machine — see awase@ce7a52b.
 awase = "0.1.10"
+# The fleet introspection sidecar — a shipped library (published 0.1.6,
+# ~1500 lines, 27 tests) already consumed BY VERSION by mado, tear and
+# frost. Adopted rather than re-rolled: writing a fresh Unix socket here
+# would start by reinventing the bug kanshou exists to prevent, where mado
+# once reported frame_perf 0 over MCP while its GUI rendered at 120fps
+# because the server had no wire into the live process.
+kanshou = "0.1"
+serde_json = "1"
 thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

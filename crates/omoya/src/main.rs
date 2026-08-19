@@ -17,6 +17,7 @@ mod chord;
 #[cfg(target_os = "linux")]
 mod drm;
 mod handlers;
+mod introspect;
 mod input;
 mod state;
 mod theme;

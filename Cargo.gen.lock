@@ -1,10 +1,10 @@
 {
   "schema_version": 2,
-  "cargo_lock_sha256": "31d23d0086cc4286fc3533972a8962d196ef33d91b2aca7c6e49721bab66e25d",
+  "cargo_lock_sha256": "2cd2a990a2d08aa1d33520c1442af865c8624537b4c77f56369d81b689e5de89",
   "manifest_sha256": {
     "Cargo.toml": "2219d270f45e191f29a586d4f54d43a603ba31259cd8f0056316ab68f9f06550",
     "crates/omoya-spec/Cargo.toml": "75cd6d31f2ef617df89556610445abab8cf9cddb49d7bbf04c28ac5b7fc89031",
-    "crates/omoya/Cargo.toml": "1476acc78913b8655821df21f327b8ff9edede38cdddc7fc2e03044ca0c99ffe"
+    "crates/omoya/Cargo.toml": "b93d13263dca5d68c2fe2d0116f84bcda71fd59cf04a5ccbea7d2bfc6a9536af"
   },
   "target_resolves": {
     "base": {
@@ -168,6 +168,14 @@
         ],
         "build_dependencies": [],
         "features": []
+      },
+      "bytes-1.12.1": {
+        "runtime_dependencies": [],
+        "build_dependencies": [],
+        "features": [
+          "default",
+          "std"
+        ]
       },
       "calloop-0.14.4": {
         "runtime_dependencies": [
@@ -1081,6 +1089,132 @@
         "build_dependencies": [],
         "features": []
       },
+      "kanshou-0.1.6": {
+        "runtime_dependencies": [
+          {
+            "name": "kanshou_derive",
+            "package_key": "kanshou-derive-0.1.6",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": true,
+            "target": null,
+            "tree": "host"
+          },
+          {
+            "name": "okiba",
+            "package_key": "okiba-0.2.1",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "serde",
+            "package_key": "serde-1.0.229",
+            "kind": "normal",
+            "features": [
+              "derive"
+            ],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "serde_json",
+            "package_key": "serde_json-1.0.151",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "thiserror",
+            "package_key": "thiserror-2.0.20",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "tokio",
+            "package_key": "tokio-1.53.1",
+            "kind": "normal",
+            "features": [
+              "io-util",
+              "macros",
+              "net",
+              "rt",
+              "sync",
+              "time"
+            ],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "tracing",
+            "package_key": "tracing-0.1.44",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": [
+          "default",
+          "derive"
+        ]
+      },
+      "kanshou-derive-0.1.6": {
+        "runtime_dependencies": [
+          {
+            "name": "proc_macro2",
+            "package_key": "proc-macro2-1.0.107",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "quote",
+            "package_key": "quote-1.0.47",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "syn",
+            "package_key": "syn-2.0.119",
+            "kind": "normal",
+            "features": [
+              "full"
+            ],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": []
+      },
       "khronos_api-3.1.0": {
         "runtime_dependencies": [],
         "build_dependencies": [],
@@ -1247,6 +1381,26 @@
         "build_dependencies": [],
         "features": []
       },
+      "mio-1.2.2": {
+        "runtime_dependencies": [
+          {
+            "name": "libc",
+            "package_key": "libc-0.2.189",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": "cfg(any(unix, target_os = \"hermit\", target_os = \"wasi\"))",
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": [
+          "net",
+          "os-ext",
+          "os-poll"
+        ]
+      },
       "nu-ansi-term-0.50.3": {
         "runtime_dependencies": [],
         "build_dependencies": [],
@@ -1274,6 +1428,11 @@
           "std"
         ]
       },
+      "okiba-0.2.1": {
+        "runtime_dependencies": [],
+        "build_dependencies": [],
+        "features": []
+      },
       "omoya-0.1.5": {
         "runtime_dependencies": [
           {
@@ -1297,8 +1456,28 @@
             "tree": "target"
           },
           {
+            "name": "kanshou",
+            "package_key": "kanshou-0.1.6",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
             "name": "omoya_spec",
             "package_key": "omoya-spec-0.1.5",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "serde_json",
+            "package_key": "serde_json-1.0.151",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -2460,6 +2639,24 @@
           "std"
         ]
       },
+      "socket2-0.6.5": {
+        "runtime_dependencies": [
+          {
+            "name": "libc",
+            "package_key": "libc-0.2.189",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": "cfg(any(unix, target_os = \"wasi\"))",
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": [
+          "all"
+        ]
+      },
       "syn-2.0.119": {
         "runtime_dependencies": [
           {
@@ -2728,6 +2925,159 @@
             "package_key": "cfg-if-1.0.4",
             "kind": "normal",
             "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": []
+      },
+      "tokio-1.53.1": {
+        "runtime_dependencies": [
+          {
+            "name": "bytes",
+            "package_key": "bytes-1.12.1",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": true,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "libc",
+            "package_key": "libc-0.2.189",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": true,
+            "target": "cfg(all(tokio_unstable, target_os = \"linux\"))",
+            "tree": "target"
+          },
+          {
+            "name": "libc",
+            "package_key": "libc-0.2.189",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": true,
+            "target": "cfg(target_os = \"wasi\")",
+            "tree": "target"
+          },
+          {
+            "name": "libc",
+            "package_key": "libc-0.2.189",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": true,
+            "target": "cfg(unix)",
+            "tree": "target"
+          },
+          {
+            "name": "mio",
+            "package_key": "mio-1.2.2",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": false,
+            "optional": true,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "mio",
+            "package_key": "mio-1.2.2",
+            "kind": "normal",
+            "features": [
+              "os-ext",
+              "os-poll"
+            ],
+            "uses_default_features": false,
+            "optional": true,
+            "target": "cfg(all(tokio_unstable, target_os = \"linux\"))",
+            "tree": "target"
+          },
+          {
+            "name": "pin_project_lite",
+            "package_key": "pin-project-lite-0.2.17",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "socket2",
+            "package_key": "socket2-0.6.5",
+            "kind": "normal",
+            "features": [
+              "all"
+            ],
+            "uses_default_features": true,
+            "optional": true,
+            "target": "cfg(any(not(target_family = \"wasm\"), all(target_os = \"wasi\", not(target_env = \"p1\"))))",
+            "tree": "target"
+          },
+          {
+            "name": "tokio_macros",
+            "package_key": "tokio-macros-2.7.2",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": true,
+            "target": null,
+            "tree": "host"
+          }
+        ],
+        "build_dependencies": [],
+        "features": [
+          "bytes",
+          "default",
+          "io-util",
+          "libc",
+          "macros",
+          "mio",
+          "net",
+          "rt",
+          "socket2",
+          "sync",
+          "time",
+          "tokio-macros",
+          "windows-sys"
+        ]
+      },
+      "tokio-macros-2.7.2": {
+        "runtime_dependencies": [
+          {
+            "name": "proc_macro2",
+            "package_key": "proc-macro2-1.0.107",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "quote",
+            "package_key": "quote-1.0.47",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "syn",
+            "package_key": "syn-3.0.3",
+            "kind": "normal",
+            "features": [
+              "full"
+            ],
             "uses_default_features": true,
             "optional": false,
             "target": null,
@@ -11175,6 +11525,9 @@
       "edition": "2018",
       "proc_macro": true
     },
+    "bytes-1.12.1": {
+      "edition": "2021"
+    },
     "calloop-0.13.0": {
       "edition": "2018"
     },
@@ -11327,6 +11680,13 @@
     "jobserver-0.1.35": {
       "edition": "2021"
     },
+    "kanshou-0.1.6": {
+      "edition": "2024"
+    },
+    "kanshou-derive-0.1.6": {
+      "edition": "2024",
+      "proc_macro": true
+    },
     "khronos_api-3.1.0": {
       "edition": "2015",
       "build_script": "build.rs"
@@ -11375,6 +11735,9 @@
     "memmap2-0.9.11": {
       "edition": "2021"
     },
+    "mio-1.2.2": {
+      "edition": "2021"
+    },
     "nu-ansi-term-0.50.3": {
       "edition": "2021"
     },
@@ -11410,6 +11773,9 @@
     },
     "objc2-quartz-core-0.2.2": {
       "edition": "2021"
+    },
+    "okiba-0.2.1": {
+      "edition": "2024"
     },
     "omoya-0.1.5": {
       "edition": "2024",
@@ -11549,6 +11915,9 @@
     "smol_str-0.2.2": {
       "edition": "2018"
     },
+    "socket2-0.6.5": {
+      "edition": "2021"
+    },
     "syn-2.0.119": {
       "edition": "2021"
     },
@@ -11583,6 +11952,13 @@
     },
     "thread_local-1.1.10": {
       "edition": "2021"
+    },
+    "tokio-1.53.1": {
+      "edition": "2021"
+    },
+    "tokio-macros-2.7.2": {
+      "edition": "2021",
+      "proc_macro": true
     },
     "toml-1.1.4+spec-1.1.0": {
       "edition": "2024"
