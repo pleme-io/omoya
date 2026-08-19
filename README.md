@@ -5,8 +5,11 @@
 > modes of one process**.
 
 **Status: M0.** `omoya-spec` — the typed mode machine — is shipped and green.
-There is no compositor yet: no smithay, no Wayland, no pixels. See
-[`theory/OMOYA.md`](https://github.com/pleme-io/theory/blob/main/OMOYA.md) for
+M2 SHIPPED (2026-08-19). The compositor runs on smithay's winit
+backend: it opens a Wayland socket, maps an output, paints Nord0
+byte-exact from `irodori::NORD`, and composites a real client —
+witnessed under Xvfb at 1280x800. M4 (DRM/VT) is NOT built, so it
+cannot drive a display or own a VT yet.
 the destination, the foundation decision, and the phase ladder.
 
 ## What exists
