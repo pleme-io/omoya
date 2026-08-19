@@ -42,20 +42,20 @@
         # the builder's "defaults to single member" path has nothing to default
         # to and picks wrong.
         member = "omoya";
-        # smithay links these at BUILD time (wayland-scanner generates protocol
-        # code, xkbcommon and libEGL are linked). Distinct from the runtime
-        # wrap further down, which exists for the libraries the compositor
-        # dlopens rather than links — both are needed and neither substitutes
-        # for the other.
-        nativeBuildInputs = [
-          "pkg-config"
-          "wayland-scanner"
-        ];
-        buildInputs = [
-          "wayland"
-          "libxkbcommon"
-          "libGL"
-        ];
+        # ★ NO buildInputs, and that is a measured answer rather than an
+        # omission. The first attempt passed
+        # `buildInputs = [ "wayland" "libxkbcommon" "libGL" ]` and rio refused
+        # it: `build input wayland does not exist`. The crate2nix layer
+        # resolves these as NAMES against its own package set rather than as
+        # nixpkgs attributes, so a plausible name is not necessarily a valid
+        # one.
+        #
+        # None are needed at BUILD time anyway: smithay's `wayland_frontend`
+        # uses the pure-Rust wayland-backend, so nothing here links the C
+        # libwayland. What the compositor needs are the libraries it DLOPENS at
+        # runtime, and those are the LD_LIBRARY_PATH wrap below — a different
+        # mechanism for a different problem, and conflating the two is what
+        # cost this build.
       };
 
       devOutputs = flake-utils.lib.eachDefaultSystem (
