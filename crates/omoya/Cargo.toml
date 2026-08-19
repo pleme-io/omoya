@@ -1,0 +1,31 @@
+[package]
+name = "omoya"
+description = "omoya (母屋) — the pleme-io-native Wayland compositor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "omoya"
+path = "src/main.rs"
+
+[dependencies]
+omoya-spec = { path = "../omoya-spec", version = "0.1.0" }
+# The palette. NOT a hex literal in this crate — `irodori::NORD` is where Nord
+# is BORN in this fleet (ishou-tokens itself reads it), so the compositor's
+# clear colour is a projection of the fleet theme rather than a second copy of
+# it. theory/THEME-ARCHITECTURE.md is the rule this obeys.
+irodori = "0.2"
+# The chord catalog. `Reserved::fleet_linux()` is what stops omoya swallowing
+# Ctrl+Alt+F1..F12 and soft-bricking the machine — see awase@ce7a52b.
+awase = "0.1.10"
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dependencies.smithay]
+version = "0.7"
+default-features = false
+features = ["backend_winit", "wayland_frontend", "desktop"]
