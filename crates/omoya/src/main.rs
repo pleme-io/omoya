@@ -159,10 +159,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // flag; today the persistent loop supersedes it.
             let mut device = device;
             crate::drm::run(&mut event_loop, &mut data, &mut device, &_fd, &target)?;
-            tracing::warn!(
-                "M4b renders and serves clients, but has NO INPUT yet — this is \
-                 a seat you can look at and not type into"
-            );
+
+            // M4c. A failure here is REPORTED, not fatal: a seat that renders
+            // but cannot be typed into is a bad seat, and a seat that refuses
+            // to come up at all is a worse one — on a machine whose only
+            // console this may be, degrading to "visible but not typeable"
+            // beats degrading to "black".
+            match smithay::backend::session::libseat::LibSeatSession::new() {
+                Ok((session, _notifier)) => {
+                    if let Err(e) = crate::drm::attach_input(&mut event_loop, session) {
+                        tracing::error!(error = %e, "input attach failed — seat is look-only");
+                    }
+                }
+                Err(e) => tracing::error!(
+                    error = %e,
+                    "no libseat session — seat is look-only. Run from a seat0 \
+                     session (a VT), not over ssh"
+                ),
+            }
             // Fall through to the shared event loop below, which is what M2
             // already runs. That sharing is the point: one compositor, two
             // backends, not two programs.

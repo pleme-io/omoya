@@ -1,10 +1,10 @@
 {
   "schema_version": 2,
-  "cargo_lock_sha256": "766078ba5a1e8732939d184ca4cdbfe14864e8d1674718626827751dfcb06176",
+  "cargo_lock_sha256": "e9f22d3880801ba81de15b85f2ea129ae4eea235035dd2f06fba9233aebd5328",
   "manifest_sha256": {
     "Cargo.toml": "6279052442fc225f5c0bf1bfc75fc2f5417acf6ac29ca1af3368ee9771097927",
     "crates/omoya-spec/Cargo.toml": "75cd6d31f2ef617df89556610445abab8cf9cddb49d7bbf04c28ac5b7fc89031",
-    "crates/omoya/Cargo.toml": "28c2850b470af2e54032ab7cfd0d940fded94181f7488afb8881c2b0ea75fc40"
+    "crates/omoya/Cargo.toml": "c38c4cbdc862c564497dfe6c1096c9a3e5fd0f64cf0278fe8f50b9501df755d4"
   },
   "target_resolves": {
     "base": {
@@ -948,6 +948,57 @@
           "std"
         ]
       },
+      "input-0.9.1": {
+        "runtime_dependencies": [
+          {
+            "name": "bitflags",
+            "package_key": "bitflags-2.13.1",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "input_sys",
+            "package_key": "input-sys-1.19.0",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": false,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "libc",
+            "package_key": "libc-0.2.189",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": [
+          "libinput_1_11",
+          "libinput_1_14",
+          "libinput_1_15",
+          "libinput_1_19"
+        ]
+      },
+      "input-sys-1.19.0": {
+        "runtime_dependencies": [],
+        "build_dependencies": [],
+        "features": [
+          "libinput_1_11",
+          "libinput_1_14",
+          "libinput_1_15",
+          "libinput_1_19"
+        ]
+      },
       "irodori-0.2.0": {
         "runtime_dependencies": [
           {
@@ -1030,6 +1081,58 @@
           }
         ],
         "build_dependencies": [],
+        "features": []
+      },
+      "libseat-0.2.4": {
+        "runtime_dependencies": [
+          {
+            "name": "errno",
+            "package_key": "errno-0.3.14",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "libseat_sys",
+            "package_key": "libseat-sys-0.2.0",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "log",
+            "package_key": "log-0.4.33",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": []
+      },
+      "libseat-sys-0.2.0": {
+        "runtime_dependencies": [],
+        "build_dependencies": [
+          {
+            "name": "pkg_config",
+            "package_key": "pkg-config-0.3.34",
+            "kind": "build",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "host"
+          }
+        ],
         "features": []
       },
       "log-0.4.33": {
@@ -1150,6 +1253,8 @@
             "features": [
               "backend_drm",
               "backend_gbm",
+              "backend_libinput",
+              "backend_session_libseat",
               "backend_winit",
               "desktop",
               "renderer_pixman",
@@ -1960,6 +2065,18 @@
             "tree": "target"
           },
           {
+            "name": "input",
+            "package_key": "input-0.9.1",
+            "kind": "normal",
+            "features": [
+              "libinput_1_19"
+            ],
+            "uses_default_features": false,
+            "optional": true,
+            "target": null,
+            "tree": "target"
+          },
+          {
             "name": "libc",
             "package_key": "libc-0.2.189",
             "kind": "normal",
@@ -1975,6 +2092,16 @@
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
+            "optional": true,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "libseat",
+            "package_key": "libseat-0.2.4",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": false,
             "optional": true,
             "target": null,
             "tree": "target"
@@ -2223,6 +2350,9 @@
           "backend_drm",
           "backend_egl",
           "backend_gbm",
+          "backend_libinput",
+          "backend_session",
+          "backend_session_libseat",
           "backend_winit",
           "cc",
           "desktop",
@@ -2230,7 +2360,9 @@
           "drm-ffi",
           "gbm",
           "gl_generator",
+          "input",
           "libloading",
+          "libseat",
           "pixman",
           "pkg-config",
           "renderer_gl",
@@ -11055,6 +11187,13 @@
     "indexmap-2.14.0": {
       "edition": "2024"
     },
+    "input-0.9.1": {
+      "edition": "2018"
+    },
+    "input-sys-1.19.0": {
+      "edition": "2018",
+      "build_script": "build.rs"
+    },
     "irodori-0.2.0": {
       "edition": "2024"
     },
@@ -11077,6 +11216,14 @@
     },
     "libloading-0.8.9": {
       "edition": "2015"
+    },
+    "libseat-0.2.4": {
+      "edition": "2018",
+      "build_script": "build.rs"
+    },
+    "libseat-sys-0.2.0": {
+      "edition": "2018",
+      "build_script": "build.rs"
     },
     "linux-raw-sys-0.12.1": {
       "edition": "2021"

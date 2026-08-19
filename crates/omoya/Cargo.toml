@@ -46,5 +46,11 @@ features = [
   # of the COMPILE-TIME gate. Without this feature DrmCompositor does not
   # exist to call.
   "backend_gbm",
+  # M4c: input. The HANDLER already exists (input.rs, written for M2) —
+  # this only supplies the events. `backend_session_libseat` comes with
+  # it because libinput must open /dev/input/* , and doing that without a
+  # session means running the whole compositor as root.
+  "backend_libinput",
+  "backend_session_libseat",
   "renderer_pixman",
 ]

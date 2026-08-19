@@ -91,6 +91,10 @@
           # rlibs, with no `-ldrm` anywhere. That is why the scanout dependency
           # set measured as entirely cached: it adds no C library at all.
           "pixman"
+          # M4c: libinput opens the evdev devices; libseat arbitrates the
+          # session that is allowed to. Both are dynamically linked.
+          "libinput"
+          "seatd"
           # backend_gbm is a compile-time requirement of
           # DrmCompositor even though no GbmDevice is constructed.
           "libgbm"
@@ -297,6 +301,9 @@
             # GbmDevice is ever constructed — the runtime path is still dumb
             # buffers — but the .so must resolve at exec time regardless.
             libgbm
+            # M4c, same both-lists rule as pixman and libgbm.
+            libinput
+            seatd
           ];
           wrapped = pkgs.symlinkJoin {
             name = "omoya-linux";

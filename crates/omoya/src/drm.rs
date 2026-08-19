@@ -49,6 +49,8 @@ use std::{
 
 use smithay::{
     backend::{
+        libinput::{LibinputInputBackend, LibinputSessionInterface},
+        session::libseat::LibSeatSession,
         allocator::{Fourcc as DrmFourcc, dumb::DumbAllocator},
         drm::{DrmDevice, DrmDeviceFd, DrmSurface, compositor::{DrmCompositor, FrameFlags}},
         renderer::{
@@ -61,6 +63,8 @@ use smithay::{
     reexports::drm::control::{Device as ControlDevice, connector, crtc},
     utils::DeviceFd,
 };
+
+use smithay::reexports::input::Libinput;
 
 use crate::theme;
 
@@ -420,6 +424,47 @@ pub fn run(
         mode = %format_args!("{}x{}", target.mode.size().0, target.mode.size().1),
         "omoya is holding the display — clients may connect"
     );
+    Ok(())
+}
+
+/// M4c — feed real keyboards and pointers into the seat.
+///
+/// The HANDLER for these events already existed: `Omoya::process_input_event`
+/// was written for M2 and has been reading winit's events all along, including
+/// the reserved-chord check. This only supplies the same events from evdev, so
+/// M4c is plumbing rather than new policy — which is exactly what a backend
+/// seam is supposed to buy.
+///
+/// ── WHY A SESSION AND NOT JUST ROOT ───────────────────────────────────────
+/// libinput opens `/dev/input/*`, and those are root-owned. The lazy answer is
+/// to run the whole compositor as root; the right one is to let libseat open
+/// them on our behalf, so omoya keeps the privileges of the user who logged in
+/// and nothing else. On a seat whose job is to authenticate people, a
+/// compositor running as root is the wrong default to ship even once.
+///
+/// # Errors
+/// Returns an error if the session cannot be acquired or the source cannot be
+/// inserted. A failure here leaves the seat renderable but not typeable, which
+/// the caller must decide about — this function will not silently continue.
+pub fn attach_input(
+    event_loop: &mut smithay::reexports::calloop::EventLoop<'static, crate::CalloopData>,
+    session: LibSeatSession,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut context =
+        Libinput::new_with_udev::<LibinputSessionInterface<LibSeatSession>>(session.into());
+    // The seat NAME, not a device path: libinput resolves the set of devices
+    // belonging to this seat itself, which is what makes hotplug work without
+    // omoya enumerating anything.
+    context.udev_assign_seat("seat0").map_err(|()| "libinput refused seat0")?;
+
+    let backend = LibinputInputBackend::new(context);
+    event_loop
+        .handle()
+        .insert_source(backend, move |event, _, data| {
+            data.state.process_input_event(event);
+        })?;
+
+    tracing::info!("input attached — the seat is now typeable");
     Ok(())
 }
 
