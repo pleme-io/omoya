@@ -193,7 +193,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .store(u64::from(target.mode.vrefresh()), std::sync::atomic::Ordering::Relaxed);
 
             let mut device = device;
-            crate::drm::run(&mut event_loop, &mut data, &mut device, &_fd, &target)?;
+            crate::drm::run(&mut event_loop, &mut data, &mut device, &_fd, &target, introspect.clone())?;
 
             // M4c. A failure here is REPORTED, not fatal: a seat that renders
             // but cannot be typed into is a bad seat, and a seat that refuses

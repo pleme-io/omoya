@@ -340,6 +340,7 @@ pub fn run(
     device: &mut DrmDevice,
     fd: &DrmDeviceFd,
     target: &ScanoutTarget,
+    introspect: std::sync::Arc<crate::introspect::OmoyaIntrospect>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let surface = device.create_surface(target.crtc, target.mode, &[target.connector])?;
     let (output, mode) = output_for(target);
@@ -431,6 +432,14 @@ pub fn run(
                 // observe.
                 unsafe { std::env::remove_var("OMOYA_CAPTURE") };
             }
+
+            // ★ Publish the frame counter HERE, in the loop that actually
+            // renders. The first cut incremented it nowhere, so a live query
+            // returned `frames: 0` while the compositor was rendering — the
+            // exact class kanshou exists to prevent (mado once reported
+            // frame_perf 0 at 120fps). A counter that is never incremented is
+            // indistinguishable from a compositor that is stuck.
+            introspect.tick(data.state.space.elements().count() as u64);
 
             data.state.space.refresh();
             data.state.popups.cleanup();
