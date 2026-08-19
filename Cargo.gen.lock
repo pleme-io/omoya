@@ -1,8 +1,8 @@
 {
   "schema_version": 2,
-  "cargo_lock_sha256": "d1fe581c8aabf2de2288eaccba02a5ee54eddab753fa8c9ddfa8705cf6dc5cca",
+  "cargo_lock_sha256": "892611fa0ea0b3635aaa17a7f34edd6d6d52bc0975467b604dd5d1bdd40663ca",
   "manifest_sha256": {
-    "Cargo.toml": "76bcf83e2fc0687869944a5780396736b5662af9bf398768bd36507b8a7f48ea",
+    "Cargo.toml": "8a476dd0bc94290a4a04c95e0aaaaf1408cbd70989e8b4c2421cf90563b59669",
     "crates/omoya-spec/Cargo.toml": "75cd6d31f2ef617df89556610445abab8cf9cddb49d7bbf04c28ac5b7fc89031",
     "crates/omoya/Cargo.toml": "d1ea6b2cc51ec61e0589e7af760ccc3830e6ddb2d6d1ee86efd3dc8de1eb6bc3"
   },
@@ -892,7 +892,7 @@
           "std"
         ]
       },
-      "omoya-0.1.0": {
+      "omoya-0.1.1": {
         "runtime_dependencies": [
           {
             "name": "awase",
@@ -916,7 +916,7 @@
           },
           {
             "name": "omoya_spec",
-            "package_key": "omoya-spec-0.1.0",
+            "package_key": "omoya-spec-0.1.1",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -974,7 +974,7 @@
         "build_dependencies": [],
         "features": []
       },
-      "omoya-spec-0.1.0": {
+      "omoya-spec-0.1.1": {
         "runtime_dependencies": [
           {
             "name": "thiserror",
@@ -10615,7 +10615,7 @@
     "objc2-quartz-core-0.2.2": {
       "edition": "2021"
     },
-    "omoya-0.1.0": {
+    "omoya-0.1.1": {
       "edition": "2024",
       "binaries": [
         {
@@ -10624,7 +10624,7 @@
         }
       ]
     },
-    "omoya-spec-0.1.0": {
+    "omoya-spec-0.1.1": {
       "edition": "2024",
       "lib_target": {
         "name": "omoya_spec",
