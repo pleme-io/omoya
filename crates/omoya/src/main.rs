@@ -154,9 +154,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 frame_interval_us = crate::drm::frame_interval(&target).as_micros() as u64,
                 "DRM scanout target acquired — M4a probe"
             );
+            // Paint. This is the line that makes M4a a compositor rather than
+            // a detector.
+            let mut device = device;
+            match crate::drm::paint_background(&mut device, &_fd, &target) {
+                Ok(()) => tracing::info!(
+                    clear = ?crate::drm::background(),
+                    "painted the seat background onto the display"
+                ),
+                Err(e) => {
+                    tracing::error!(error = %e, "scanout render FAILED");
+                    return Err(e);
+                }
+            }
+            // Hold the frame briefly so it is observable, then release the
+            // display. M4a has no event loop and no input; holding forever
+            // would be a compositor nobody can escape from.
+            std::thread::sleep(std::time::Duration::from_secs(8));
             tracing::warn!(
-                "M4a is scanout-probe only: the render loop and input (M4b) are \
-                 not built, so omoya will now exit rather than hold the display"
+                "M4a paints ONE frame and exits — the event loop and input (M4b) \
+                 are not built"
             );
             return Ok(());
         }
