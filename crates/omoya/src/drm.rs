@@ -37,7 +37,15 @@
 //! recoverable choice rather than a risk: the worst case is a wedged VT on a
 //! box whose real console is the ssh session.
 
-use std::{os::fd::OwnedFd, path::Path, time::Duration};
+use std::{
+    os::fd::OwnedFd,
+    // `custom_flags` is an EXTENSION trait method, not inherent on
+    // OpenOptions — without this import the call fails with a
+    // "no method named custom_flags" that says nothing about the missing use.
+    os::unix::fs::OpenOptionsExt,
+    path::Path,
+    time::Duration,
+};
 
 use smithay::{
     backend::{
