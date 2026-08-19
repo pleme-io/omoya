@@ -52,8 +52,8 @@ use smithay::{
         allocator::{Fourcc as DrmFourcc, dumb::DumbAllocator},
         drm::{DrmDevice, DrmDeviceFd, DrmSurface, compositor::{DrmCompositor, FrameFlags}},
         renderer::{
-            damage::OutputDamageTracker, element::surface::WaylandSurfaceRenderElement,
-            pixman::PixmanRenderer,
+            ImportDma, damage::OutputDamageTracker,
+            element::surface::WaylandSurfaceRenderElement, pixman::PixmanRenderer,
         },
     },
     output::OutputModeSource,
@@ -286,9 +286,21 @@ pub fn paint_background(
         allocator,
         fd.clone(),
         color_formats,
-        // The renderer's supported formats. Pixman advertises these through the
-        // dmabuf path it binds.
-        [],
+        // ★ The renderer's ACTUAL formats, not an empty list.
+        //
+        // I first passed `[]` here, and the failure was exact about it:
+        //   WARN  Preferred format AR24 not available: NoSupportedRendererFormat
+        //   ERROR No supported renderer buffer format found
+        // With no renderer formats declared, DrmCompositor can intersect the
+        // CRTC's formats with nothing, so every candidate is unsupported. The
+        // DRM surface and the Output had already been created correctly by that
+        // point — the mode was set and the connector bound — which is what made
+        // the empty list the only remaining variable.
+        //
+        // `ImportDma::dmabuf_formats` is the right source: pixman reaches the
+        // dumb buffer through the dmabuf export, so the formats it can import
+        // over dmabuf are exactly the formats it can render into here.
+        renderer.dmabuf_formats(),
         // Cursor plane size, not a display dimension — I first passed the
         // mode's width here, which is a `u16` where this wants
         // `Size<u32, Buffer>`. 64x64 is the size every KMS driver supports for
