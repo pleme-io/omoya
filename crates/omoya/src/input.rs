@@ -42,20 +42,45 @@ impl Omoya {
                     return;
                 };
 
+                let mut owed: Option<String> = None;
                 keyboard.input::<(), _>(
                     self,
                     event.key_code(),
                     event.state(),
                     serial,
                     time,
-                    |_state, _modifiers, _handle| {
-                        // M2 forwards everything. The reserved-chord check needs
-                        // a keysym→`awase::Key` adapter (OMOYA.md §5's "what
-                        // omoya genuinely needs from awase"), which lands with
-                        // the DRM backend that can actually perform the switch.
+                    |state, modifiers, handle| {
+                        // ★ The reserved-chord check, for real — the adapter it
+                        // used to wait for is `crate::chord`.
+                        //
+                        // What happens on a HIT is deliberately not "swallow".
+                        // In the nested backend omoya does not own the VT: the
+                        // host X server or compositor does, and it is the one
+                        // that must see Ctrl+Alt+F<n>. Eating it here would
+                        // take away an escape hatch omoya cannot itself
+                        // provide — strictly worse than forwarding.
+                        //
+                        // So M2 RECOGNISES and COUNTS. M4, which owns the VT,
+                        // swaps the Forward below for the actual switch, and
+                        // `owed_vt_switches` returning to zero is how its test
+                        // proves it. Recognising it and saying so is honest;
+                        // pretending to handle it would not be.
+                        if let Some(hk) = crate::chord::hotkey_from(modifiers, handle.modified_sym())
+                            && let Some(claim) = state.reserved.claim_on(&hk)
+                        {
+                            state.owed_vt_switches += 1;
+                            owed = Some(format!("{hk} — {}", claim.purpose));
+                        }
                         FilterResult::Forward
                     },
                 );
+                if let Some(what) = owed {
+                    tracing::info!(
+                        chord = %what,
+                        owed_total = self.owed_vt_switches,
+                        "reserved chord recognised but NOT acted on (nested backend owns no VT)"
+                    );
+                }
             }
             InputEvent::PointerMotionAbsolute { event, .. } => {
                 let Some(output) = self.space.outputs().next().cloned() else {

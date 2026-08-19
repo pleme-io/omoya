@@ -87,6 +87,12 @@ pub struct Omoya {
     /// Held rather than consulted-on-demand so it is impossible to handle input
     /// without it being in scope — see `crate::input`.
     pub reserved: awase::Reserved,
+    /// Reserved chords omoya RECOGNISED but could not act on, because the
+    /// nested backend does not own a VT. Counted rather than ignored: this is
+    /// the number M4's test asserts goes to zero once the DRM backend can
+    /// actually perform the switch, and until then it is the honest record
+    /// that the escape hatch is the HOST's, not ours.
+    pub owed_vt_switches: u64,
 
     pub space: Space<Window>,
     pub loop_signal: LoopSignal,
@@ -139,6 +145,7 @@ impl Omoya {
             display_handle: dh,
             mode,
             reserved,
+            owed_vt_switches: 0,
             space,
             loop_signal,
             socket_name,
