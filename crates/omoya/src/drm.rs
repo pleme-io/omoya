@@ -49,10 +49,14 @@ use std::{
 
 use smithay::{
     backend::{
-        allocator::dumb::DumbAllocator,
-        drm::{DrmDevice, DrmDeviceFd, DrmSurface},
-        renderer::{damage::OutputDamageTracker, element::surface::WaylandSurfaceRenderElement},
+        allocator::{Fourcc as DrmFourcc, dumb::DumbAllocator},
+        drm::{DrmDevice, DrmDeviceFd, DrmSurface, compositor::{DrmCompositor, FrameFlags}},
+        renderer::{
+            damage::OutputDamageTracker, element::surface::WaylandSurfaceRenderElement,
+            pixman::PixmanRenderer,
+        },
     },
+    output::OutputModeSource,
     output::{Mode as OutputMode, Output, PhysicalProperties, Subpixel},
     reexports::drm::control::{Device as ControlDevice, connector, crtc},
     utils::DeviceFd,
@@ -233,7 +237,71 @@ pub fn frame_interval(target: &ScanoutTarget) -> Duration {
 /// Marker so the renderer element type is named in one place; the winit backend
 /// uses the same one, and a mismatch between them is a confusing type error far
 /// from its cause.
-pub type Element = WaylandSurfaceRenderElement<smithay::backend::renderer::pixman::PixmanRenderer>;
+pub type Element = WaylandSurfaceRenderElement<PixmanRenderer>;
+
+/// The compositor type for this backend, named once.
+///
+/// The type parameters are the whole design in one line: allocate DUMB buffers,
+/// export framebuffers through the DEVICE FD itself, carry no per-frame user
+/// data, and — the important one — `NoGbm` in the gbm slot, because this path
+/// has no gbm device at all.
+type Scanner = DrmCompositor<DumbAllocator, DrmDeviceFd, (), DrmDeviceFd>;
+
+/// Paint one frame of the seat background onto a real display, and hold it.
+///
+/// ── WHY DUMB BUFFERS REACH A PIXMAN RENDERER AT ALL ───────────────────────
+/// `PixmanRenderer` implements `Bind<Dmabuf>`, NOT `Bind<DumbBuffer>` — which
+/// looks at first like this whole path cannot work. It does, because
+/// `impl AsDmabuf for DumbBuffer` (`backend/allocator/dumb.rs:104`) exports the
+/// dumb buffer as a dmabuf, and `DrmCompositor` performs that export itself.
+/// So the chain is DumbAllocator → DumbBuffer → dmabuf → pixman, with no GPU
+/// anywhere in it.
+///
+/// # Errors
+/// Returns an error if the surface cannot be created, the compositor cannot be
+/// built, or the frame cannot be queued to the CRTC.
+pub fn paint_background(
+    device: &mut DrmDevice,
+    fd: &DrmDeviceFd,
+    target: &ScanoutTarget,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let surface = device.create_surface(target.crtc, target.mode, &[target.connector])?;
+    let (output, _mode) = output_for(target);
+
+    let mut renderer = PixmanRenderer::new()?;
+    let allocator = DumbAllocator::new(fd.clone());
+
+    // ARGB/XRGB8888 is the format simpledrm and every KMS driver worth the name
+    // supports. Offering both lets the compositor pick; offering only one is
+    // how a mode-set fails on a driver that wanted the other.
+    let color_formats = [DrmFourcc::Argb8888, DrmFourcc::Xrgb8888];
+    let renderer_formats = renderer.shm_formats().collect::<Vec<_>>();
+    let _ = renderer_formats;
+
+    let mut compositor: Scanner = DrmCompositor::new(
+        OutputModeSource::Static {
+            size: output.current_mode().map_or((0, 0).into(), |m| m.size),
+            scale: output.current_scale().fractional_scale().into(),
+            transform: output.current_transform(),
+        },
+        surface,
+        None,
+        allocator,
+        fd.clone(),
+        color_formats,
+        // The renderer's supported formats. Pixman advertises these through the
+        // dmabuf path it binds.
+        [],
+        target.mode.size().0.into(),
+        None,
+    )?;
+
+    let elements: Vec<Element> = Vec::new();
+    compositor.render_frame(&mut renderer, &elements, background(), FrameFlags::empty())?;
+    compositor.queue_frame(())?;
+
+    Ok(())
+}
 
 #[cfg(test)]
 mod tests {
