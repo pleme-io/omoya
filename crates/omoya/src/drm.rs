@@ -317,6 +317,112 @@ pub fn paint_background(
     Ok(())
 }
 
+/// M4b — the persistent scanout loop.
+///
+/// M4a painted one frame and exited, which proved the DRM path but is not a
+/// compositor: nothing served clients while the display was held. This holds
+/// the display AND runs omoya's event loop, so the Wayland socket built in M2
+/// and the DRM output built in M4a are finally the same program.
+///
+/// Input is still absent (libinput is the next rung), so this is a seat you can
+/// look at and not yet type into. Saying that plainly matters more than usual
+/// here, because a compositor that renders clients LOOKS finished.
+///
+/// # Errors
+/// Returns an error if the scanout cannot be prepared or the loop faults.
+pub fn run(
+    event_loop: &mut smithay::reexports::calloop::EventLoop<'static, crate::CalloopData>,
+    data: &mut crate::CalloopData,
+    device: &mut DrmDevice,
+    fd: &DrmDeviceFd,
+    target: &ScanoutTarget,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let surface = device.create_surface(target.crtc, target.mode, &[target.connector])?;
+    let (output, mode) = output_for(target);
+
+    // The output has to exist as a Wayland GLOBAL, not just as a local value —
+    // a client cannot place a surface on an output it was never told about, and
+    // M4a never needed this because it composited nothing.
+    let _global = output.create_global::<crate::state::Omoya>(&data.display_handle);
+    data.state.space.map_output(&output, (0, 0));
+    output.set_preferred(mode);
+
+    let mut renderer = PixmanRenderer::new()?;
+    let mut compositor: Scanner = DrmCompositor::new(
+        OutputModeSource::Static {
+            size: mode.size,
+            scale: output.current_scale().fractional_scale().into(),
+            transform: output.current_transform(),
+        },
+        surface,
+        None,
+        DumbAllocator::new(fd.clone()),
+        fd.clone(),
+        [DrmFourcc::Argb8888, DrmFourcc::Xrgb8888],
+        renderer.dmabuf_formats(),
+        (64u32, 64u32).into(),
+        None,
+    )?;
+
+    let clear = background();
+    let interval = frame_interval(target);
+
+    // A TIMER, not vblank, and that is an honest shortcut rather than a design.
+    // The correct pacing source is the DRM device's own vblank event, which is
+    // what `DrmDeviceNotifier` exists for; driving from a timer means a frame
+    // can be queued while the previous one is still scanning out. It is
+    // adequate for a static seat and it is NOT adequate for smooth animation,
+    // so it is written down rather than left for someone to discover.
+    //
+    // pending-omoya-vblank: drive the loop from DrmDeviceNotifier.
+    event_loop.handle().insert_source(
+        smithay::reexports::calloop::timer::Timer::from_duration(interval),
+        move |_, _, data| {
+            let elements = smithay::desktop::space::space_render_elements(
+                &mut renderer,
+                [&data.state.space],
+                &output,
+                1.0,
+            )
+            .unwrap_or_default();
+
+            if let Err(e) = compositor.render_frame(&mut renderer, &elements, clear, FrameFlags::DEFAULT)
+            {
+                tracing::error!(error = %e, "render_frame failed");
+            } else if let Err(e) = compositor.queue_frame(()) {
+                // EmptyFrame is normal when nothing changed — damage tracking
+                // correctly decided there was nothing to send. Logging it as an
+                // error would train an operator to ignore this line.
+                tracing::debug!(error = %e, "queue_frame skipped");
+            }
+
+            // Tell clients their buffers were consumed, or they will never draw
+            // a second frame. A compositor that renders once and then appears
+            // frozen is usually this line missing.
+            data.state.space.elements().for_each(|w| {
+                w.send_frame(
+                    &output,
+                    data.state.start_time.elapsed(),
+                    Some(std::time::Duration::ZERO),
+                    |_, _| Some(output.clone()),
+                );
+            });
+            data.state.space.refresh();
+            data.state.popups.cleanup();
+            let _ = data.display_handle.flush_clients();
+
+            smithay::reexports::calloop::timer::TimeoutAction::ToDuration(interval)
+        },
+    )?;
+
+    tracing::info!(
+        connector = %target.name,
+        mode = %format_args!("{}x{}", target.mode.size().0, target.mode.size().1),
+        "omoya is holding the display — clients may connect"
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
