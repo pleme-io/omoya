@@ -1,10 +1,10 @@
 {
   "schema_version": 2,
-  "cargo_lock_sha256": "892611fa0ea0b3635aaa17a7f34edd6d6d52bc0975467b604dd5d1bdd40663ca",
+  "cargo_lock_sha256": "5a21caa7d5721f2f86694794d23c07b46037ec21e79addc596a34c2544ba8c67",
   "manifest_sha256": {
     "Cargo.toml": "8a476dd0bc94290a4a04c95e0aaaaf1408cbd70989e8b4c2421cf90563b59669",
     "crates/omoya-spec/Cargo.toml": "75cd6d31f2ef617df89556610445abab8cf9cddb49d7bbf04c28ac5b7fc89031",
-    "crates/omoya/Cargo.toml": "d1ea6b2cc51ec61e0589e7af760ccc3830e6ddb2d6d1ee86efd3dc8de1eb6bc3"
+    "crates/omoya/Cargo.toml": "2dd8a76101d64871a64f8a6b6687b9f1aa10a6e7923ba7a94aa30edfd022cf53"
   },
   "target_resolves": {
     "base": {
@@ -102,6 +102,62 @@
           {
             "name": "generic_array",
             "package_key": "generic-array-0.14.7",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": []
+      },
+      "bytemuck-1.25.2": {
+        "runtime_dependencies": [
+          {
+            "name": "bytemuck_derive",
+            "package_key": "bytemuck_derive-1.12.0",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": true,
+            "target": null,
+            "tree": "host"
+          }
+        ],
+        "build_dependencies": [],
+        "features": [
+          "bytemuck_derive",
+          "derive",
+          "extern_crate_alloc"
+        ]
+      },
+      "bytemuck_derive-1.12.0": {
+        "runtime_dependencies": [
+          {
+            "name": "proc_macro2",
+            "package_key": "proc-macro2-1.0.107",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "quote",
+            "package_key": "quote-1.0.47",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "syn",
+            "package_key": "syn-3.0.3",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -362,6 +418,94 @@
           "default",
           "std"
         ]
+      },
+      "drm-0.14.1": {
+        "runtime_dependencies": [
+          {
+            "name": "bitflags",
+            "package_key": "bitflags-2.13.1",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "bytemuck",
+            "package_key": "bytemuck-1.25.2",
+            "kind": "normal",
+            "features": [
+              "derive",
+              "extern_crate_alloc"
+            ],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "drm_ffi",
+            "package_key": "drm-ffi-0.9.1",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "drm_fourcc",
+            "package_key": "drm-fourcc-2.2.0",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "rustix",
+            "package_key": "rustix-0.38.44",
+            "kind": "normal",
+            "features": [
+              "fs",
+              "mm"
+            ],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": []
+      },
+      "drm-ffi-0.9.1": {
+        "runtime_dependencies": [
+          {
+            "name": "drm_sys",
+            "package_key": "drm-sys-0.8.1",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "rustix",
+            "package_key": "rustix-1.1.4",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": []
       },
       "drm-fourcc-2.2.0": {
         "runtime_dependencies": [],
@@ -929,8 +1073,10 @@
             "package_key": "smithay-0.7.0",
             "kind": "normal",
             "features": [
+              "backend_drm",
               "backend_winit",
               "desktop",
+              "renderer_pixman",
               "wayland_frontend"
             ],
             "uses_default_features": false,
@@ -1010,7 +1156,67 @@
           "std"
         ]
       },
+      "paste-1.0.15": {
+        "runtime_dependencies": [],
+        "build_dependencies": [],
+        "features": []
+      },
       "pin-project-lite-0.2.17": {
+        "runtime_dependencies": [],
+        "build_dependencies": [],
+        "features": []
+      },
+      "pixman-0.2.1": {
+        "runtime_dependencies": [
+          {
+            "name": "drm_fourcc",
+            "package_key": "drm-fourcc-2.2.0",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": true,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "paste",
+            "package_key": "paste-1.0.15",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "host"
+          },
+          {
+            "name": "pixman_sys",
+            "package_key": "pixman-sys-0.1.0",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "thiserror",
+            "package_key": "thiserror-1.0.69",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": [
+          "default",
+          "drm-fourcc",
+          "sync"
+        ]
+      },
+      "pixman-sys-0.1.0": {
         "runtime_dependencies": [],
         "build_dependencies": [],
         "features": []
@@ -1616,6 +1822,26 @@
             "tree": "target"
           },
           {
+            "name": "drm",
+            "package_key": "drm-0.14.1",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": true,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "drm_ffi",
+            "package_key": "drm-ffi-0.9.1",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": true,
+            "target": null,
+            "tree": "target"
+          },
+          {
             "name": "drm_fourcc",
             "package_key": "drm-fourcc-2.2.0",
             "kind": "normal",
@@ -1660,6 +1886,19 @@
             "package_key": "libloading-0.8.9",
             "kind": "normal",
             "features": [],
+            "uses_default_features": true,
+            "optional": true,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "pixman",
+            "package_key": "pixman-0.2.1",
+            "kind": "normal",
+            "features": [
+              "drm-fourcc",
+              "sync"
+            ],
             "uses_default_features": true,
             "optional": true,
             "target": null,
@@ -1873,12 +2112,17 @@
           }
         ],
         "features": [
+          "backend_drm",
           "backend_egl",
           "backend_winit",
           "desktop",
+          "drm",
+          "drm-ffi",
           "gl_generator",
           "libloading",
+          "pixman",
           "renderer_gl",
+          "renderer_pixman",
           "tempfile",
           "wayland-client",
           "wayland-cursor",
@@ -2053,6 +2297,22 @@
         "build_dependencies": [],
         "features": []
       },
+      "thiserror-1.0.69": {
+        "runtime_dependencies": [
+          {
+            "name": "thiserror_impl",
+            "package_key": "thiserror-impl-1.0.69",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "host"
+          }
+        ],
+        "build_dependencies": [],
+        "features": []
+      },
       "thiserror-2.0.20": {
         "runtime_dependencies": [
           {
@@ -2071,6 +2331,42 @@
           "default",
           "std"
         ]
+      },
+      "thiserror-impl-1.0.69": {
+        "runtime_dependencies": [
+          {
+            "name": "proc_macro2",
+            "package_key": "proc-macro2-1.0.107",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "quote",
+            "package_key": "quote-1.0.47",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "syn",
+            "package_key": "syn-2.0.119",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": []
       },
       "thiserror-impl-2.0.20": {
         "runtime_dependencies": [
@@ -3458,6 +3754,24 @@
             "build_dependencies": [],
             "features": []
           },
+          "drm-sys-0.8.1": {
+            "runtime_dependencies": [
+              {
+                "name": "libc",
+                "package_key": "libc-0.2.189",
+                "kind": "normal",
+                "features": [],
+                "uses_default_features": true,
+                "optional": false,
+                "target": "cfg(not(any(target_os = \"android\", target_os = \"linux\")))",
+                "tree": "target"
+              }
+            ],
+            "build_dependencies": [],
+            "features": [
+              "default"
+            ]
+          },
           "foreign-types-0.5.0": {
             "runtime_dependencies": [
               {
@@ -3897,6 +4211,86 @@
               "std"
             ]
           },
+          "rustix-0.38.44": {
+            "runtime_dependencies": [
+              {
+                "name": "bitflags",
+                "package_key": "bitflags-2.13.1",
+                "kind": "normal",
+                "features": [],
+                "uses_default_features": false,
+                "optional": false,
+                "target": null,
+                "tree": "target"
+              },
+              {
+                "name": "libc_errno",
+                "package_key": "errno-0.3.14",
+                "kind": "normal",
+                "features": [],
+                "uses_default_features": false,
+                "optional": true,
+                "target": "cfg(all(not(rustix_use_libc), not(miri), target_os = \"linux\", any(target_endian = \"little\", target_arch = \"s390x\"), any(target_arch = \"arm\", all(target_arch = \"aarch64\", target_pointer_width = \"64\"), target_arch = \"riscv64\", all(rustix_use_experimental_asm, target_arch = \"powerpc64\"), all(rustix_use_experimental_asm, target_arch = \"s390x\"), all(rustix_use_experimental_asm, target_arch = \"mips\"), all(rustix_use_experimental_asm, target_arch = \"mips32r6\"), all(rustix_use_experimental_asm, target_arch = \"mips64\"), all(rustix_use_experimental_asm, target_arch = \"mips64r6\"), target_arch = \"x86\", all(target_arch = \"x86_64\", target_pointer_width = \"64\"))))",
+                "tree": "target"
+              },
+              {
+                "name": "libc_errno",
+                "package_key": "errno-0.3.14",
+                "kind": "normal",
+                "features": [],
+                "uses_default_features": false,
+                "optional": false,
+                "target": "cfg(all(not(windows), any(rustix_use_libc, miri, not(all(target_os = \"linux\", any(target_endian = \"little\", target_arch = \"s390x\"), any(target_arch = \"arm\", all(target_arch = \"aarch64\", target_pointer_width = \"64\"), target_arch = \"riscv64\", all(rustix_use_experimental_asm, target_arch = \"powerpc64\"), all(rustix_use_experimental_asm, target_arch = \"s390x\"), all(rustix_use_experimental_asm, target_arch = \"mips\"), all(rustix_use_experimental_asm, target_arch = \"mips32r6\"), all(rustix_use_experimental_asm, target_arch = \"mips64\"), all(rustix_use_experimental_asm, target_arch = \"mips64r6\"), target_arch = \"x86\", all(target_arch = \"x86_64\", target_pointer_width = \"64\")))))))",
+                "tree": "target"
+              },
+              {
+                "name": "libc_errno",
+                "package_key": "errno-0.3.14",
+                "kind": "normal",
+                "features": [],
+                "uses_default_features": false,
+                "optional": false,
+                "target": "cfg(windows)",
+                "tree": "target"
+              },
+              {
+                "name": "libc",
+                "package_key": "libc-0.2.189",
+                "kind": "normal",
+                "features": [],
+                "uses_default_features": false,
+                "optional": true,
+                "target": "cfg(all(not(rustix_use_libc), not(miri), target_os = \"linux\", any(target_endian = \"little\", target_arch = \"s390x\"), any(target_arch = \"arm\", all(target_arch = \"aarch64\", target_pointer_width = \"64\"), target_arch = \"riscv64\", all(rustix_use_experimental_asm, target_arch = \"powerpc64\"), all(rustix_use_experimental_asm, target_arch = \"s390x\"), all(rustix_use_experimental_asm, target_arch = \"mips\"), all(rustix_use_experimental_asm, target_arch = \"mips32r6\"), all(rustix_use_experimental_asm, target_arch = \"mips64\"), all(rustix_use_experimental_asm, target_arch = \"mips64r6\"), target_arch = \"x86\", all(target_arch = \"x86_64\", target_pointer_width = \"64\"))))",
+                "tree": "target"
+              },
+              {
+                "name": "libc",
+                "package_key": "libc-0.2.189",
+                "kind": "normal",
+                "features": [],
+                "uses_default_features": false,
+                "optional": false,
+                "target": "cfg(all(not(windows), any(rustix_use_libc, miri, not(all(target_os = \"linux\", any(target_endian = \"little\", target_arch = \"s390x\"), any(target_arch = \"arm\", all(target_arch = \"aarch64\", target_pointer_width = \"64\"), target_arch = \"riscv64\", all(rustix_use_experimental_asm, target_arch = \"powerpc64\"), all(rustix_use_experimental_asm, target_arch = \"s390x\"), all(rustix_use_experimental_asm, target_arch = \"mips\"), all(rustix_use_experimental_asm, target_arch = \"mips32r6\"), all(rustix_use_experimental_asm, target_arch = \"mips64\"), all(rustix_use_experimental_asm, target_arch = \"mips64r6\"), target_arch = \"x86\", all(target_arch = \"x86_64\", target_pointer_width = \"64\")))))))",
+                "tree": "target"
+              }
+            ],
+            "build_dependencies": [],
+            "features": [
+              "alloc",
+              "default",
+              "event",
+              "fs",
+              "libc-extra-traits",
+              "mm",
+              "pipe",
+              "process",
+              "shm",
+              "std",
+              "system",
+              "thread",
+              "use-libc-auxv"
+            ]
+          },
           "rustix-1.1.4": {
             "runtime_dependencies": [
               {
@@ -4279,11 +4673,6 @@
               "default"
             ]
           },
-          "bytemuck-1.25.2": {
-            "runtime_dependencies": [],
-            "build_dependencies": [],
-            "features": []
-          },
           "calloop-0.13.0": {
             "runtime_dependencies": [
               {
@@ -4449,6 +4838,27 @@
             "build_dependencies": [],
             "features": []
           },
+          "drm-sys-0.8.1": {
+            "runtime_dependencies": [
+              {
+                "name": "linux_raw_sys",
+                "package_key": "linux-raw-sys-0.9.4",
+                "kind": "normal",
+                "features": [
+                  "general",
+                  "no_std"
+                ],
+                "uses_default_features": false,
+                "optional": false,
+                "target": "cfg(any(target_os = \"android\", target_os = \"linux\"))",
+                "tree": "target"
+              }
+            ],
+            "build_dependencies": [],
+            "features": [
+              "default"
+            ]
+          },
           "gethostname-1.1.0": {
             "runtime_dependencies": [
               {
@@ -4496,6 +4906,14 @@
               "no_std",
               "prctl",
               "system"
+            ]
+          },
+          "linux-raw-sys-0.9.4": {
+            "runtime_dependencies": [],
+            "build_dependencies": [],
+            "features": [
+              "general",
+              "no_std"
             ]
           },
           "percent-encoding-2.3.2": {
@@ -4607,6 +5025,7 @@
               "event",
               "fs",
               "libc-extra-traits",
+              "mm",
               "pipe",
               "process",
               "shm",
@@ -4914,58 +5333,6 @@
               "calloop",
               "calloop-wayland-source"
             ]
-          },
-          "thiserror-1.0.69": {
-            "runtime_dependencies": [
-              {
-                "name": "thiserror_impl",
-                "package_key": "thiserror-impl-1.0.69",
-                "kind": "normal",
-                "features": [],
-                "uses_default_features": true,
-                "optional": false,
-                "target": null,
-                "tree": "host"
-              }
-            ],
-            "build_dependencies": [],
-            "features": []
-          },
-          "thiserror-impl-1.0.69": {
-            "runtime_dependencies": [
-              {
-                "name": "proc_macro2",
-                "package_key": "proc-macro2-1.0.107",
-                "kind": "normal",
-                "features": [],
-                "uses_default_features": true,
-                "optional": false,
-                "target": null,
-                "tree": "target"
-              },
-              {
-                "name": "quote",
-                "package_key": "quote-1.0.47",
-                "kind": "normal",
-                "features": [],
-                "uses_default_features": true,
-                "optional": false,
-                "target": null,
-                "tree": "target"
-              },
-              {
-                "name": "syn",
-                "package_key": "syn-2.0.119",
-                "kind": "normal",
-                "features": [],
-                "uses_default_features": true,
-                "optional": false,
-                "target": null,
-                "tree": "target"
-              }
-            ],
-            "build_dependencies": [],
-            "features": []
           },
           "wayland-csd-frame-0.3.0": {
             "runtime_dependencies": [
@@ -5615,11 +5982,6 @@
               "default"
             ]
           },
-          "bytemuck-1.25.2": {
-            "runtime_dependencies": [],
-            "build_dependencies": [],
-            "features": []
-          },
           "calloop-0.13.0": {
             "runtime_dependencies": [
               {
@@ -5785,6 +6147,27 @@
             "build_dependencies": [],
             "features": []
           },
+          "drm-sys-0.8.1": {
+            "runtime_dependencies": [
+              {
+                "name": "linux_raw_sys",
+                "package_key": "linux-raw-sys-0.9.4",
+                "kind": "normal",
+                "features": [
+                  "general",
+                  "no_std"
+                ],
+                "uses_default_features": false,
+                "optional": false,
+                "target": "cfg(any(target_os = \"android\", target_os = \"linux\"))",
+                "tree": "target"
+              }
+            ],
+            "build_dependencies": [],
+            "features": [
+              "default"
+            ]
+          },
           "gethostname-1.1.0": {
             "runtime_dependencies": [
               {
@@ -5832,6 +6215,14 @@
               "no_std",
               "prctl",
               "system"
+            ]
+          },
+          "linux-raw-sys-0.9.4": {
+            "runtime_dependencies": [],
+            "build_dependencies": [],
+            "features": [
+              "general",
+              "no_std"
             ]
           },
           "percent-encoding-2.3.2": {
@@ -5943,6 +6334,7 @@
               "event",
               "fs",
               "libc-extra-traits",
+              "mm",
               "pipe",
               "process",
               "shm",
@@ -6250,58 +6642,6 @@
               "calloop",
               "calloop-wayland-source"
             ]
-          },
-          "thiserror-1.0.69": {
-            "runtime_dependencies": [
-              {
-                "name": "thiserror_impl",
-                "package_key": "thiserror-impl-1.0.69",
-                "kind": "normal",
-                "features": [],
-                "uses_default_features": true,
-                "optional": false,
-                "target": null,
-                "tree": "host"
-              }
-            ],
-            "build_dependencies": [],
-            "features": []
-          },
-          "thiserror-impl-1.0.69": {
-            "runtime_dependencies": [
-              {
-                "name": "proc_macro2",
-                "package_key": "proc-macro2-1.0.107",
-                "kind": "normal",
-                "features": [],
-                "uses_default_features": true,
-                "optional": false,
-                "target": null,
-                "tree": "target"
-              },
-              {
-                "name": "quote",
-                "package_key": "quote-1.0.47",
-                "kind": "normal",
-                "features": [],
-                "uses_default_features": true,
-                "optional": false,
-                "target": null,
-                "tree": "target"
-              },
-              {
-                "name": "syn",
-                "package_key": "syn-2.0.119",
-                "kind": "normal",
-                "features": [],
-                "uses_default_features": true,
-                "optional": false,
-                "target": null,
-                "tree": "target"
-              }
-            ],
-            "build_dependencies": [],
-            "features": []
           },
           "wayland-csd-frame-0.3.0": {
             "runtime_dependencies": [
@@ -7046,6 +7386,24 @@
             "build_dependencies": [],
             "features": []
           },
+          "drm-sys-0.8.1": {
+            "runtime_dependencies": [
+              {
+                "name": "libc",
+                "package_key": "libc-0.2.189",
+                "kind": "normal",
+                "features": [],
+                "uses_default_features": true,
+                "optional": false,
+                "target": "cfg(not(any(target_os = \"android\", target_os = \"linux\")))",
+                "tree": "target"
+              }
+            ],
+            "build_dependencies": [],
+            "features": [
+              "default"
+            ]
+          },
           "foreign-types-0.5.0": {
             "runtime_dependencies": [
               {
@@ -7485,6 +7843,86 @@
               "std"
             ]
           },
+          "rustix-0.38.44": {
+            "runtime_dependencies": [
+              {
+                "name": "bitflags",
+                "package_key": "bitflags-2.13.1",
+                "kind": "normal",
+                "features": [],
+                "uses_default_features": false,
+                "optional": false,
+                "target": null,
+                "tree": "target"
+              },
+              {
+                "name": "libc_errno",
+                "package_key": "errno-0.3.14",
+                "kind": "normal",
+                "features": [],
+                "uses_default_features": false,
+                "optional": true,
+                "target": "cfg(all(not(rustix_use_libc), not(miri), target_os = \"linux\", any(target_endian = \"little\", target_arch = \"s390x\"), any(target_arch = \"arm\", all(target_arch = \"aarch64\", target_pointer_width = \"64\"), target_arch = \"riscv64\", all(rustix_use_experimental_asm, target_arch = \"powerpc64\"), all(rustix_use_experimental_asm, target_arch = \"s390x\"), all(rustix_use_experimental_asm, target_arch = \"mips\"), all(rustix_use_experimental_asm, target_arch = \"mips32r6\"), all(rustix_use_experimental_asm, target_arch = \"mips64\"), all(rustix_use_experimental_asm, target_arch = \"mips64r6\"), target_arch = \"x86\", all(target_arch = \"x86_64\", target_pointer_width = \"64\"))))",
+                "tree": "target"
+              },
+              {
+                "name": "libc_errno",
+                "package_key": "errno-0.3.14",
+                "kind": "normal",
+                "features": [],
+                "uses_default_features": false,
+                "optional": false,
+                "target": "cfg(all(not(windows), any(rustix_use_libc, miri, not(all(target_os = \"linux\", any(target_endian = \"little\", target_arch = \"s390x\"), any(target_arch = \"arm\", all(target_arch = \"aarch64\", target_pointer_width = \"64\"), target_arch = \"riscv64\", all(rustix_use_experimental_asm, target_arch = \"powerpc64\"), all(rustix_use_experimental_asm, target_arch = \"s390x\"), all(rustix_use_experimental_asm, target_arch = \"mips\"), all(rustix_use_experimental_asm, target_arch = \"mips32r6\"), all(rustix_use_experimental_asm, target_arch = \"mips64\"), all(rustix_use_experimental_asm, target_arch = \"mips64r6\"), target_arch = \"x86\", all(target_arch = \"x86_64\", target_pointer_width = \"64\")))))))",
+                "tree": "target"
+              },
+              {
+                "name": "libc_errno",
+                "package_key": "errno-0.3.14",
+                "kind": "normal",
+                "features": [],
+                "uses_default_features": false,
+                "optional": false,
+                "target": "cfg(windows)",
+                "tree": "target"
+              },
+              {
+                "name": "libc",
+                "package_key": "libc-0.2.189",
+                "kind": "normal",
+                "features": [],
+                "uses_default_features": false,
+                "optional": true,
+                "target": "cfg(all(not(rustix_use_libc), not(miri), target_os = \"linux\", any(target_endian = \"little\", target_arch = \"s390x\"), any(target_arch = \"arm\", all(target_arch = \"aarch64\", target_pointer_width = \"64\"), target_arch = \"riscv64\", all(rustix_use_experimental_asm, target_arch = \"powerpc64\"), all(rustix_use_experimental_asm, target_arch = \"s390x\"), all(rustix_use_experimental_asm, target_arch = \"mips\"), all(rustix_use_experimental_asm, target_arch = \"mips32r6\"), all(rustix_use_experimental_asm, target_arch = \"mips64\"), all(rustix_use_experimental_asm, target_arch = \"mips64r6\"), target_arch = \"x86\", all(target_arch = \"x86_64\", target_pointer_width = \"64\"))))",
+                "tree": "target"
+              },
+              {
+                "name": "libc",
+                "package_key": "libc-0.2.189",
+                "kind": "normal",
+                "features": [],
+                "uses_default_features": false,
+                "optional": false,
+                "target": "cfg(all(not(windows), any(rustix_use_libc, miri, not(all(target_os = \"linux\", any(target_endian = \"little\", target_arch = \"s390x\"), any(target_arch = \"arm\", all(target_arch = \"aarch64\", target_pointer_width = \"64\"), target_arch = \"riscv64\", all(rustix_use_experimental_asm, target_arch = \"powerpc64\"), all(rustix_use_experimental_asm, target_arch = \"s390x\"), all(rustix_use_experimental_asm, target_arch = \"mips\"), all(rustix_use_experimental_asm, target_arch = \"mips32r6\"), all(rustix_use_experimental_asm, target_arch = \"mips64\"), all(rustix_use_experimental_asm, target_arch = \"mips64r6\"), target_arch = \"x86\", all(target_arch = \"x86_64\", target_pointer_width = \"64\")))))))",
+                "tree": "target"
+              }
+            ],
+            "build_dependencies": [],
+            "features": [
+              "alloc",
+              "default",
+              "event",
+              "fs",
+              "libc-extra-traits",
+              "mm",
+              "pipe",
+              "process",
+              "shm",
+              "std",
+              "system",
+              "thread",
+              "use-libc-auxv"
+            ]
+          },
           "rustix-1.1.4": {
             "runtime_dependencies": [
               {
@@ -7867,11 +8305,6 @@
               "default"
             ]
           },
-          "bytemuck-1.25.2": {
-            "runtime_dependencies": [],
-            "build_dependencies": [],
-            "features": []
-          },
           "calloop-0.13.0": {
             "runtime_dependencies": [
               {
@@ -7996,6 +8429,27 @@
             "build_dependencies": [],
             "features": []
           },
+          "drm-sys-0.8.1": {
+            "runtime_dependencies": [
+              {
+                "name": "linux_raw_sys",
+                "package_key": "linux-raw-sys-0.9.4",
+                "kind": "normal",
+                "features": [
+                  "general",
+                  "no_std"
+                ],
+                "uses_default_features": false,
+                "optional": false,
+                "target": "cfg(any(target_os = \"android\", target_os = \"linux\"))",
+                "tree": "target"
+              }
+            ],
+            "build_dependencies": [],
+            "features": [
+              "default"
+            ]
+          },
           "gethostname-1.1.0": {
             "runtime_dependencies": [
               {
@@ -8043,6 +8497,14 @@
               "no_std",
               "prctl",
               "system"
+            ]
+          },
+          "linux-raw-sys-0.9.4": {
+            "runtime_dependencies": [],
+            "build_dependencies": [],
+            "features": [
+              "general",
+              "no_std"
             ]
           },
           "percent-encoding-2.3.2": {
@@ -8154,6 +8616,7 @@
               "event",
               "fs",
               "libc-extra-traits",
+              "mm",
               "pipe",
               "process",
               "shm",
@@ -8461,58 +8924,6 @@
               "calloop",
               "calloop-wayland-source"
             ]
-          },
-          "thiserror-1.0.69": {
-            "runtime_dependencies": [
-              {
-                "name": "thiserror_impl",
-                "package_key": "thiserror-impl-1.0.69",
-                "kind": "normal",
-                "features": [],
-                "uses_default_features": true,
-                "optional": false,
-                "target": null,
-                "tree": "host"
-              }
-            ],
-            "build_dependencies": [],
-            "features": []
-          },
-          "thiserror-impl-1.0.69": {
-            "runtime_dependencies": [
-              {
-                "name": "proc_macro2",
-                "package_key": "proc-macro2-1.0.107",
-                "kind": "normal",
-                "features": [],
-                "uses_default_features": true,
-                "optional": false,
-                "target": null,
-                "tree": "target"
-              },
-              {
-                "name": "quote",
-                "package_key": "quote-1.0.47",
-                "kind": "normal",
-                "features": [],
-                "uses_default_features": true,
-                "optional": false,
-                "target": null,
-                "tree": "target"
-              },
-              {
-                "name": "syn",
-                "package_key": "syn-2.0.119",
-                "kind": "normal",
-                "features": [],
-                "uses_default_features": true,
-                "optional": false,
-                "target": null,
-                "tree": "target"
-              }
-            ],
-            "build_dependencies": [],
-            "features": []
           },
           "wayland-csd-frame-0.3.0": {
             "runtime_dependencies": [
@@ -9162,11 +9573,6 @@
               "default"
             ]
           },
-          "bytemuck-1.25.2": {
-            "runtime_dependencies": [],
-            "build_dependencies": [],
-            "features": []
-          },
           "calloop-0.13.0": {
             "runtime_dependencies": [
               {
@@ -9291,6 +9697,27 @@
             "build_dependencies": [],
             "features": []
           },
+          "drm-sys-0.8.1": {
+            "runtime_dependencies": [
+              {
+                "name": "linux_raw_sys",
+                "package_key": "linux-raw-sys-0.9.4",
+                "kind": "normal",
+                "features": [
+                  "general",
+                  "no_std"
+                ],
+                "uses_default_features": false,
+                "optional": false,
+                "target": "cfg(any(target_os = \"android\", target_os = \"linux\"))",
+                "tree": "target"
+              }
+            ],
+            "build_dependencies": [],
+            "features": [
+              "default"
+            ]
+          },
           "gethostname-1.1.0": {
             "runtime_dependencies": [
               {
@@ -9338,6 +9765,14 @@
               "no_std",
               "prctl",
               "system"
+            ]
+          },
+          "linux-raw-sys-0.9.4": {
+            "runtime_dependencies": [],
+            "build_dependencies": [],
+            "features": [
+              "general",
+              "no_std"
             ]
           },
           "percent-encoding-2.3.2": {
@@ -9449,6 +9884,7 @@
               "event",
               "fs",
               "libc-extra-traits",
+              "mm",
               "pipe",
               "process",
               "shm",
@@ -9756,58 +10192,6 @@
               "calloop",
               "calloop-wayland-source"
             ]
-          },
-          "thiserror-1.0.69": {
-            "runtime_dependencies": [
-              {
-                "name": "thiserror_impl",
-                "package_key": "thiserror-impl-1.0.69",
-                "kind": "normal",
-                "features": [],
-                "uses_default_features": true,
-                "optional": false,
-                "target": null,
-                "tree": "host"
-              }
-            ],
-            "build_dependencies": [],
-            "features": []
-          },
-          "thiserror-impl-1.0.69": {
-            "runtime_dependencies": [
-              {
-                "name": "proc_macro2",
-                "package_key": "proc-macro2-1.0.107",
-                "kind": "normal",
-                "features": [],
-                "uses_default_features": true,
-                "optional": false,
-                "target": null,
-                "tree": "target"
-              },
-              {
-                "name": "quote",
-                "package_key": "quote-1.0.47",
-                "kind": "normal",
-                "features": [],
-                "uses_default_features": true,
-                "optional": false,
-                "target": null,
-                "tree": "target"
-              },
-              {
-                "name": "syn",
-                "package_key": "syn-2.0.119",
-                "kind": "normal",
-                "features": [],
-                "uses_default_features": true,
-                "optional": false,
-                "target": null,
-                "tree": "target"
-              }
-            ],
-            "build_dependencies": [],
-            "features": []
           },
           "wayland-csd-frame-0.3.0": {
             "runtime_dependencies": [
@@ -10423,6 +10807,10 @@
     "bytemuck-1.25.2": {
       "edition": "2018"
     },
+    "bytemuck_derive-1.12.0": {
+      "edition": "2018",
+      "proc_macro": true
+    },
     "calloop-0.13.0": {
       "edition": "2018"
     },
@@ -10481,8 +10869,18 @@
     "dpi-0.1.2": {
       "edition": "2021"
     },
+    "drm-0.14.1": {
+      "edition": "2021"
+    },
+    "drm-ffi-0.9.1": {
+      "edition": "2021"
+    },
     "drm-fourcc-2.2.0": {
       "edition": "2018",
+      "build_script": "build.rs"
+    },
+    "drm-sys-0.8.1": {
+      "edition": "2021",
       "build_script": "build.rs"
     },
     "equivalent-1.0.2": {
@@ -10567,6 +10965,9 @@
     "linux-raw-sys-0.4.15": {
       "edition": "2021"
     },
+    "linux-raw-sys-0.9.4": {
+      "edition": "2021"
+    },
     "log-0.4.33": {
       "edition": "2021"
     },
@@ -10634,11 +11035,23 @@
     "once_cell-1.21.4": {
       "edition": "2021"
     },
+    "paste-1.0.15": {
+      "edition": "2018",
+      "proc_macro": true,
+      "build_script": "build.rs"
+    },
     "percent-encoding-2.3.2": {
       "edition": "2018"
     },
     "pin-project-lite-0.2.17": {
       "edition": "2018"
+    },
+    "pixman-0.2.1": {
+      "edition": "2021"
+    },
+    "pixman-sys-0.1.0": {
+      "edition": "2021",
+      "build_script": "build.rs"
     },
     "pkg-config-0.3.34": {
       "edition": "2021"
