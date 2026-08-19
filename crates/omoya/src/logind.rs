@@ -52,7 +52,7 @@
 //! divergence from the template, made for a real reason, not a style choice.
 
 use std::collections::HashMap;
-use std::os::fd::{AsRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -82,16 +82,34 @@ pub enum Error {
     Refused { method: &'static str, reason: String },
     #[error("{0}")]
     Io(#[from] std::io::Error),
+    /// ★ A device path that cannot be stat'd. Its own arm rather than folded
+    /// into `Io`, because logind addresses devices by (major, minor) and the
+    /// stat is how a path becomes those — a failure here means we never got as
+    /// far as asking logind anything.
+    #[error("cannot stat the device node: {0}")]
+    Stat(smithay::reexports::rustix::io::Errno),
+}
+
+impl From<smithay::reexports::rustix::io::Errno> for Error {
+    fn from(e: smithay::reexports::rustix::io::Errno) -> Self {
+        Self::Stat(e)
+    }
 }
 
 impl AsErrno for Error {
     fn as_errno(&self) -> Option<i32> {
-        // ★ D-Bus errors carry NAMES, not errnos, so there is nothing honest to
-        // return here. smithay's own call site defaults to EPERM on `None`
-        // (`backend/libinput/mod.rs:692`), which is the correct floor: it makes
-        // libinput treat the device as unavailable rather than inventing a
-        // errno that would send a caller down the wrong recovery path.
-        None
+        match self {
+            // ★ A stat failure HAS a real errno, so pass it through — libinput
+            // can distinguish ENOENT from EACCES and recover differently.
+            Self::Stat(e) => Some(e.raw_os_error()),
+            // D-Bus errors carry NAMES, not errnos, so there is nothing honest
+            // to return. smithay's own call site defaults to EPERM on `None`
+            // (`backend/libinput/mod.rs:692`), which is the correct floor: it
+            // makes libinput treat the device as unavailable rather than
+            // inventing an errno that sends a caller down the wrong recovery
+            // path.
+            _ => None,
+        }
     }
 }
 
@@ -293,17 +311,27 @@ fn handle_resume(inner: &Arc<Inner>, msg: &zbus::Message) {
     // that number once and will never ask again, so the only way to give them
     // the resumed device is to change what their number points at. This is what
     // libseat does; it is the protocol's shape, not a trick.
-    if let Err(e) = smithay::reexports::rustix::io::dup2(&new_fd, unsafe {
-        &std::os::fd::BorrowedFd::borrow_raw(old)
-    }) {
+    // ★ `rustix::io::dup2` takes `&mut OwnedFd` because it normally MANAGES the
+    // target's lifetime. Here the target belongs to libinput or drm, not to us,
+    // so it is wrapped for the call and released with `into_raw_fd` — which
+    // gives up ownership WITHOUT closing. Letting the wrapper drop would close
+    // the caller's device out from under it, turning a resume into the exact
+    // failure it exists to prevent.
+    let mut target = unsafe { OwnedFd::from_raw_fd(old) };
+    let result = smithay::reexports::rustix::io::dup2(&new_fd, &mut target);
+    let _ = target.into_raw_fd();
+    if let Err(e) = result {
         tracing::error!(error = %e, major, minor, "dup2 on resume failed — the device is now dead to its holder");
     }
 }
 
 fn handle_properties(inner: &Arc<Inner>, msg: &zbus::Message, tx: &SyncSender<SessionEvent>) {
-    let Ok((iface, changed, _inval)) = msg
-        .body()
-        .deserialize::<(String, HashMap<String, zvariant::Value<'_>>, Vec<String>)>()
+    // The body must outlive the deserialised borrow — `msg.body()` is a
+    // temporary, and inlining it drops the buffer while `Value<'_>` still
+    // points into it.
+    let body = msg.body();
+    let Ok((iface, changed, _inval)) =
+        body.deserialize::<(String, HashMap<String, zvariant::Value<'_>>, Vec<String>)>()
     else {
         return;
     };
@@ -371,7 +399,7 @@ impl Session for LogindSession {
             .lock()
             .ok()
             .and_then(|mut d| {
-                let key = d.iter().find(|(_, &v)| v == raw).map(|(k, _)| *k);
+                let key = d.iter().find(|(_, v)| **v == raw).map(|(k, _)| *k);
                 key.inspect(|k| {
                     d.remove(k);
                 })
@@ -414,14 +442,14 @@ impl smithay::reexports::calloop::EventSource for LogindSessionNotifier {
     type Event = SessionEvent;
     type Metadata = ();
     type Ret = ();
-    type Error = std::io::Error;
+    type Error = smithay::reexports::calloop::channel::ChannelError;
 
     fn process_events<F>(
         &mut self,
         readiness: smithay::reexports::calloop::Readiness,
         token: smithay::reexports::calloop::Token,
         mut callback: F,
-    ) -> std::io::Result<smithay::reexports::calloop::PostAction>
+    ) -> Result<smithay::reexports::calloop::PostAction, Self::Error>
     where
         F: FnMut(SessionEvent, &mut ()),
     {
