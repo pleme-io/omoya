@@ -66,8 +66,44 @@
           libGL
           vulkan-loader
         ];
+        # ── THE WITNESS SET ────────────────────────────────────────────────
+        # Answering "does omoya composite?" needs a display to composite ONTO
+        # and a way to read the pixels back. Xvfb supplies the first without a
+        # DRM device, a VT, or root — which is the whole reason M2 can be
+        # measured on a machine whose only console is the thing being replaced.
+        #
+        # ★ These are DEV-SHELL inputs, not a `nix shell` invocation, and the
+        # difference is load-bearing: `nix shell nixpkgs#xorg.xorgserver …`
+        # REPLACES the environment, dropping the `LD_LIBRARY_PATH` the
+        # compositor's dlopen'd libEGL is found through. Measured 2026-08-19 —
+        # omoya reached the winit backend, opened an X connection, and then
+        # panicked with `Failed to load LibEGL: libEGL.so.1: cannot open shared
+        # object file`. The X tools and the GL libraries must be in ONE
+        # environment, so the flake is where they meet.
+        witnessTools = with pkgs; [
+          xorg.xorgserver # Xvfb — a display with no hardware behind it
+          xorg.xwininfo # what windows actually exist, and how big
+          imagemagick # `import` the root window; read pixels back out
+        ];
       in
       {
+        # `nix develop .#witness` — the environment the M2 done-predicate is
+        # measured in. Same libraries as the dev shell, plus the means to look.
+        devShells.witness = pkgs.mkShell {
+          name = "omoya-witness";
+          nativeBuildInputs =
+            (with pkgs; [
+              rustc
+              cargo
+              pkg-config
+            ])
+            ++ witnessTools;
+          buildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux compositorDeps;
+          LD_LIBRARY_PATH = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux (
+            pkgs.lib.makeLibraryPath compositorDeps
+          );
+        };
+
         devShells.default = pkgs.mkShell {
           name = "omoya-dev";
 

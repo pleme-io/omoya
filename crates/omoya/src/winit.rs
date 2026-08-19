@@ -70,9 +70,22 @@ pub fn init_winit(
     }
 
     // ★ The background is Nord, sourced from `irodori` via `crate::theme` —
-    // there is no colour literal in this file. See theme.rs for why the
-    // sRGB→linear conversion is the part that matters.
-    let background = theme::background_linear();
+    // there is no colour literal in this file.
+    //
+    // The ENCODING is asked of the surface rather than assumed. `PixelFormat`
+    // is what smithay itself logs at startup ("Selected color format: … srgb:
+    // false"), and it is reachable through the public `egl_surface()` accessor,
+    // so the compositor reads the same fact the log prints instead of carrying
+    // a second belief about it. On this nested X11 path it is false; on a DRM
+    // scanout target it is usually true — see `theme::background_for_surface`
+    // for the measured pixel that made this a query.
+    let format_is_srgb = backend.egl_surface().pixel_format().srgb;
+    let background = theme::background_for_surface(format_is_srgb);
+    tracing::info!(
+        srgb_framebuffer = format_is_srgb,
+        clear = ?background,
+        "seat background resolved"
+    );
 
     event_loop
         .handle()
