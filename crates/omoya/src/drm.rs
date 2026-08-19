@@ -275,9 +275,6 @@ pub fn paint_background(
     // supports. Offering both lets the compositor pick; offering only one is
     // how a mode-set fails on a driver that wanted the other.
     let color_formats = [DrmFourcc::Argb8888, DrmFourcc::Xrgb8888];
-    let renderer_formats = renderer.shm_formats().collect::<Vec<_>>();
-    let _ = renderer_formats;
-
     let mut compositor: Scanner = DrmCompositor::new(
         OutputModeSource::Static {
             size: output.current_mode().map_or((0, 0).into(), |m| m.size),

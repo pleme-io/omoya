@@ -91,6 +91,9 @@
           # rlibs, with no `-ldrm` anywhere. That is why the scanout dependency
           # set measured as entirely cached: it adds no C library at all.
           "pixman"
+          # backend_gbm is a compile-time requirement of
+          # DrmCompositor even though no GbmDevice is constructed.
+          "libgbm"
         ];
       };
 

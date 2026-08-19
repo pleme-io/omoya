@@ -37,5 +37,14 @@ features = [
   # and on plo it is currently the ONLY path that works, since simpledrm
   # owns the display until the nvidia stage is armed.
   "backend_drm",
+  # ★ REQUIRED for DrmCompositor, and this corrects a claim made twice in
+  # this repo's own comments. smithay gates the module:
+  #   #[cfg(all(feature = "wayland_frontend", feature = "backend_gbm"))]
+  #   pub mod compositor;
+  # so "the dumb-buffer path needs no gbm" is true of the RUNTIME path —
+  # no GbmDevice is ever constructed, the slot is passed None — and false
+  # of the COMPILE-TIME gate. Without this feature DrmCompositor does not
+  # exist to call.
+  "backend_gbm",
   "renderer_pixman",
 ]
