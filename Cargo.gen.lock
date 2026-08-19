@@ -1,10 +1,10 @@
 {
   "schema_version": 2,
-  "cargo_lock_sha256": "fc43fb1a2f208b5a30524e55ea0aa1ed8b4af2655a977d4a70f7240ae04e97a4",
+  "cargo_lock_sha256": "54bc2d82fbd971792bb7004d215c74c63d984362ac54919b7d9c8539f2a7d9fe",
   "manifest_sha256": {
-    "Cargo.toml": "6279052442fc225f5c0bf1bfc75fc2f5417acf6ac29ca1af3368ee9771097927",
+    "Cargo.toml": "96954378a189a8e2bd44358cadc276b909ad31347314e5962faec56d627085df",
     "crates/omoya-spec/Cargo.toml": "75cd6d31f2ef617df89556610445abab8cf9cddb49d7bbf04c28ac5b7fc89031",
-    "crates/omoya/Cargo.toml": "1476acc78913b8655821df21f327b8ff9edede38cdddc7fc2e03044ca0c99ffe"
+    "crates/omoya/Cargo.toml": "28c2850b470af2e54032ab7cfd0d940fded94181f7488afb8881c2b0ea75fc40"
   },
   "target_resolves": {
     "base": {
@@ -948,90 +948,6 @@
           "std"
         ]
       },
-      "input-0.9.1": {
-        "runtime_dependencies": [
-          {
-            "name": "bitflags",
-            "package_key": "bitflags-2.13.1",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": true,
-            "optional": false,
-            "target": null,
-            "tree": "target"
-          },
-          {
-            "name": "input_sys",
-            "package_key": "input-sys-1.19.0",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": false,
-            "optional": false,
-            "target": null,
-            "tree": "target"
-          },
-          {
-            "name": "libc",
-            "package_key": "libc-0.2.189",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": true,
-            "optional": false,
-            "target": null,
-            "tree": "target"
-          },
-          {
-            "name": "udev",
-            "package_key": "udev-0.9.3",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": true,
-            "optional": true,
-            "target": null,
-            "tree": "target"
-          }
-        ],
-        "build_dependencies": [],
-        "features": [
-          "libinput_1_11",
-          "libinput_1_14",
-          "libinput_1_15",
-          "libinput_1_19",
-          "udev"
-        ]
-      },
-      "input-sys-1.19.0": {
-        "runtime_dependencies": [],
-        "build_dependencies": [],
-        "features": [
-          "libinput_1_11",
-          "libinput_1_14",
-          "libinput_1_15",
-          "libinput_1_19"
-        ]
-      },
-      "io-lifetimes-1.0.11": {
-        "runtime_dependencies": [
-          {
-            "name": "libc",
-            "package_key": "libc-0.2.189",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": true,
-            "optional": true,
-            "target": "cfg(not(windows))",
-            "tree": "target"
-          }
-        ],
-        "build_dependencies": [],
-        "features": [
-          "close",
-          "default",
-          "hermit-abi",
-          "libc",
-          "windows-sys"
-        ]
-      },
       "irodori-0.2.0": {
         "runtime_dependencies": [
           {
@@ -1116,85 +1032,6 @@
         "build_dependencies": [],
         "features": []
       },
-      "libseat-0.2.4": {
-        "runtime_dependencies": [
-          {
-            "name": "errno",
-            "package_key": "errno-0.3.14",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": true,
-            "optional": false,
-            "target": null,
-            "tree": "target"
-          },
-          {
-            "name": "libseat_sys",
-            "package_key": "libseat-sys-0.2.0",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": true,
-            "optional": false,
-            "target": null,
-            "tree": "target"
-          },
-          {
-            "name": "log",
-            "package_key": "log-0.4.33",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": true,
-            "optional": false,
-            "target": null,
-            "tree": "target"
-          }
-        ],
-        "build_dependencies": [],
-        "features": []
-      },
-      "libseat-sys-0.2.0": {
-        "runtime_dependencies": [],
-        "build_dependencies": [
-          {
-            "name": "pkg_config",
-            "package_key": "pkg-config-0.3.34",
-            "kind": "build",
-            "features": [],
-            "uses_default_features": true,
-            "optional": false,
-            "target": null,
-            "tree": "host"
-          }
-        ],
-        "features": []
-      },
-      "libudev-sys-0.1.4": {
-        "runtime_dependencies": [
-          {
-            "name": "libc",
-            "package_key": "libc-0.2.189",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": true,
-            "optional": false,
-            "target": null,
-            "tree": "target"
-          }
-        ],
-        "build_dependencies": [
-          {
-            "name": "pkg_config",
-            "package_key": "pkg-config-0.3.34",
-            "kind": "build",
-            "features": [],
-            "uses_default_features": true,
-            "optional": false,
-            "target": null,
-            "tree": "host"
-          }
-        ],
-        "features": []
-      },
       "log-0.4.33": {
         "runtime_dependencies": [],
         "build_dependencies": [],
@@ -1274,7 +1111,7 @@
           "std"
         ]
       },
-      "omoya-0.1.3": {
+      "omoya-0.1.4": {
         "runtime_dependencies": [
           {
             "name": "awase",
@@ -1298,7 +1135,7 @@
           },
           {
             "name": "omoya_spec",
-            "package_key": "omoya-spec-0.1.3",
+            "package_key": "omoya-spec-0.1.4",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -1313,9 +1150,6 @@
             "features": [
               "backend_drm",
               "backend_gbm",
-              "backend_libinput",
-              "backend_session_libseat",
-              "backend_udev",
               "backend_winit",
               "desktop",
               "renderer_pixman",
@@ -1362,7 +1196,7 @@
         "build_dependencies": [],
         "features": []
       },
-      "omoya-spec-0.1.3": {
+      "omoya-spec-0.1.4": {
         "runtime_dependencies": [
           {
             "name": "thiserror",
@@ -2126,18 +1960,6 @@
             "tree": "target"
           },
           {
-            "name": "input",
-            "package_key": "input-0.9.1",
-            "kind": "normal",
-            "features": [
-              "libinput_1_19"
-            ],
-            "uses_default_features": false,
-            "optional": true,
-            "target": null,
-            "tree": "target"
-          },
-          {
             "name": "libc",
             "package_key": "libc-0.2.189",
             "kind": "normal",
@@ -2153,16 +1975,6 @@
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
-            "optional": true,
-            "target": null,
-            "tree": "target"
-          },
-          {
-            "name": "libseat",
-            "package_key": "libseat-0.2.4",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": false,
             "optional": true,
             "target": null,
             "tree": "target"
@@ -2266,16 +2078,6 @@
             "features": [],
             "uses_default_features": true,
             "optional": false,
-            "target": null,
-            "tree": "target"
-          },
-          {
-            "name": "udev",
-            "package_key": "udev-0.9.3",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": true,
-            "optional": true,
             "target": null,
             "tree": "target"
           },
@@ -2421,10 +2223,6 @@
           "backend_drm",
           "backend_egl",
           "backend_gbm",
-          "backend_libinput",
-          "backend_session",
-          "backend_session_libseat",
-          "backend_udev",
           "backend_winit",
           "cc",
           "desktop",
@@ -2432,15 +2230,12 @@
           "drm-ffi",
           "gbm",
           "gl_generator",
-          "input",
           "libloading",
-          "libseat",
           "pixman",
           "pkg-config",
           "renderer_gl",
           "renderer_pixman",
           "tempfile",
-          "udev",
           "wayland-client",
           "wayland-cursor",
           "wayland-egl",
@@ -3229,53 +3024,6 @@
       "typenum-1.20.1": {
         "runtime_dependencies": [],
         "build_dependencies": [],
-        "features": []
-      },
-      "udev-0.9.3": {
-        "runtime_dependencies": [
-          {
-            "name": "io_lifetimes",
-            "package_key": "io-lifetimes-1.0.11",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": true,
-            "optional": false,
-            "target": null,
-            "tree": "target"
-          },
-          {
-            "name": "libc",
-            "package_key": "libc-0.2.189",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": true,
-            "optional": false,
-            "target": null,
-            "tree": "target"
-          },
-          {
-            "name": "libudev_sys",
-            "package_key": "libudev-sys-0.1.4",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": true,
-            "optional": false,
-            "target": null,
-            "tree": "target"
-          }
-        ],
-        "build_dependencies": [
-          {
-            "name": "pkg_config",
-            "package_key": "pkg-config-0.3.34",
-            "kind": "build",
-            "features": [],
-            "uses_default_features": true,
-            "optional": false,
-            "target": null,
-            "tree": "host"
-          }
-        ],
         "features": []
       },
       "unicode-ident-1.0.24": {
@@ -11307,17 +11055,6 @@
     "indexmap-2.14.0": {
       "edition": "2024"
     },
-    "input-0.9.1": {
-      "edition": "2018"
-    },
-    "input-sys-1.19.0": {
-      "edition": "2018",
-      "build_script": "build.rs"
-    },
-    "io-lifetimes-1.0.11": {
-      "edition": "2018",
-      "build_script": "build.rs"
-    },
     "irodori-0.2.0": {
       "edition": "2024"
     },
@@ -11340,19 +11077,6 @@
     },
     "libloading-0.8.9": {
       "edition": "2015"
-    },
-    "libseat-0.2.4": {
-      "edition": "2018",
-      "build_script": "build.rs"
-    },
-    "libseat-sys-0.2.0": {
-      "edition": "2018",
-      "build_script": "build.rs"
-    },
-    "libudev-sys-0.1.4": {
-      "edition": "2015",
-      "build_script": "build.rs",
-      "links": "libudev"
     },
     "linux-raw-sys-0.12.1": {
       "edition": "2021"
@@ -11411,7 +11135,7 @@
     "objc2-quartz-core-0.2.2": {
       "edition": "2021"
     },
-    "omoya-0.1.3": {
+    "omoya-0.1.4": {
       "edition": "2024",
       "binaries": [
         {
@@ -11420,7 +11144,7 @@
         }
       ]
     },
-    "omoya-spec-0.1.3": {
+    "omoya-spec-0.1.4": {
       "edition": "2024",
       "lib_target": {
         "name": "omoya_spec",
@@ -11617,9 +11341,6 @@
     },
     "typenum-1.20.1": {
       "edition": "2018"
-    },
-    "udev-0.9.3": {
-      "edition": "2015"
     },
     "unicode-ident-1.0.24": {
       "edition": "2021"
