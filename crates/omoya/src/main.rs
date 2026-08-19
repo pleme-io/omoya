@@ -118,6 +118,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing_subscriber::fmt().init();
     }
 
+    // ★ The introspection sidecar, spawned BEFORE either backend runs so an
+    // agent can observe a seat that is failing to come up — which is exactly
+    // when observation matters and exactly when a late-registered surface is
+    // useless.
+    //
+    // `spawn_sidecar` is infallible by construction (it returns Option and has
+    // no panic arm), so a socket that cannot bind degrades to "no
+    // introspection" rather than "no compositor". That property is why this
+    // call can sit on the startup path at all.
+    let introspect = crate::introspect::OmoyaIntrospect::new();
+
     let args = match parse_args() {
         Ok(a) => a,
         Err(msg) => {
@@ -125,6 +136,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::process::exit(2);
         }
     };
+
+    let _ = introspect.mode.set(args.mode.name().to_string());
+    match kanshou::Server::spawn_sidecar("omoya", introspect.clone()) {
+        Some(path) => tracing::info!(socket = %path.display(), "introspection sidecar up"),
+        None => tracing::warn!(
+            "introspection sidecar did NOT start — omoya runs, but `gen kanshou \
+             query omoya ...` will find nothing"
+        ),
+    }
 
     let mut event_loop: EventLoop<CalloopData> = EventLoop::try_new()?;
     let display: Display<Omoya> = Display::new()?;
@@ -137,7 +157,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     match args.backend {
-        Backend::Nested => crate::winit::init_winit(&mut event_loop, &mut data)?,
+        Backend::Nested => {
+            introspect.backend.store(0, std::sync::atomic::Ordering::Relaxed);
+            crate::winit::init_winit(&mut event_loop, &mut data)?;
+        }
         Backend::Drm => {
             // M4a is a SCANOUT PROBE, not yet a render loop: it opens the
             // device, takes master, finds a connected connector and its
@@ -158,6 +181,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Hold the display and serve clients — M4b. The one-shot paint
             // below is kept as `--backend drm-probe` would be if it earned a
             // flag; today the persistent loop supersedes it.
+            introspect.backend.store(1, std::sync::atomic::Ordering::Relaxed);
+            introspect
+                .output_w
+                .store(u64::from(target.mode.size().0), std::sync::atomic::Ordering::Relaxed);
+            introspect
+                .output_h
+                .store(u64::from(target.mode.size().1), std::sync::atomic::Ordering::Relaxed);
+            introspect
+                .refresh_hz
+                .store(u64::from(target.mode.vrefresh()), std::sync::atomic::Ordering::Relaxed);
+
             let mut device = device;
             crate::drm::run(&mut event_loop, &mut data, &mut device, &_fd, &target)?;
 
@@ -170,6 +204,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Ok((session, _notifier)) => {
                     if let Err(e) = crate::drm::attach_input(&mut event_loop, session) {
                         tracing::error!(error = %e, "input attach failed — seat is look-only");
+                    } else {
+                        introspect
+                            .input_attached
+                            .store(1, std::sync::atomic::Ordering::Relaxed);
                     }
                 }
                 Err(e) => tracing::error!(
@@ -186,6 +224,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Announce the socket BEFORE spawning, so a client started here finds it.
     let socket = data.state.socket_name.clone();
+    let _ = introspect
+        .socket
+        .set(socket.to_string_lossy().into_owned());
     tracing::info!(
         socket = ?socket,
         mode = args.mode.name(),
