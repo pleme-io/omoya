@@ -138,6 +138,15 @@
             # brings up.
             libGL
             vulkan-loader
+            # ★ pixman is in BOTH lists, and that is not redundancy — it is the
+            # correction to a framing this file got half right. I described the
+            # split as "linked vs dlopened", as if a library belonged to exactly
+            # one list. A DYNAMICALLY linked library needs both: the build input
+            # so `-lpixman-1` resolves at link time, and this entry so
+            # `libpixman-1.so.0` resolves at RUN time. Omitting it here produced
+            # a binary that built cleanly and then died instantly on plo with
+            # "cannot open shared object file".
+            pixman
           ];
           # ── THE M4 SET — DRM/KMS on real hardware ──────────────────────────
           # Deliberately a SEPARATE shell, not an addition to the default one.
