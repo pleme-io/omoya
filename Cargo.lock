@@ -1107,7 +1107,7 @@ dependencies = [
 
 [[package]]
 name = "omoya"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "awase",
  "irodori",
@@ -1120,7 +1120,7 @@ dependencies = [
 
 [[package]]
 name = "omoya-spec"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "thiserror 2.0.20",
  "tracing",
