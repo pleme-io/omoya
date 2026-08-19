@@ -63,7 +63,25 @@
         # libGL are DLOPENED and belong in the LD_LIBRARY_PATH wrap below.
         # Link-time and dlopen-time are different mechanisms for different
         # problems, and treating them as one list is what cost both builds.
-        buildInputs = [ "libxkbcommon" ];
+        # ★ `nativeBuildInputs`, NOT `buildInputs`, and the reason is in
+        # substrate's own signature rather than in convention:
+        #
+        #   buildInputs       = ... ++ buildInputs                    # DERIVATIONS
+        #   nativeBuildInputs = ... ++ (map (n: targetPkgs.${n}) ...) # NAMES
+        #
+        # (substrate/lib/build/rust/tool-release.nix:232-236.) Only
+        # nativeBuildInputs is name-addressed, which is why passing the string
+        # "libxkbcommon" to buildInputs failed with `build input libxkbcommon
+        # does not exist` — buildInputs wanted a package and got a string.
+        #
+        # The name is resolved from **targetPkgs**, i.e. the package set being
+        # built FOR, so despite the "native" in its name this is the correct
+        # hook for a library the target links against. omoya is Linux-only and
+        # never cross-compiled, so there is no host/target split to get wrong.
+        nativeBuildInputs = [
+          "pkg-config"
+          "libxkbcommon"
+        ];
       };
 
       devOutputs = flake-utils.lib.eachDefaultSystem (
