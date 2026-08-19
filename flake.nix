@@ -95,6 +95,7 @@
           # session that is allowed to. Both are dynamically linked.
           "libinput"
           "seatd"
+          "udev"
           # backend_gbm is a compile-time requirement of
           # DrmCompositor even though no GbmDevice is constructed.
           "libgbm"
@@ -304,6 +305,7 @@
             # M4c, same both-lists rule as pixman and libgbm.
             libinput
             seatd
+            udev
           ];
           wrapped = pkgs.symlinkJoin {
             name = "omoya-linux";

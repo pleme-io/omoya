@@ -51,6 +51,14 @@ features = [
   # it because libinput must open /dev/input/* , and doing that without a
   # session means running the whole compositor as root.
   "backend_libinput",
+  # ★ REQUIRED for `Libinput::new_with_udev`. smithay gates it as
+  #   backend_udev = [ "udev", "input/udev" ]
+  # so `backend_libinput` alone pulls in the `input` crate WITHOUT its
+  # udev feature, and the udev constructor is compiled out. The error is
+  # "no associated function named new_with_udev", which reads like the
+  # method does not exist — while the crate's own docs use it, because
+  # their doctest builds with the feature on.
+  "backend_udev",
   "backend_session_libseat",
   "renderer_pixman",
 ]

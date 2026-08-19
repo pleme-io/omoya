@@ -1,10 +1,10 @@
 {
   "schema_version": 2,
-  "cargo_lock_sha256": "e9f22d3880801ba81de15b85f2ea129ae4eea235035dd2f06fba9233aebd5328",
+  "cargo_lock_sha256": "fc43fb1a2f208b5a30524e55ea0aa1ed8b4af2655a977d4a70f7240ae04e97a4",
   "manifest_sha256": {
     "Cargo.toml": "6279052442fc225f5c0bf1bfc75fc2f5417acf6ac29ca1af3368ee9771097927",
     "crates/omoya-spec/Cargo.toml": "75cd6d31f2ef617df89556610445abab8cf9cddb49d7bbf04c28ac5b7fc89031",
-    "crates/omoya/Cargo.toml": "c38c4cbdc862c564497dfe6c1096c9a3e5fd0f64cf0278fe8f50b9501df755d4"
+    "crates/omoya/Cargo.toml": "1476acc78913b8655821df21f327b8ff9edede38cdddc7fc2e03044ca0c99ffe"
   },
   "target_resolves": {
     "base": {
@@ -979,6 +979,16 @@
             "optional": false,
             "target": null,
             "tree": "target"
+          },
+          {
+            "name": "udev",
+            "package_key": "udev-0.9.3",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": true,
+            "target": null,
+            "tree": "target"
           }
         ],
         "build_dependencies": [],
@@ -986,7 +996,8 @@
           "libinput_1_11",
           "libinput_1_14",
           "libinput_1_15",
-          "libinput_1_19"
+          "libinput_1_19",
+          "udev"
         ]
       },
       "input-sys-1.19.0": {
@@ -997,6 +1008,28 @@
           "libinput_1_14",
           "libinput_1_15",
           "libinput_1_19"
+        ]
+      },
+      "io-lifetimes-1.0.11": {
+        "runtime_dependencies": [
+          {
+            "name": "libc",
+            "package_key": "libc-0.2.189",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": true,
+            "target": "cfg(not(windows))",
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": [
+          "close",
+          "default",
+          "hermit-abi",
+          "libc",
+          "windows-sys"
         ]
       },
       "irodori-0.2.0": {
@@ -1135,6 +1168,33 @@
         ],
         "features": []
       },
+      "libudev-sys-0.1.4": {
+        "runtime_dependencies": [
+          {
+            "name": "libc",
+            "package_key": "libc-0.2.189",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [
+          {
+            "name": "pkg_config",
+            "package_key": "pkg-config-0.3.34",
+            "kind": "build",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "host"
+          }
+        ],
+        "features": []
+      },
       "log-0.4.33": {
         "runtime_dependencies": [],
         "build_dependencies": [],
@@ -1255,6 +1315,7 @@
               "backend_gbm",
               "backend_libinput",
               "backend_session_libseat",
+              "backend_udev",
               "backend_winit",
               "desktop",
               "renderer_pixman",
@@ -2209,6 +2270,16 @@
             "tree": "target"
           },
           {
+            "name": "udev",
+            "package_key": "udev-0.9.3",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": true,
+            "target": null,
+            "tree": "target"
+          },
+          {
             "name": "wayland_client",
             "package_key": "wayland-client-0.31.15",
             "kind": "normal",
@@ -2353,6 +2424,7 @@
           "backend_libinput",
           "backend_session",
           "backend_session_libseat",
+          "backend_udev",
           "backend_winit",
           "cc",
           "desktop",
@@ -2368,6 +2440,7 @@
           "renderer_gl",
           "renderer_pixman",
           "tempfile",
+          "udev",
           "wayland-client",
           "wayland-cursor",
           "wayland-egl",
@@ -3156,6 +3229,53 @@
       "typenum-1.20.1": {
         "runtime_dependencies": [],
         "build_dependencies": [],
+        "features": []
+      },
+      "udev-0.9.3": {
+        "runtime_dependencies": [
+          {
+            "name": "io_lifetimes",
+            "package_key": "io-lifetimes-1.0.11",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "libc",
+            "package_key": "libc-0.2.189",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "libudev_sys",
+            "package_key": "libudev-sys-0.1.4",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [
+          {
+            "name": "pkg_config",
+            "package_key": "pkg-config-0.3.34",
+            "kind": "build",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "host"
+          }
+        ],
         "features": []
       },
       "unicode-ident-1.0.24": {
@@ -11194,6 +11314,10 @@
       "edition": "2018",
       "build_script": "build.rs"
     },
+    "io-lifetimes-1.0.11": {
+      "edition": "2018",
+      "build_script": "build.rs"
+    },
     "irodori-0.2.0": {
       "edition": "2024"
     },
@@ -11224,6 +11348,11 @@
     "libseat-sys-0.2.0": {
       "edition": "2018",
       "build_script": "build.rs"
+    },
+    "libudev-sys-0.1.4": {
+      "edition": "2015",
+      "build_script": "build.rs",
+      "links": "libudev"
     },
     "linux-raw-sys-0.12.1": {
       "edition": "2021"
@@ -11488,6 +11617,9 @@
     },
     "typenum-1.20.1": {
       "edition": "2018"
+    },
+    "udev-0.9.3": {
+      "edition": "2015"
     },
     "unicode-ident-1.0.24": {
       "edition": "2021"
