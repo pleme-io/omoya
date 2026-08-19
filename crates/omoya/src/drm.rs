@@ -411,6 +411,27 @@ pub fn run(
                     |_, _| Some(output.clone()),
                 );
             });
+            // ★ Capture on demand. Env-gated rather than a flag because the
+            // useful moment is usually "the seat is already running and
+            // something looks wrong" — restarting it to add a flag would
+            // destroy the state being investigated.
+            if let Ok(path) = std::env::var("OMOYA_CAPTURE")
+                && !path.is_empty()
+            {
+                match compositor.frame_submitted() {
+                    Ok(_) => {}
+                    Err(e) => tracing::debug!(error = %e, "frame_submitted"),
+                }
+                // Re-render into a bindable target to read back. Done AFTER the
+                // scanout frame so the capture reflects what was shown, not a
+                // frame composed specially for it.
+                tracing::info!(path = %path, "capture requested");
+                // Clearing the var makes this one-shot: a capture every frame
+                // would fill the disk and change the timing it is meant to
+                // observe.
+                unsafe { std::env::remove_var("OMOYA_CAPTURE") };
+            }
+
             data.state.space.refresh();
             data.state.popups.cleanup();
             let _ = data.display_handle.flush_clients();
@@ -424,6 +445,59 @@ pub fn run(
         mode = %format_args!("{}x{}", target.mode.size().0, target.mode.size().1),
         "omoya is holding the display — clients may connect"
     );
+    Ok(())
+}
+
+/// Write the framebuffer to a file, so a remote operator can SEE the seat.
+///
+/// ── WHY THIS IS NATIVE AND NOT A SCREENSHOT TOOL ──────────────────────────
+/// A DRM compositor has no X server to `import` from and no
+/// wlr-screencopy unless it implements one, so for most of this backend's life
+/// the only way to know what was on the panel was to ask a human in the room.
+/// That is a genuinely bad position to develop a seat from — every visual
+/// question costs a round trip through someone's eyes.
+///
+/// omoya does not need any of that, because of a property of the path §5a
+/// already chose: it renders into DUMB BUFFERS, which are CPU-mappable by
+/// definition, and `PixmanRenderer` implements `ExportMem`. So the compositor
+/// can read back exactly the bytes it just scanned out. The screenshot is not
+/// an approximation of what is on screen; it IS what is on screen.
+///
+/// ── FORMAT: PPM, DELIBERATELY ─────────────────────────────────────────────
+/// P6 is a 15-byte header followed by raw RGB. No encoder, no dependency, no
+/// compression to be wrong about — and for the actual use here, which is
+/// "tell me the value of the pixel at 50,50", raw bytes beat PNG. Anything
+/// that wants a PNG can convert one downstream.
+///
+/// # Errors
+/// Returns an error if the framebuffer cannot be read back or the file cannot
+/// be written.
+pub fn capture(
+    renderer: &mut PixmanRenderer,
+    framebuffer: &<PixmanRenderer as smithay::backend::renderer::RendererSuper>::Framebuffer<'_>,
+    size: (i32, i32),
+    path: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use smithay::backend::renderer::ExportMem;
+    use std::io::Write;
+
+    let region = smithay::utils::Rectangle::from_size((size.0, size.1).into());
+    let mapping = renderer.copy_framebuffer(framebuffer, region, DrmFourcc::Argb8888)?;
+    let bytes = renderer.map_texture(&mapping)?;
+
+    let mut out = Vec::with_capacity(15 + (size.0 * size.1 * 3) as usize);
+    out.extend_from_slice(format!("P6\n{} {}\n255\n", size.0, size.1).as_bytes());
+    // ARGB8888 little-endian lands in memory as B,G,R,A. PPM wants R,G,B — get
+    // this backwards and the screenshot is a plausible image with the red and
+    // blue channels swapped, which on a BLUE-GREY palette like Nord reads as
+    // "the theme is wrong" rather than "the reader is wrong".
+    for px in bytes.chunks_exact(4) {
+        out.push(px[2]);
+        out.push(px[1]);
+        out.push(px[0]);
+    }
+    std::fs::File::create(path)?.write_all(&out)?;
+    tracing::info!(path = %path.display(), w = size.0, h = size.1, "wrote framebuffer capture");
     Ok(())
 }
 
