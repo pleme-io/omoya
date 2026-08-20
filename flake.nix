@@ -430,8 +430,13 @@
                   "--property=User=seat "
                   "--property=TTYPath=/dev/tty2 "
                   "--property=StandardInput=tty "
-                  "--property=StandardOutput=journal "
-                  "--property=StandardError=journal "
+                  # ★ TO A FILE, NOT THE JOURNAL. TTYPath sends the unit's
+                  # output to tty2, which swallowed the error message the
+                  # moment the TTY was added — the run failed with status=1 and
+                  # printed nothing anywhere readable. An explicit append:
+                  # target beats both.
+                  "--property=StandardOutput=append:/tmp/omoya.log "
+                  "--property=StandardError=append:/tmp/omoya.log "
                   "--property=Environment=XDG_SEAT=seat0 "
                   "--property=Environment=XDG_VTNR=2 "
                   "--property=Environment=XDG_RUNTIME_DIR=/run/user/1000 "
@@ -444,8 +449,15 @@
               # AbstractLogger, and the type checker rejects the shadow. A
               # useful refusal: shadowing it would have silently broken the
               # driver's own logging for the rest of the script.
-              journal = machine.succeed("journalctl -u omoya --no-pager | tail -60")
+              journal = machine.succeed(
+                  "cat /tmp/omoya.log 2>/dev/null || journalctl -u omoya --no-pager | tail -60"
+              )
               print(journal)
+              print(machine.succeed("loginctl list-sessions --no-legend || true"))
+              print(machine.succeed(
+                  "loginctl show-session $(loginctl list-sessions --no-legend "
+                  "| awk '{print $1}' | head -1) -p Class -p Seat -p VTNr -p Active || true"
+              ))
 
               # ★ THE ASSERTION. Not "it exited 0" — a compositor that dies
               # instantly also exits 0 from systemd-run's point of view, since
