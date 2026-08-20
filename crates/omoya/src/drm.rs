@@ -50,7 +50,7 @@ use std::{
 use smithay::{
     backend::{
         allocator::{Fourcc as DrmFourcc, dumb::DumbAllocator},
-        drm::{DrmDevice, DrmDeviceFd, DrmSurface, compositor::{DrmCompositor, FrameFlags}},
+        drm::{DrmDevice, DrmDeviceFd, DrmSurface},
         renderer::{
             damage::OutputDamageTracker,
         },
@@ -272,13 +272,10 @@ pub fn frame_interval(target: &ScanoutTarget) -> Duration {
     Duration::from_nanos(1_000_000_000 / u64::from(hz))
 }
 
-/// The scanout compositor.
-///
-/// ★ `DumbAllocator` and `DrmDeviceFd` as its own framebuffer exporter — the
-/// dumb-buffer path. The `()` is user data and the last parameter is the GBM fd
-/// type, which is never constructed: `DrmCompositor` takes `None` there. The
-/// type mentions GBM only because smithay's signature does.
-type Scanner = DrmCompositor<DumbAllocator, DrmDeviceFd, (), DrmDeviceFd>;
+// ── ★ `Scanner` REMOVED — it aliased DrmCompositor ───────────────────────
+// The alias existed to name `DrmCompositor<DumbAllocator, DrmDeviceFd, (),
+// DrmDeviceFd>` once. `crate::scanout::DirectScanout` replaced it, and with it
+// the last reason this crate enabled `backend_gbm`.
 
 // ── ★ `paint_background` REMOVED, not repaired ───────────────────────────
 // It was M4a's one-shot probe: create a surface, paint Nord once, queue a
@@ -347,20 +344,23 @@ where
     data.state.space.map_output(&output, (0, 0));
     output.set_preferred(mode);
 
-    let mut compositor: Scanner = DrmCompositor::new(
-        OutputModeSource::Static {
-            size: mode.size,
-            scale: output.current_scale().fractional_scale().into(),
-            transform: output.current_transform(),
-        },
+    // ── ★ DIRECT SCANOUT, NOT DrmCompositor ──────────────────────────────
+    // `DrmCompositor` is gated behind smithay's `backend_gbm` feature, and that
+    // feature is the only reason libgbm.so.1 was linked — no `GbmDevice` was
+    // ever constructed. `crate::scanout::DirectScanout` drives `DrmSurface`
+    // page flips over a two-buffer chain instead, which needs no gbm.
+    //
+    // What is lost is named in that module: overlay planes and partial
+    // repaint. What is gained is that the seat no longer links a library it
+    // never called.
+    let mut allocator = DumbAllocator::new(fd.clone());
+    #[allow(clippy::cast_sign_loss)]
+    let mut scanout = crate::scanout::DirectScanout::new(
         surface,
-        None,
-        DumbAllocator::new(fd.clone()),
-        fd.clone(),
-        [DrmFourcc::Argb8888, DrmFourcc::Xrgb8888],
-        renderer.dmabuf_formats(),
-        (64u32, 64u32).into(),
-        None,
+        &mut allocator,
+        fd,
+        (u32::from(mode.size.w as u16), u32::from(mode.size.h as u16)),
+        DrmFourcc::Argb8888,
     )?;
 
     let clear = background();
@@ -385,14 +385,38 @@ where
             )
             .unwrap_or_default();
 
-            if let Err(e) = compositor.render_frame(&mut renderer, &elements, clear, FrameFlags::DEFAULT)
-            {
-                tracing::error!(error = %e, "render_frame failed");
-            } else if let Err(e) = compositor.queue_frame(()) {
-                // EmptyFrame is normal when nothing changed — damage tracking
-                // correctly decided there was nothing to send. Logging it as an
-                // error would train an operator to ignore this line.
-                tracing::debug!(error = %e, "queue_frame skipped");
+            // ── ★ RENDER INTO THE BACK BUFFER, THEN FLIP ────────────────
+            // `DrmCompositor` did allocate-bind-render-export-flip in one
+            // call. Split out, the order is load-bearing: the dmabuf export
+            // and the renderer bind must both target the BACK buffer, and the
+            // flip must come after the frame is complete — a flip mid-render
+            // shows a half-drawn frame, which reads as a renderer bug.
+            let frame_result = (|| -> Result<(), Box<dyn std::error::Error>> {
+                let dmabuf = {
+                    use smithay::backend::allocator::dmabuf::AsDmabuf;
+                    scanout.back_buffer().export()?
+                };
+                let mut dmabuf = dmabuf;
+                {
+                    use smithay::backend::renderer::{Bind, Frame as _, Renderer as _};
+                    let mut fb = renderer.bind(&mut dmabuf)?;
+                    let mut frame = renderer.render(&mut fb, mode.size, Transform::Normal)?;
+                    // Full-surface clear: see scanout's header — damage is not
+                    // tracked across the alternating buffers, so every frame
+                    // repaints wholly rather than leaving stale pixels behind.
+                    frame.clear(clear, &[Rectangle::from_size(mode.size)])?;
+                    for element in &elements {
+                        use smithay::backend::renderer::element::RenderElement;
+                        let geo = element.geometry(output_scale);
+                        element.draw(&mut frame, element.src(), geo, &[geo], &[])?;
+                    }
+                    let _sync = frame.finish()?;
+                }
+                scanout.flip()?;
+                Ok(())
+            })();
+            if let Err(e) = frame_result {
+                tracing::error!(error = %e, "frame failed");
             }
 
             // Tell clients their buffers were consumed, or they will never draw

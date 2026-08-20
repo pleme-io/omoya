@@ -68,7 +68,11 @@ features = [
   # no GbmDevice is ever constructed, the slot is passed None — and false
   # of the COMPILE-TIME gate. Without this feature DrmCompositor does not
   # exist to call.
-  "backend_gbm",
+  # ★ backend_gbm REMOVED — it linked libgbm.so.1 to satisfy a compile-time
+  # gate on `DrmCompositor`, which no GbmDevice ever backed. The runtime path
+  # was always dumb buffers. `crate::scanout::DirectScanout` drives DrmSurface
+  # page flips directly, so the gate is no longer needed and neither is the
+  # library.
   # M4c: input. The HANDLER already exists (input.rs, written for M2) —
   # this only supplies the events. `backend_session_libseat` comes with
   # it because libinput must open /dev/input/* , and doing that without a

@@ -1,11 +1,11 @@
 {
   "schema_version": 2,
-  "cargo_lock_sha256": "3da5f1cb4edc4638ea85b91bf368d65ac58ebfe9596d0d6b3ef33178bcf0a650",
+  "cargo_lock_sha256": "3221648ddcc07a8fca59eb86db77ccfc7416b30944c0277f03fe81fd23b95735",
   "manifest_sha256": {
     "Cargo.toml": "0b2b2101b324570a1c77a05a93180a8c692ac370d81f249bfc3cfba3c5993392",
     "crates/nuri/Cargo.toml": "c5c860abe8b16241d437c1bc3c202378eb59ea1da2a485154fdd6099e1452d41",
     "crates/omoya-spec/Cargo.toml": "75cd6d31f2ef617df89556610445abab8cf9cddb49d7bbf04c28ac5b7fc89031",
-    "crates/omoya/Cargo.toml": "58c26bde23ffcfe946c880ab82e09b1909d8eaa234a0d07f8c48231ea07d35c5"
+    "crates/omoya/Cargo.toml": "851ec6b7d1904e4a84bae209035beb1f15dead8f2c00db15a5d541b580b2dda5"
   },
   "target_resolves": {
     "base": {
@@ -1037,81 +1037,6 @@
           "std"
         ]
       },
-      "gbm-0.18.0": {
-        "runtime_dependencies": [
-          {
-            "name": "bitflags",
-            "package_key": "bitflags-2.13.1",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": true,
-            "optional": false,
-            "target": null,
-            "tree": "target"
-          },
-          {
-            "name": "drm",
-            "package_key": "drm-0.14.1",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": true,
-            "optional": true,
-            "target": null,
-            "tree": "target"
-          },
-          {
-            "name": "drm_fourcc",
-            "package_key": "drm-fourcc-2.2.0",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": true,
-            "optional": false,
-            "target": null,
-            "tree": "target"
-          },
-          {
-            "name": "gbm_sys",
-            "package_key": "gbm-sys-0.4.0",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": true,
-            "optional": false,
-            "target": null,
-            "tree": "target"
-          },
-          {
-            "name": "libc",
-            "package_key": "libc-0.2.189",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": true,
-            "optional": false,
-            "target": null,
-            "tree": "target"
-          }
-        ],
-        "build_dependencies": [],
-        "features": [
-          "drm",
-          "drm-support"
-        ]
-      },
-      "gbm-sys-0.4.0": {
-        "runtime_dependencies": [
-          {
-            "name": "libc",
-            "package_key": "libc-0.2.189",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": true,
-            "optional": false,
-            "target": null,
-            "tree": "target"
-          }
-        ],
-        "build_dependencies": [],
-        "features": []
-      },
       "generic-array-0.14.7": {
         "runtime_dependencies": [
           {
@@ -1895,7 +1820,6 @@
             "kind": "normal",
             "features": [
               "backend_drm",
-              "backend_gbm",
               "backend_session",
               "backend_winit",
               "desktop",
@@ -2763,18 +2687,6 @@
             "tree": "target"
           },
           {
-            "name": "gbm",
-            "package_key": "gbm-0.18.0",
-            "kind": "normal",
-            "features": [
-              "drm-support"
-            ],
-            "uses_default_features": false,
-            "optional": true,
-            "target": null,
-            "tree": "target"
-          },
-          {
             "name": "indexmap",
             "package_key": "indexmap-2.14.0",
             "kind": "normal",
@@ -3001,28 +2913,8 @@
         ],
         "build_dependencies": [
           {
-            "name": "cc",
-            "package_key": "cc-1.4.3",
-            "kind": "build",
-            "features": [],
-            "uses_default_features": true,
-            "optional": true,
-            "target": null,
-            "tree": "host"
-          },
-          {
             "name": "gl_generator",
             "package_key": "gl_generator-0.14.0",
-            "kind": "build",
-            "features": [],
-            "uses_default_features": true,
-            "optional": true,
-            "target": null,
-            "tree": "host"
-          },
-          {
-            "name": "pkg_config",
-            "package_key": "pkg-config-0.3.34",
             "kind": "build",
             "features": [],
             "uses_default_features": true,
@@ -3034,17 +2926,13 @@
         "features": [
           "backend_drm",
           "backend_egl",
-          "backend_gbm",
           "backend_session",
           "backend_winit",
-          "cc",
           "desktop",
           "drm",
           "drm-ffi",
-          "gbm",
           "gl_generator",
           "libloading",
-          "pkg-config",
           "renderer_gl",
           "tempfile",
           "wayland-client",
@@ -12909,13 +12797,6 @@
     },
     "futures-lite-2.6.1": {
       "edition": "2021"
-    },
-    "gbm-0.18.0": {
-      "edition": "2021"
-    },
-    "gbm-sys-0.4.0": {
-      "edition": "2021",
-      "build_script": "build.rs"
     },
     "generic-array-0.14.7": {
       "edition": "2015",
