@@ -283,9 +283,27 @@
         system:
         let
           pkgs = import nixpkgs { inherit system; };
+          # ── ★ RUNTIME LIBRARIES — FOR THE `nested` DEV BUILD ONLY ────────
+          #
+          # The SHIPPED binary needs none of these. Measured on rio at
+          # `2f2aa2d`, on the actual artifact rather than the wrapper:
+          #
+          #   $ ldd .../rust_omoya-0.1.14/bin/omoya
+          #     libc.so.6  libgcc_s.so.1  libm.so.6  linux-vdso.so.1  ld-linux
+          #
+          # Nothing else is linked, so wrapping the shipped binary in an
+          # `LD_LIBRARY_PATH` would do nothing except drag five C libraries
+          # back into its closure — which is exactly what it was doing, and
+          # what made `nix path-info -r` contradict `ldd`. The closure is the
+          # honest census: a library nothing links but the closure still
+          # carries is a claim that has not actually been made good on.
+          #
+          # These stay because `--features nested` (winit) DOES dlopen them.
+          # That build is a development tool and is never what ships.
           runtimeLibs = with pkgs; [
-            # Wayland — what omoya SERVES on, and what winit's Wayland arm
-            # loads when omoya itself runs nested inside another compositor.
+            # Wayland — what winit's Wayland arm loads when omoya runs nested
+            # inside another compositor. omoya SERVES Wayland through
+            # wayland-server's pure-Rust backend, which links nothing.
             wayland
             libxkbcommon
             # winit's X11 arm. Present because the nested backend picks its
@@ -319,21 +337,22 @@
             seatd
             udev
           ];
-          wrapped = pkgs.symlinkJoin {
-            name = "omoya-linux";
-            paths = [ base.packages.${system}.host-tool ];
-            nativeBuildInputs = [ pkgs.makeWrapper ];
-            postBuild = ''
-              for f in $out/bin/*; do
-                [ -L "$f" ] || continue
-                wrapProgram "$f" \
-                  --prefix LD_LIBRARY_PATH : ${pkgs.lib.makeLibraryPath runtimeLibs}
-              done
-            '';
-            meta = (base.packages.${system}.host-tool.meta or { }) // {
-              mainProgram = "omoya";
-            };
-          };
+          # ── ★ NO WRAPPER ────────────────────────────────────────────────
+          #
+          # This used to be a `symlinkJoin` + `wrapProgram`, which made the
+          # compositor's entry point a **generated bash script** in a repo
+          # whose law is NO SHELL. It existed to put `LD_LIBRARY_PATH` in
+          # front of libraries the binary no longer links.
+          #
+          # Both reasons are gone at once, which is why this is a deletion
+          # rather than a rewrite: the shipped binary links only libc, libm
+          # and libgcc_s, so there is no search path to set, so there is no
+          # script to generate. The `.omoya-wrapped` indirection goes too —
+          # `bin/omoya` is now the ELF binary itself.
+          #
+          # A `nested` build still needs the search path; that is what the
+          # dev shells below are for.
+          wrapped = base.packages.${system}.host-tool;
         in
         {
           packages.default = wrapped;
