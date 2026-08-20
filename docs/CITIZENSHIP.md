@@ -255,6 +255,39 @@ reports a clean `ldd` while loading the very library this tree replaced. Same
 shape as `ash` dlopening libvulkan, and it makes the census lie in the
 flattering direction, which is worse than an honest link.
 
+## It also still works — `checks.vkms-seat`, green
+
+A census proves what is absent. It says nothing about whether the thing runs,
+and a compositor that links nothing because it does nothing would score
+perfectly. The seat test is the other half: a real DRM device (vkms) in a VM,
+a real logind session, real evdev devices.
+
+```
+DRM scanout target acquired — opened THROUGH the session  Virtual-1 1024x768
+omoya is holding the display — clients may connect
+input attached — the seat is now typeable  backend=Evdev
+omoya is up — WAYLAND_DISPLAY is set for children  socket="wayland-1"
+frame failures: 0
+```
+
+**That last line is new, and it is the one that was missing.** The test used to
+assert only that the process was alive and "holding the display" — both of
+which a compositor presenting *nothing* satisfies. It passed green through two
+real bugs:
+
+1. `page_flip` does not modeset, so every flip against the never-committed
+   CRTC was rejected with `EINVAL`.
+2. Flips are issued with `event: true` and the `DrmDeviceNotifier` was
+   **dropped**, so nothing drained the kernel's page-flip event queue. It grew
+   until allocation failed: 2.37 seconds of correct frames, then `ENOMEM`
+   forever. A leak that looks like a working compositor for two seconds.
+
+Both are fixed and the gate now fails on any dropped frame. The second was the
+**second** dropped smithay notifier in this compositor — the session notifier
+was the first — and both were written `let (x, _notifier) = …` and compiled
+without a warning. A smithay `*Notifier` is not a handle you may discard; it is
+the half of the device that does the work.
+
 ## What this ledger says plainly
 
 **Six C libraries are gone from the shipped compositor, measured on the
