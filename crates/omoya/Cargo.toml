@@ -83,5 +83,15 @@ features = [
   # their doctest builds with the feature on.
   "backend_udev",
   "backend_session_libseat",
-  "renderer_pixman",
+  # ★ `renderer_pixman` REMOVED. `nuri` is the renderer now: it implements
+  # Renderer, Frame, ImportMem/ImportMemWl, ImportDma/ImportDmaWl, Bind<Dmabuf>
+  # and ExportMem, and nothing in this crate names PixmanRenderer any more.
+  #
+  # The feature is what LINKED libpixman-1.so.0. Flipping the default made nuri
+  # RUN; removing the feature is what removes the library — `ldd` is the only
+  # thing that settles which of those happened.
+  #
+  # `--renderer pixman` is therefore gone too, and that is the honest
+  # consequence rather than an oversight: a flag that selects a renderer the
+  # build no longer contains would be a lie in the help text.
 ]

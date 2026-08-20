@@ -123,10 +123,8 @@ enum InputBackendKind {
 /// cheap rather than a rebuild.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RendererKind {
-    /// nuri — pleme-io's own. The default.
+    /// nuri — pleme-io's own, and now the only one.
     Nuri,
-    /// pixman — the C library, kept for comparison.
-    Pixman,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -189,11 +187,21 @@ fn parse_args() -> Result<Args, String> {
                 let v = it.next().ok_or("--renderer needs a value (nuri | pixman)")?;
                 renderer = match v.as_str() {
                     "nuri" => RendererKind::Nuri,
-                    "pixman" => RendererKind::Pixman,
+                    // ★ `pixman` is not merely unsupported, it is NOT IN THE
+                    // BUILD: the `renderer_pixman` feature is off, so the
+                    // library is not linked. Naming that is better than a
+                    // generic "unknown value", because someone reaching for it
+                    // is asking for a fallback that no longer exists.
+                    "pixman" => {
+                        return Err(
+                            "renderer `pixman` is not in this build — the \
+                             renderer_pixman feature is off and libpixman is not \
+                             linked. `nuri` is the only renderer."
+                                .to_string(),
+                        );
+                    }
                     other => {
-                        return Err(format!(
-                            "unknown renderer `{other}` — expected `nuri` or `pixman`"
-                        ));
+                        return Err(format!("unknown renderer `{other}` — expected `nuri`"));
                     }
                 };
             }
@@ -221,8 +229,8 @@ fn parse_args() -> Result<Args, String> {
                     "                  acceleration, tap-to-click or gestures — that is\n",
                     "                  libinput policy nobody has reimplemented.\n",
                     "--input libinput  the C library, and it carries that policy.\n",
-                    "--renderer nuri   DEFAULT. pleme-io's rasterizer, zero dependencies.\n",
-                    "--renderer pixman the C library.\n\n",
+                    "--renderer nuri   The renderer. pleme-io's own, zero dependencies.\n",
+                    "                  libpixman is NOT LINKED — the feature is off.\n\n",
                     "`lock` is not a launchable mode: it is in-process session\n",
                     "state (theory/OMOYA.md §4.2)."
                 )
@@ -307,15 +315,6 @@ where
             &target,
             introspect.clone(),
             crate::nuri_renderer::NuriRenderer::new(),
-        )?,
-        RendererKind::Pixman => crate::drm::run(
-            event_loop,
-            data,
-            &mut device,
-            &drm_fd,
-            &target,
-            introspect.clone(),
-            smithay::backend::renderer::pixman::PixmanRenderer::new()?,
         )?,
     }
 
