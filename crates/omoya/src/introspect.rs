@@ -204,7 +204,7 @@ mod tests {
     #[test]
     fn an_unknown_leaf_is_refused_by_name() {
         let s = OmoyaIntrospect::default();
-        match s.query(&Query::field(vec!["nonesuch".into()])) {
+        match s.query(&Query::field(vec!["nonesuch"])) {
             Err(QueryError::UnknownField { field }) => assert_eq!(field, "nonesuch"),
             other => panic!("expected UnknownField, got {other:?}"),
         }
@@ -219,7 +219,7 @@ mod tests {
         s.output_h.store(768, Ordering::Relaxed);
         s.tick(3);
 
-        let v = s.query(&Query::field(vec!["seat".into()])).unwrap();
+        let v = s.query(&Query::field(vec!["seat"])).unwrap();
         assert_eq!(v["backend"], "drm");
         assert_eq!(v["input_attached"], true);
         assert_eq!(v["output"]["width"], 1024);
