@@ -477,12 +477,16 @@ where
 /// # Errors
 /// Returns an error if the framebuffer cannot be read back or the file cannot
 /// be written.
-pub fn capture(
-    renderer: &mut PixmanRenderer,
-    framebuffer: &<PixmanRenderer as smithay::backend::renderer::RendererSuper>::Framebuffer<'_>,
+pub fn capture<R>(
+    renderer: &mut R,
+    framebuffer: &<R as smithay::backend::renderer::RendererSuper>::Framebuffer<'_>,
     size: (i32, i32),
     path: &Path,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    R: smithay::backend::renderer::ExportMem,
+    R::Error: Send + Sync + 'static,
+{
     use smithay::backend::renderer::ExportMem;
     use std::io::Write;
 

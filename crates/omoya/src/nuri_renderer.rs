@@ -592,3 +592,139 @@ mod tests {
         );
     }
 }
+
+// ── EXPORT ────────────────────────────────────────────────────────────────
+
+/// Pixels copied out of a framebuffer or texture.
+///
+/// ★ This is what makes SCREENSHOTS work, which is not a side quest: the
+/// operator asked for pixel-level troubleshooting over MCP precisely because a
+/// seat that can only be inspected by walking to the machine is a seat that
+/// gets debugged by someone's eyes. omoya's `capture()` needs `ExportMem`, and
+/// implementing it here is what lets `capture` stop naming `PixmanRenderer` —
+/// which is in turn what lets the pixman feature be dropped at all.
+#[derive(Debug)]
+pub struct NuriMapping {
+    data: Vec<u8>,
+    width: u32,
+    height: u32,
+    format: Fourcc,
+}
+
+impl Texture for NuriMapping {
+    fn width(&self) -> u32 {
+        self.width
+    }
+    fn height(&self) -> u32 {
+        self.height
+    }
+    fn format(&self) -> Option<Fourcc> {
+        Some(self.format)
+    }
+}
+
+impl smithay::backend::renderer::TextureMapping for NuriMapping {
+    fn flipped(&self) -> bool {
+        // ★ Not flipped. A GPU renderer reads back bottom-up because its
+        // origin is bottom-left; nuri writes top-down into a linear buffer
+        // whose origin is top-left, so there is nothing to invert. Returning
+        // `true` here would present every screenshot upside down.
+        false
+    }
+
+    fn format(&self) -> Fourcc {
+        self.format
+    }
+}
+
+/// Copy a rectangle out of a 32-bpp buffer, row by row.
+///
+/// Shared by `copy_framebuffer` and `copy_texture` because they differ only in
+/// where the source bytes live — writing it twice is how the two drift.
+fn copy_region(
+    src: &[u8],
+    src_stride: usize,
+    src_w: i32,
+    src_h: i32,
+    region: Rectangle<i32, BufferCoord>,
+    format: Fourcc,
+) -> Result<NuriMapping, Error> {
+    let Some(r) = nuri::Rect::new(region.loc.x, region.loc.y, region.size.w, region.size.h)
+        .intersect(nuri::Rect::new(0, 0, src_w, src_h))
+    else {
+        return Err(Error::Unsupported("copy region lies outside the source"));
+    };
+
+    let mut out = Vec::with_capacity((r.w as usize) * (r.h as usize) * 4);
+    for y in r.y..r.y + r.h {
+        let row = (y as usize) * src_stride + (r.x as usize) * 4;
+        let end = row + (r.w as usize) * 4;
+        // Bounds-checked per row rather than once up front: a stride from a
+        // DRM ioctl and a region from a caller are independent, and only the
+        // combination can overrun.
+        let slice = src
+            .get(row..end)
+            .ok_or(Error::Unsupported("copy region overruns the source"))?;
+        out.extend_from_slice(slice);
+    }
+
+    #[allow(clippy::cast_sign_loss)]
+    Ok(NuriMapping {
+        data: out,
+        width: r.w as u32,
+        height: r.h as u32,
+        format,
+    })
+}
+
+impl smithay::backend::renderer::ExportMem for NuriRenderer {
+    type TextureMapping = NuriMapping;
+
+    fn copy_framebuffer(
+        &mut self,
+        target: &Self::Framebuffer<'_>,
+        region: Rectangle<i32, BufferCoord>,
+        format: Fourcc,
+    ) -> Result<Self::TextureMapping, Self::Error> {
+        // ★ Nearly a memcpy, and that is the point: nuri's framebuffer IS
+        // memory. A GPU renderer has to schedule a readback and wait on a
+        // fence; the software path already has the pixels.
+        copy_region(
+            target.data,
+            target.stride,
+            target.width,
+            target.height,
+            region,
+            format,
+        )
+    }
+
+    fn copy_texture(
+        &mut self,
+        texture: &Self::TextureId,
+        region: Rectangle<i32, BufferCoord>,
+        format: Fourcc,
+    ) -> Result<Self::TextureMapping, Self::Error> {
+        copy_region(
+            &texture.data,
+            texture.stride,
+            i32::try_from(texture.width).unwrap_or(i32::MAX),
+            i32::try_from(texture.height).unwrap_or(i32::MAX),
+            region,
+            format,
+        )
+    }
+
+    fn can_read_texture(&mut self, _texture: &Self::TextureId) -> Result<bool, Self::Error> {
+        // Always. Every nuri texture is a plain byte vector — there is no
+        // opaque GPU-side handle that could refuse to be read.
+        Ok(true)
+    }
+
+    fn map_texture<'a>(
+        &mut self,
+        texture_mapping: &'a Self::TextureMapping,
+    ) -> Result<&'a [u8], Self::Error> {
+        Ok(&texture_mapping.data)
+    }
+}
