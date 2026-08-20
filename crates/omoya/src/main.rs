@@ -51,6 +51,8 @@ struct Args {
     backend: Backend,
     /// Which `Session` implementation arbitrates devices. See [`SessionBackend`].
     session: SessionBackend,
+    /// Which implementation supplies input. See [`InputBackendKind`].
+    input: InputBackendKind,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -82,11 +84,34 @@ enum SessionBackend {
     Logind,
 }
 
+/// Which implementation supplies input events.
+///
+/// ── ★ WHY BOTH, AND WHY libinput IS STILL THE DEFAULT ─────────────────────
+/// `Evdev` reads `/dev/input/event*` directly and retires TWO C libraries —
+/// `libinput.so.10` and `libudev.so.1`. It is the destination.
+///
+/// It is not the default yet because libinput's real value is POLICY —
+/// pointer acceleration, tap-to-click, gesture recognition, per-device
+/// calibration — and the evdev backend implements none of it. A seat that
+/// swapped silently would feel wrong in ways nobody could name: the pointer
+/// too fast, a touchpad tap doing nothing. That is a worse failure than a
+/// missing feature, because it presents as "the compositor is bad".
+///
+/// `pending-omoya-input-policy: acceleration, tap-to-click, gestures`
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InputBackendKind {
+    /// libinput — the C library, and what runs today. Carries the policy.
+    Libinput,
+    /// evdev straight from the kernel, pure Rust. Transport only.
+    Evdev,
+}
+
 fn parse_args() -> Result<Args, String> {
     let mut mode = SeatMode::Session;
     let mut spawn = None;
     let mut backend = Backend::Nested;
     let mut session = SessionBackend::LibSeat;
+    let mut input = InputBackendKind::Libinput;
     let mut it = std::env::args().skip(1);
 
     while let Some(arg) = it.next() {
@@ -119,6 +144,18 @@ fn parse_args() -> Result<Args, String> {
                     }
                 };
             }
+            "--input" => {
+                let v = it.next().ok_or("--input needs a value (libinput | evdev)")?;
+                input = match v.as_str() {
+                    "libinput" => InputBackendKind::Libinput,
+                    "evdev" => InputBackendKind::Evdev,
+                    other => {
+                        return Err(format!(
+                            "unknown input backend `{other}` — expected `libinput` or `evdev`"
+                        ));
+                    }
+                };
+            }
             "--" => {
                 let rest: Vec<String> = it.by_ref().collect();
                 if !rest.is_empty() {
@@ -130,12 +167,17 @@ fn parse_args() -> Result<Args, String> {
                 return Err(concat!(
                     "omoya — the pleme-io Wayland compositor\n\n",
                     "  omoya [--mode entrance|session] [--backend nested|drm]\n",
-                    "        [--session libseat|logind] [-- CMD ARGS...]\n\n",
+                    "        [--session libseat|logind] [--input libinput|evdev]\n",
+                    "        [-- CMD ARGS...]\n\n",
                     "--backend nested  composite into an existing session's window\n",
                     "--backend drm     take a display (M4a: scanout only, no input)\n",
                     "--session libseat the C library (default — what has been running)\n",
                     "--session logind  logind over D-Bus, pure Rust. Retires libseat.so.1;\n",
-                    "                  not yet the default, see SessionBackend.\n\n",
+                    "                  not yet the default, see SessionBackend.\n",
+                    "--input libinput  the C library (default — carries the input POLICY)\n",
+                    "--input evdev     kernel evdev, pure Rust. Retires libinput.so.10 and\n",
+                    "                  libudev.so.1, but implements no acceleration or\n",
+                    "                  gestures — see InputBackendKind.\n\n",
                     "`lock` is not a launchable mode: it is in-process session\n",
                     "state (theory/OMOYA.md §4.2)."
                 )
@@ -147,6 +189,7 @@ fn parse_args() -> Result<Args, String> {
     Ok(Args {
         mode,
         session,
+        input,
         spawn,
         backend,
     })
@@ -166,6 +209,7 @@ fn run_drm_seat<S, N>(
     introspect: &std::sync::Arc<crate::introspect::OmoyaIntrospect>,
     mut session: S,
     notifier: N,
+    kind: InputBackendKind,
 ) -> Result<(), Box<dyn std::error::Error>>
 where
     S: smithay::backend::session::Session + Clone + 'static,
@@ -204,7 +248,7 @@ where
     let mut device = device;
     crate::drm::run(event_loop, data, &mut device, &drm_fd, &target, introspect.clone())?;
 
-    attach_session(event_loop, session, notifier, introspect);
+    attach_session(event_loop, session, notifier, introspect, kind);
     Ok(())
 }
 
@@ -221,6 +265,7 @@ fn attach_session<S, N>(
     session: S,
     notifier: N,
     introspect: &std::sync::Arc<crate::introspect::OmoyaIntrospect>,
+    kind: InputBackendKind,
 ) where
     S: smithay::backend::session::Session + Clone + 'static,
     N: smithay::reexports::calloop::EventSource<
@@ -232,10 +277,31 @@ fn attach_session<S, N>(
 {
     use std::sync::atomic::Ordering;
 
-    if let Err(e) = crate::drm::attach_input(event_loop, session) {
-        tracing::error!(error = %e, "input attach failed — seat is look-only");
-    } else {
-        introspect.input_attached.store(1, Ordering::Relaxed);
+    // ── ★ TWO INPUT TRANSPORTS, ONE SEAM ─────────────────────────────────
+    // `process_input_event<I: InputBackend>` (input.rs:36) is already generic,
+    // so neither transport required a change to the handling code — the seam
+    // existed before either backend did.
+    let attached = match kind {
+        InputBackendKind::Libinput => crate::drm::attach_input(event_loop, session.clone())
+            .map_err(|e| format!("{e}")),
+        InputBackendKind::Evdev => crate::evdev_backend::EvdevBackend::new(&mut session.clone())
+            .map_err(|e| format!("{e}"))
+            .and_then(|backend| {
+                event_loop
+                    .handle()
+                    .insert_source(backend, move |event, (), data| {
+                        data.state.process_input_event(event);
+                    })
+                    .map(|_| ())
+                    .map_err(|e| format!("{e}"))
+            }),
+    };
+    match attached {
+        Ok(()) => {
+            introspect.input_attached.store(1, Ordering::Relaxed);
+            tracing::info!(backend = ?kind, "input attached — the seat is now typeable");
+        }
+        Err(e) => tracing::error!(error = %e, backend = ?kind, "input attach failed — seat is look-only"),
     }
 
     let intro = introspect.clone();
@@ -332,7 +398,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 SessionBackend::LibSeat => {
                     match smithay::backend::session::libseat::LibSeatSession::new() {
                         Ok((session, notifier)) => run_drm_seat(
-                            &mut event_loop, &mut data, &introspect, session, notifier,
+                            &mut event_loop, &mut data, &introspect, session, notifier, args.input,
                         )?,
                         Err(e) => {
                             tracing::error!(error = %e, "no libseat session — cannot take a seat");
@@ -342,7 +408,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 SessionBackend::Logind => match crate::logind::LogindSession::new() {
                     Ok((session, notifier)) => run_drm_seat(
-                        &mut event_loop, &mut data, &introspect, session, notifier,
+                        &mut event_loop, &mut data, &introspect, session, notifier, args.input,
                     )?,
                     Err(e) => {
                         tracing::error!(
