@@ -372,6 +372,25 @@
                 users.users.seat = {
                   isNormalUser = true;
                   password = "seat";
+                  # ★ THESE GROUPS ARE A SYMPTOM, NOT A FIX, and the test is
+                  # what exposed it. `drm::open_device` opens /dev/dri/card0
+                  # with a DIRECT `OpenOptions::open`, bypassing
+                  # `Session::open` entirely — so the compositor needs
+                  # filesystem permission instead of session-granted access.
+                  #
+                  # Two things follow, and the second is the real defect:
+                  #   * an unprivileged compositor cannot start without them
+                  #   * logind cannot PAUSE OR RESUME that fd on a VT switch,
+                  #     because it only manages devices taken via TakeDevice —
+                  #     so the DRM master is never released on switch-away.
+                  #
+                  # Routing the open through the session removes the need for
+                  # these. Until then they are here so the rest of the path can
+                  # be tested, and named so nobody reads them as correct.
+                  extraGroups = [
+                    "video"
+                    "input"
+                  ];
                 };
                 environment.systemPackages = [
                   wrapped
