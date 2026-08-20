@@ -388,8 +388,23 @@
                   wrapped
                   pkgs.libinput
                 ];
-                # A tmpfs /tmp would fight the VM's small RAM; the store is
-                # read-only and the test writes nothing large.
+                # ★ A REAL LOGIN, NOT A SIMULATED ONE. Three attempts with
+                # `systemd-run --property=PAMName=login` produced a session
+                # that logind classed `manager` with `Seat=` empty and
+                # `VTNr=0` — so `TakeDevice` was refused, and once it was not,
+                # DRM master still was.
+                #
+                # The reason is ordering: pam_systemd reads XDG_SEAT and
+                # XDG_VTNR from the PAM environment, and
+                # `--property=Environment=` sets the SERVICE environment, which
+                # is applied after PAM has already run. The variables were
+                # therefore invisible to the code that needed them.
+                #
+                # getty autologin is the real thing: it establishes the session
+                # through PAM on a VT, so logind assigns seat0 and a VTNr the
+                # ordinary way. It also mirrors how the seat actually starts on
+                # plo — greetd logs a user in, then execs the compositor.
+                services.getty.autologinUser = "seat";
                 virtualisation.memorySize = 2048;
               };
             testScript = ''
@@ -411,37 +426,26 @@
               # ── the compositor, in a REAL logind session ──
               # PAMName=login is what makes GetSessionByPID succeed; see the
               # comment above the check.
-              # ★ A SESSION IS NOT ENOUGH — IT MUST BE A *SEAT* SESSION.
-              # PAMName=login alone yields a session logind refuses to hand
-              # devices to:
-              #
-              #   TakeDevice: org.freedesktop.DBus.Error.NotSupported:
-              #     Session class doesn't support taking device control.
-              #
-              # Device control is granted only to a session attached to a seat
-              # with a VT. pam_systemd derives both from XDG_SEAT and XDG_VTNR,
-              # which a getty normally supplies and systemd-run does not — so
-              # they are passed explicitly, along with a TTY for the unit to
-              # own. Measured, not guessed: the error above is what a session
-              # without them gets.
-              machine.succeed(
-                  "systemd-run --unit=omoya --collect "
-                  "--property=PAMName=login "
-                  "--property=User=seat "
-                  "--property=TTYPath=/dev/tty2 "
-                  "--property=StandardInput=tty "
-                  # ★ TO A FILE, NOT THE JOURNAL. TTYPath sends the unit's
-                  # output to tty2, which swallowed the error message the
-                  # moment the TTY was added — the run failed with status=1 and
-                  # printed nothing anywhere readable. An explicit append:
-                  # target beats both.
-                  "--property=StandardOutput=append:/tmp/omoya.log "
-                  "--property=StandardError=append:/tmp/omoya.log "
-                  "--property=Environment=XDG_SEAT=seat0 "
-                  "--property=Environment=XDG_VTNR=2 "
-                  "--property=Environment=XDG_RUNTIME_DIR=/run/user/1000 "
-                  "--property=Environment=RUST_LOG=info "
-                  "${wrapped}/bin/omoya --backend drm --session logind"
+              # ── the compositor, in a REAL seat session ──
+              # getty has autologged `seat` in on tty1, which is a genuine PAM
+              # session on seat0 with a VT. Launch omoya from inside it by
+              # typing into the console — the only way to inherit the session
+              # rather than construct one beside it.
+              machine.wait_until_succeeds(
+                  "loginctl list-sessions --no-legend | grep -q seat0"
+              )
+              print(machine.succeed("loginctl list-sessions --no-legend"))
+
+              sid = machine.succeed(
+                  "loginctl list-sessions --no-legend | awk '$4 == \"seat0\" {print $1; exit}'"
+              ).strip()
+              print(machine.succeed(
+                  f"loginctl show-session {sid} -p Class -p Seat -p VTNr -p Active"
+              ))
+
+              machine.send_chars(
+                  "exec ${wrapped}/bin/omoya --backend drm --session logind "
+                  "> /tmp/omoya.log 2>&1\n"
               )
 
               machine.sleep(8)
@@ -449,20 +453,16 @@
               # AbstractLogger, and the type checker rejects the shadow. A
               # useful refusal: shadowing it would have silently broken the
               # driver's own logging for the rest of the script.
-              journal = machine.succeed(
-                  "cat /tmp/omoya.log 2>/dev/null || journalctl -u omoya --no-pager | tail -60"
-              )
+              journal = machine.succeed("cat /tmp/omoya.log 2>/dev/null || true")
               print(journal)
-              print(machine.succeed("loginctl list-sessions --no-legend || true"))
-              print(machine.succeed(
-                  "loginctl show-session $(loginctl list-sessions --no-legend "
-                  "| awk '{print $1}' | head -1) -p Class -p Seat -p VTNr -p Active || true"
-              ))
 
-              # ★ THE ASSERTION. Not "it exited 0" — a compositor that dies
-              # instantly also exits 0 from systemd-run's point of view, since
-              # the failure is in the unit, not the spawn.
-              machine.succeed("systemctl is-active omoya")
+              # ★ THE ASSERTION: the process is alive AND holding the display.
+              # Not an exit code — a compositor launched from a console leaves
+              # no unit to interrogate, and "the shell returned" says nothing.
+              machine.succeed("pgrep -f 'omoya --backend drm'")
+              assert "holding the display" in journal, (
+                  "omoya did not take the display: see the log above"
+              )
 
               # And it must have taken the session through OUR code, not
               # libseat: the logind arm logs nothing on success, so the
