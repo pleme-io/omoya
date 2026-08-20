@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
-members = ["crates/omoya-spec", "crates/omoya"]
+members = ["crates/omoya-spec", "crates/nuri",
+    "crates/omoya"]
 
 [workspace.package]
 version = "0.1.9"

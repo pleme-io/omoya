@@ -1,0 +1,17 @@
+[package]
+name = "nuri"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "nuri (塗り) — the pleme-io software rasterizer. Blit, fill and composite into a mapped buffer, in pure Rust."
+
+[dependencies]
+thiserror.workspace = true
+# ★ NOTHING. nuri computes; it does not talk to anything. The one true
+# naturalize of the six C libraries in the seat is also the one with no wire
+# underneath it, which is exactly why it is a rebuild rather than a protocol.
+
+[lints.clippy]
+pedantic = "warn"

@@ -306,12 +306,14 @@ impl EvdevBackend {
             .map_err(|e| format!("{e:?}"))?;
         let dev = evdev::Device::from_fd(fd)?;
 
+        // evdev 0.13 names these `KeyCode` and `RelativeAxisCode` — the 0.12
+        // spellings (`Key`, `RelativeAxisType`) are gone.
         let keys = dev.supported_keys();
-        let has_keyboard = keys.is_some_and(|k| k.contains(evdev::Key::KEY_A));
-        let has_pointer = keys.is_some_and(|k| k.contains(evdev::Key::BTN_LEFT))
-            || dev.supported_relative_axes().is_some_and(|a| {
-                a.contains(evdev::RelativeAxisType::REL_X)
-            });
+        let has_keyboard = keys.is_some_and(|k| k.contains(evdev::KeyCode::KEY_A));
+        let has_pointer = keys.is_some_and(|k| k.contains(evdev::KeyCode::BTN_LEFT))
+            || dev
+                .supported_relative_axes()
+                .is_some_and(|a| a.contains(evdev::RelativeAxisCode::REL_X));
 
         if !has_keyboard && !has_pointer {
             return Ok(None);
@@ -410,10 +412,15 @@ impl EvdevBackend {
                     time,
                 };
 
-                match ev.kind() {
-                    evdev::InputEventKind::Key(key) => {
-                        let code = u32::from(key.code());
-                        let state = match ev.value() {
+                // ★ `destructure()` — evdev 0.13's typed view of an event.
+                // `InputEventKind` no longer exists; `EventSummary` carries the
+                // code and value together, which removes the 0.12 shape where
+                // you matched a kind and then read `.value()` separately and
+                // could read the wrong one.
+                match ev.destructure() {
+                    evdev::EventSummary::Key(_, key, value) => {
+                        let code = u32::from(key.0);
+                        let state = match value {
                             0 => KeyState::Released,
                             // ★ value 2 is AUTOREPEAT. Treated as a press,
                             // because that is what it is — and `count` carries
@@ -422,6 +429,7 @@ impl EvdevBackend {
                         };
                         // BTN_MISC (0x100) is where buttons begin; below it is
                         // the keyboard. The split is the kernel's, not ours.
+                        #[allow(clippy::items_after_statements)]
                         if code >= 0x100 {
                             callback(InputEvent::PointerButton {
                                 event: ButtonEvent {
@@ -440,23 +448,22 @@ impl EvdevBackend {
                                     base,
                                     code,
                                     state,
-                                    #[allow(clippy::cast_sign_loss)]
-                                    count: if ev.value() == 2 { 2 } else { 1 },
+                                    count: if value == 2 { 2 } else { 1 },
                                 },
                             });
                         }
                     }
-                    evdev::InputEventKind::RelAxis(axis) => {
-                        let v = f64::from(ev.value());
+                    evdev::EventSummary::RelativeAxis(_, axis, value) => {
+                        let v = f64::from(value);
                         match axis {
-                            evdev::RelativeAxisType::REL_X => acc.dx += v,
-                            evdev::RelativeAxisType::REL_Y => acc.dy += v,
-                            evdev::RelativeAxisType::REL_WHEEL => acc.wheel += v,
-                            evdev::RelativeAxisType::REL_HWHEEL => acc.hwheel += v,
+                            evdev::RelativeAxisCode::REL_X => acc.dx += v,
+                            evdev::RelativeAxisCode::REL_Y => acc.dy += v,
+                            evdev::RelativeAxisCode::REL_WHEEL => acc.wheel += v,
+                            evdev::RelativeAxisCode::REL_HWHEEL => acc.hwheel += v,
                             _ => {}
                         }
                     }
-                    evdev::InputEventKind::Synchronization(_) => {
+                    evdev::EventSummary::Synchronization(..) => {
                         // ★ THE FLUSH. One event per frame, carrying the whole
                         // accumulated delta.
                         let a = *acc;
@@ -616,7 +623,7 @@ mod tests {
     fn buttons_and_keys_split_at_btn_misc() {
         // 0x100 is the kernel's boundary, not a number this file chose. Below
         // it is the keyboard; at or above, a pointer button.
-        assert!(u32::from(evdev::Key::KEY_A.code()) < 0x100);
-        assert!(u32::from(evdev::Key::BTN_LEFT.code()) >= 0x100);
+        assert!(u32::from(evdev::KeyCode::KEY_A.0) < 0x100);
+        assert!(u32::from(evdev::KeyCode::BTN_LEFT.0) >= 0x100);
     }
 }
