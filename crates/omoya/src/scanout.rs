@@ -22,13 +22,23 @@
 //! needed is: two buffers, render into the back one, export it as a framebuffer,
 //! flip, wait for vblank, swap. That is this file.
 //!
-//! **The cost is real and named:** no overlay planes (so no hardware cursor and
-//! no zero-copy video), and **full repaint every frame** — the damage rectangles
-//! are computed and then ignored, because a partial repaint into an alternating
-//! back buffer needs the previous frame's damage too, which is the buffer-age
-//! bookkeeping deliberately not re-derived here.
+//! **The cost is real and named:** no overlay planes, so no hardware cursor and
+//! no zero-copy video.
 //!
-//! `pending-omoya-damage: partial repaint with buffer age`
+//! **Partial repaint is NO LONGER among the costs** — this header said "full
+//! repaint every frame — the damage rectangles are computed and then ignored"
+//! and that is now false. The buffer-age bookkeeping it called deliberately
+//! not-re-derived IS re-derived: `back_buffer_age` below, feeding smithay's
+//! `OutputDamageTracker` from `drm.rs`. Measured on vkms: **184 idle render
+//! ticks produced 0 presentations.**
+//!
+//! ★ The re-derivation carried one defect worth remembering, because a
+//! single-window seat could not expose it: smithay hands a renderer each
+//! element's damage **relative to that element**, and nuri clipped it against
+//! the absolute destination. Every window away from the origin drew nothing,
+//! silently and indistinguishably from correct occlusion. See the note in
+//! `nuri_renderer::draw_solid`.
+//!
 //! `pending-omoya-planes: overlay planes and a hardware cursor`
 
 use smithay::backend::allocator::{

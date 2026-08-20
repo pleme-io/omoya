@@ -838,14 +838,24 @@
               assert m, "omoya never logged a spawned pid — no client to pause"
               spawned = int(m.group(1))
               machine.succeed(f"kill -STOP {spawned}")
-              # ★ BOTH clients, or the seat is not idle. The tiling check
-              # above started a second weston, and one live animating client
-              # is enough to make every frame legitimately damaged — the
-              # measurement would then read as "damage tracking does nothing"
-              # when in fact it is doing exactly the right thing.
-              machine.succeed(
-                  "kill -STOP $(pgrep -f 'weston-presentation-sh[m]') || true"
-              )
+              # ★ BOTH clients, or the seat is not idle — but match on the
+              # process NAME, never on the full command line.
+              #
+              # `pkill -f weston-presentation-shm` stops THE COMPOSITOR. omoya
+              # is launched as `omoya --backend drm --session logind --
+              # .../weston-presentation-shm`, so the client's path is part of
+              # omoya's own argv and `-f` matches it. The symptom is not a
+              # dead compositor either: the kernel still accepts connections
+              # on the kanshou socket while the process is stopped, so the
+              # next query hangs and times out — reading as "introspection is
+              # broken" rather than "you froze the thing you were asking".
+              # The bracket trick guards against a shell matching ITSELF and
+              # does nothing about this.
+              #
+              # `-x` against `comm` is the fix, and `comm` is TRUNCATED TO 15
+              # CHARACTERS by the kernel — hence `weston-presenta`, not the
+              # full name, which matches nothing at all (silently, exit 1).
+              machine.succeed("pkill -STOP -x weston-presenta || true")
               machine.sleep(2)
               f0, p0 = [
                   int(x) for x in
