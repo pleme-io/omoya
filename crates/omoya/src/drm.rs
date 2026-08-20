@@ -407,6 +407,39 @@ where
     // a client cannot place a surface on an output it was never told about, and
     // M4a never needed this because it composited nothing.
     let _global = output.create_global::<crate::state::Omoya>(&data.display_handle);
+
+    // ── ★ ADVERTISE DMABUF, FROM THE RENDERER'S OWN FORMAT LIST ───────────
+    //
+    // Created HERE and not in `Omoya::new` because the global is a promise
+    // about what THIS renderer can texture, and only this scope knows which
+    // renderer is running. Passing `renderer.dmabuf_formats()` straight
+    // through — never a hand-written list — is what keeps the promise and the
+    // capability from drifting into two lists.
+    //
+    // nuri advertises LINEAR only, because it MAPS the buffer: a tiled or
+    // compressed modifier describes a layout only a GPU can decode, and a CPU
+    // blitter reading it paints structured noise rather than failing. That is
+    // not a compromise on this hardware — measured on plo, the RTX 3070 exposes
+    // DRM_FORMAT_MOD_LINEAR for B8G8R8A8 as a single-plane, exportable,
+    // importable COLOR_ATTACHMENT image, and the exported fd mmaps read/write.
+    //
+    // Version 3, not feedback: feedback's `main_device` means "the device the
+    // compositor renders on", and omoya renders on the CPU into dumb buffers.
+    // Naming a render node would be a claim it cannot back.
+    {
+        use smithay::backend::renderer::ImportDma as _;
+        let formats = renderer.dmabuf_formats();
+        let count = formats.iter().count();
+        let global = data
+            .state
+            .dmabuf_state
+            .create_global::<crate::state::Omoya>(&data.display_handle, formats);
+        data.state.dmabuf_global = Some(global);
+        tracing::info!(
+            formats = count,
+            "zwp_linux_dmabuf_v1 advertised — clients may deliver GPU buffers"
+        );
+    }
     data.state.space.map_output(&output, (0, 0));
     output.set_preferred(mode);
 

@@ -287,3 +287,43 @@ delegate_data_device!(Omoya);
 
 impl OutputHandler for Omoya {}
 delegate_output!(Omoya);
+
+// ── zwp_linux_dmabuf_v1 ─────────────────────────────────────────────────────
+
+impl smithay::wayland::dmabuf::DmabufHandler for Omoya {
+    fn dmabuf_state(&mut self) -> &mut smithay::wayland::dmabuf::DmabufState {
+        &mut self.dmabuf_state
+    }
+
+    /// Accept or refuse a client's buffer.
+    ///
+    /// ★ THE ANSWER COMES FROM THE RENDERER, NOT FROM A LIST HERE.
+    /// `NuriRenderer::accepts` is the single predicate; asking it means the
+    /// protocol layer cannot say yes to something the raster layer will later
+    /// refuse. That divergence does not error — it produces an accepted buffer
+    /// that textures to nothing, i.e. an invisible window with a clean
+    /// protocol log.
+    ///
+    /// smithay validates the FOURCC against the advertised set but passes the
+    /// client's MODIFIER through untouched, so refusing a non-linear modifier
+    /// is ours to do and not optional.
+    ///
+    /// `notifier.successful()` can fail if the client died between sending the
+    /// buffer and this call; that is a race, not an error, and is ignored
+    /// deliberately.
+    fn dmabuf_imported(
+        &mut self,
+        _global: &smithay::wayland::dmabuf::DmabufGlobal,
+        dmabuf: smithay::backend::allocator::dmabuf::Dmabuf,
+        notifier: smithay::wayland::dmabuf::ImportNotifier,
+    ) {
+        if let Err(e) = crate::nuri_renderer::NuriRenderer::accepts(&dmabuf) {
+            tracing::debug!(error = %e, "refused a client dmabuf");
+            notifier.failed();
+            return;
+        }
+        let _ = notifier.successful::<Omoya>();
+    }
+}
+
+smithay::delegate_dmabuf!(Omoya);

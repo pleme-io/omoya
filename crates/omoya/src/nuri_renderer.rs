@@ -502,6 +502,43 @@ impl ImportMemWl for NuriRenderer {
     }
 }
 
+impl NuriRenderer {
+    /// The predicate BOTH the protocol handler and the renderer obey.
+    ///
+    /// ★ ONE PREDICATE, TWO CALLERS. `DmabufHandler::dmabuf_imported` decides
+    /// whether to accept a client's buffer over the wire; `import_dmabuf`
+    /// decides whether it can be textured. If those answers can differ, the
+    /// compositor accepts a buffer and then renders nothing — an invisible
+    /// window with a clean protocol log, which is the worst failure shape
+    /// available and precisely the one this seat has already produced twice.
+    ///
+    /// It cannot be derived from `dmabuf_formats()` alone: smithay validates
+    /// the FOURCC against the advertised set but takes the MODIFIER from
+    /// whatever the client sent. The modifier check is ours to make.
+    ///
+    /// # Errors
+    /// If the buffer is multi-plane, non-linear, or in a format nuri cannot
+    /// address.
+    pub fn accepts(dmabuf: &Dmabuf) -> Result<(), Error> {
+        use smithay::backend::allocator::Modifier;
+
+        if dmabuf.num_planes() != 1 {
+            return Err(Error::Unsupported("multi-plane dmabuf"));
+        }
+        let format = dmabuf.format();
+        // ★ `Invalid` is REFUSED, never treated as "probably linear".
+        // MOD_INVALID means the layout is implicit and unknown, and a CPU
+        // blitter guessing wrong paints structured noise instead of failing.
+        if format.modifier != Modifier::Linear {
+            return Err(Error::Unsupported("non-linear modifier"));
+        }
+        if !matches!(format.code, Fourcc::Argb8888 | Fourcc::Xrgb8888) {
+            return Err(Error::Unsupported("pixel format nuri cannot address"));
+        }
+        Ok(())
+    }
+}
+
 impl ImportDma for NuriRenderer {
     fn dmabuf_formats(&self) -> smithay::backend::allocator::format::FormatSet {
         // ★ LINEAR ONLY. A tiled or compressed modifier describes a memory
@@ -516,25 +553,77 @@ impl ImportDma for NuriRenderer {
             .collect()
     }
 
+    /// Import a client's dmabuf by mapping plane 0 and copying it.
+    ///
+    /// ── ★ WHY A COPY AND NOT A BORROW ────────────────────────────────────
+    /// `NuriTexture` outlives the frame that created it and smithay clones it
+    /// per element per frame, while the client may release its buffer at any
+    /// commit. Holding the mapping instead would be correct and faster — it is
+    /// what `PixmanRenderer` does, with a weak cache so the map happens once
+    /// per buffer rather than once per import. That needs `NuriTexture` to
+    /// carry a `DmabufMapping`, which is a lifetime change rather than a line
+    /// change. `pending-nuri-dmabuf-zerocopy`.
     fn import_dmabuf(
         &mut self,
-        _dmabuf: &Dmabuf,
+        dmabuf: &Dmabuf,
         _damage: Option<&[Rectangle<i32, BufferCoord>]>,
     ) -> Result<Self::TextureId, Self::Error> {
-        // ★ NOT IMPLEMENTED, AND SAYING SO. Importing a client's dmabuf as a
-        // TEXTURE means mapping their buffer for reading every frame — real
-        // work with real lifetime questions. The scanout path does not need
-        // it: `Bind<Dmabuf>` below maps the OUTPUT, and clients on this path
-        // deliver SHM, which `import_memory` handles.
-        //
-        // A stub returning an empty texture would show clients as invisible
-        // black rectangles, which reads as a compositing bug rather than an
-        // unimplemented import.
-        //
-        // `pending-nuri-dmabuf-import: client dmabuf as texture`
-        Err(Error::Unsupported(
-            "dmabuf import as texture — clients on the software path use SHM",
-        ))
+        use smithay::backend::allocator::dmabuf::{DmabufMappingMode, DmabufSyncFlags};
+
+        Self::accepts(dmabuf)?;
+
+        let size = dmabuf.size();
+        let format = dmabuf.format();
+        let stride = *dmabuf
+            .strides()
+            .collect::<Vec<_>>()
+            .first()
+            .ok_or(Error::Unsupported("dmabuf with no stride"))? as usize;
+
+        // READ only: this is someone else's window, and a writable mapping
+        // would let a bug here corrupt it.
+        let mapping = dmabuf
+            .map_plane(0, DmabufMappingMode::READ)
+            .map_err(|e| Error::Map(format!("{e:?}")))?;
+
+        #[allow(clippy::cast_sign_loss)]
+        let height = size.h as usize;
+        let expected = stride
+            .checked_mul(height)
+            .ok_or(Error::Unsupported("stride * height overflows"))?;
+        // ★ CHECKED AGAINST THE MAPPING'S OWN LENGTH. The stride is metadata
+        // the CLIENT supplied; the length comes from the kernel. Trusting the
+        // first without the second reads past the end of the mapping.
+        if mapping.length() < expected {
+            return Err(Error::Unsupported("dmabuf shorter than stride * height"));
+        }
+
+        // ★ THE SYNC IOCTL IS NOT DECORATION. DMA_BUF_IOCTL_SYNC tells the
+        // exporter a CPU read is beginning and ending so it can flush or
+        // invalidate caches. Skipping it reads stale pixels wherever the
+        // mapping is not coherent, and the symptom is a window one frame
+        // behind — not an error.
+        dmabuf
+            .sync_plane(0, DmabufSyncFlags::START | DmabufSyncFlags::READ)
+            .map_err(|e| Error::Map(format!("sync start: {e:?}")))?;
+        // SAFETY: the mapping is valid for `length()` bytes while `mapping`
+        // lives, and `expected <= length()` was checked immediately above.
+        let mut bytes =
+            unsafe { std::slice::from_raw_parts(mapping.ptr().cast::<u8>(), expected) }.to_vec();
+        dmabuf
+            .sync_plane(0, DmabufSyncFlags::END | DmabufSyncFlags::READ)
+            .map_err(|e| Error::Map(format!("sync end: {e:?}")))?;
+
+        normalise_opaque(&mut bytes, format.code);
+
+        #[allow(clippy::cast_sign_loss)]
+        Ok(NuriTexture {
+            data: Arc::new(bytes),
+            width: size.w as u32,
+            height: size.h as u32,
+            stride,
+            format: format.code,
+        })
     }
 }
 

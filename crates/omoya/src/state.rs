@@ -26,6 +26,7 @@ use smithay::{
         output::OutputManagerState,
         selection::data_device::DataDeviceState,
         shell::xdg::XdgShellState,
+        dmabuf::{DmabufGlobal, DmabufState},
         shm::ShmState,
         socket::ListeningSocketSource,
     },
@@ -100,6 +101,18 @@ pub struct Omoya {
     pub compositor_state: CompositorState,
     pub xdg_shell_state: XdgShellState,
     pub shm_state: ShmState,
+    /// The dmabuf protocol delegate.
+    ///
+    /// ★ ALWAYS CONSTRUCTED, GLOBAL CREATED LATER. `DmabufState::new()` costs
+    /// a map; the GLOBAL is a PROMISE to clients that omoya can texture what
+    /// they allocate, and only the render loop knows which renderer will try.
+    /// Splitting the two is what keeps the advertised format list and the
+    /// renderer's real capability from becoming two hand-maintained lists that
+    /// drift — the shape that produced an invisible window here already.
+    pub dmabuf_state: DmabufState,
+    /// `Some` once a renderer has advertised its formats. `None` means clients
+    /// see `wl_shm` only, which is a working seat rather than a broken one.
+    pub dmabuf_global: Option<DmabufGlobal>,
     pub output_manager_state: OutputManagerState,
     pub seat_state: SeatState<Omoya>,
     pub data_device_state: DataDeviceState,
@@ -170,6 +183,8 @@ impl Omoya {
             compositor_state,
             xdg_shell_state,
             shm_state,
+            dmabuf_state: DmabufState::new(),
+            dmabuf_global: None,
             output_manager_state,
             seat_state,
             data_device_state,
