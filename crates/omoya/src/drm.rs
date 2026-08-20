@@ -921,13 +921,27 @@ mod tests {
 
     #[test]
     fn the_scanout_background_is_the_srgb_encoding() {
-        // A DRM scanout target IS sRGB, so this backend must NOT use the raw
-        // byte path the nested winit surface needs. Pinned because the two
-        // backends disagreeing is invisible in a screenshot.
+        // ★ THIS TEST WAS PINNING THE BUG, AND COULD NOT SAY SO.
+        //
+        // It asserted (7, 9, 13) — Nord0 through the LINEAR encoding — under
+        // the name `..._is_the_srgb_encoding`, which is the opposite of what
+        // it checked. That is the screen the operator called black.
+        //
+        // It survived the fix because the crate's test target did not compile
+        // (`FormatSet::is_empty`), so this never ran. An absent test does not
+        // merely fail to catch a regression: it actively preserves the wrong
+        // expectation, in writing, where a reader takes it for a measurement.
+        //
+        // DRM_FORMAT_ARGB8888 applies no conversion, so the bytes written must
+        // ALREADY be sRGB. Nord0 = #2E3440 = (46, 52, 64).
         let [r, g, b, _] = background();
         let byte = |f: f32| (f * 255.0).round() as u8;
-        // Nord0 through the linear encoding.
-        assert_eq!((byte(r), byte(g), byte(b)), (7, 9, 13));
+        assert_eq!(
+            (byte(r), byte(g), byte(b)),
+            (46, 52, 64),
+            "(7, 9, 13) is the linear encoding — the exact shade that got \
+             reported as a blank black screen"
+        );
     }
 
     #[test]
