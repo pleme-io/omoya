@@ -606,6 +606,15 @@ where
                 )));
             }
             elements.extend(space_elements.into_iter().map(SeatElements::Space));
+            // Published so `windows` and `elements` can be compared. A window
+            // exists in `Space` from creation; an element exists only once the
+            // client has attached a buffer, so a gap between the two is
+            // exactly "mapped but never drew". Minus one for the cursor, which
+            // is always element 0 and is ours, not a client's.
+            introspect.elements.store(
+                (elements.len().saturating_sub(1)) as u64,
+                std::sync::atomic::Ordering::Relaxed,
+            );
 
             // ── ★ RENDER INTO THE BACK BUFFER, THEN FLIP ────────────────
             // `DrmCompositor` did allocate-bind-render-export-flip in one

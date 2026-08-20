@@ -90,6 +90,18 @@ pub struct OmoyaIntrospect {
     /// `apply_layout`. This is the tree's own answer, read from the same
     /// socket, so the two can be compared instead of one being inferred.
     pub layout: Mutex<Vec<String>>,
+    /// How many RENDER ELEMENTS the last frame actually had.
+    ///
+    /// ★ NOT THE SAME AS `windows`, AND THE GAP IS THE DIAGNOSIS. `windows`
+    /// counts what `Space` holds — a toplevel is in there from the moment it
+    /// is created, before the client has attached a single buffer. An element
+    /// only exists once there is something to draw. So `windows: 2,
+    /// elements: 1` says precisely "a client mapped and never drew", which is
+    /// a client-side or protocol problem, while `windows: 2, elements: 2` with
+    /// a missing window says the compositor dropped it — a renderer or damage
+    /// problem. Those live in different files and a screenshot cannot tell
+    /// them apart.
+    pub elements: AtomicU64,
     /// Windows currently mapped in the space.
     pub windows: AtomicU64,
     /// Reserved chords recognised but not acted on — the M4 debt counter.
@@ -169,6 +181,7 @@ impl Introspect for OmoyaIntrospect {
             )),
             "frames" => Ok(n(&self.frames)),
             "presented" => Ok(n(&self.presented)),
+            "elements" => Ok(n(&self.elements)),
             "layout" => Ok(serde_json::json!(
                 self.layout
                     .lock()
@@ -221,6 +234,7 @@ impl Introspect for OmoyaIntrospect {
                 "socket": self.socket.get().cloned().unwrap_or_default(),
                 "frames": self.frames.load(Ordering::Relaxed),
                 "presented": self.presented.load(Ordering::Relaxed),
+                "elements": self.elements.load(Ordering::Relaxed),
                 "layout": self.layout.lock().unwrap_or_else(|e| e.into_inner()).clone(),
                 "windows": self.windows.load(Ordering::Relaxed),
                 "input_attached": self.input_attached.load(Ordering::Relaxed) == 1,
@@ -241,6 +255,7 @@ impl Introspect for OmoyaIntrospect {
             "backend",
             "frames",
             "presented",
+            "elements",
             "layout",
             "windows",
             "owed_vt_switches",

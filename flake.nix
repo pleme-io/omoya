@@ -763,6 +763,14 @@
               # identical rects mean the SPLIT failed. Inferring either from
               # a screenshot alone is guesswork.
               print("layout:", machine.succeed("kanshou-get layout").strip())
+              # ★ THE DISCRIMINATOR. `windows` counts what Space holds, which
+              # includes a toplevel that has never attached a buffer;
+              # `elements` counts what the last frame actually drew. A gap
+              # means a client mapped and never drew — a client-side problem —
+              # while equal counts with a missing window mean the compositor
+              # dropped it. Different files, identical screenshot.
+              elements = int(machine.succeed("kanshou-get elements").strip())
+              print(f"render elements (excluding the cursor): {elements}")
               # The totals are the denominator: 0 non-background out of 0
               # scanned would mean the rectangle fell off the image, which is
               # a different bug from an empty half and must not read as one.
