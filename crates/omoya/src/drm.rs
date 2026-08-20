@@ -52,6 +52,14 @@ use smithay::{
         allocator::{Fourcc as DrmFourcc, dumb::DumbAllocator},
         drm::{DrmDevice, DrmDeviceFd, DrmDeviceNotifier, DrmSurface},
         renderer::{
+            // ★ IMPORTED BY BARE NAME BECAUSE A MACRO DEMANDS IT.
+            // `render_elements!` matches its `where` bound as a single token
+            // tree (`$bound:tt`), so `R: smithay::backend::renderer::ImportAll`
+            // does not parse — the `::` has no rule. The error says "no rules
+            // expected `::`" and points at the trait path, which reads as a
+            // typo rather than as a grammar limit. The bound must be one
+            // identifier, so the trait comes into scope here.
+            ImportAll,
             damage::OutputDamageTracker,
         },
     },
@@ -310,7 +318,7 @@ const CURSOR_SIZE: i32 = 12;
 // moves and otherwise never changes is exactly what the marking is for.
 smithay::backend::renderer::element::render_elements! {
     /// Everything the seat composites: client surfaces and our own pointer.
-    pub SeatElements<R, E> where R: smithay::backend::renderer::ImportAll;
+    pub SeatElements<R, E> where R: ImportAll;
     /// A client surface, as `Space` laid it out.
     Space = smithay::desktop::space::SpaceRenderElements<R, E>,
     /// omoya's own pointer — see `CURSOR_SIZE`.
