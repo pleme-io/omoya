@@ -424,6 +424,22 @@ where
     // now also the signal that the display is ready for another frame. That is
     // a step toward `pending-omoya-vblank` (render FROM vblank) without the
     // restructure: for now the timer proposes and this flag disposes.
+    // ★ INSTALL THE ESCAPE HATCH. `Session::change_vt` existed and nothing
+    // called it; `input.rs` recognised Ctrl+Alt+F<n>, counted it, and forwarded
+    // to a kernel that logind's TakeControl has already put in K_OFF. The
+    // result was a seat with no way out except ssh, on a machine whose console
+    // IS the seat.
+    //
+    // Installed here because this is the only scope holding a session. Cloned
+    // rather than borrowed — `LogindSession` is Clone precisely so the
+    // compositor can keep a handle.
+    {
+        let mut vt_session = session.clone();
+        data.state.vt_switch = Some(Box::new(move |vt: i32| {
+            vt_session.change_vt(vt).map_err(|e| format!("{e:?}"))
+        }));
+    }
+
     let flip_pending = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let flip_pending_ev = flip_pending.clone();
     event_loop

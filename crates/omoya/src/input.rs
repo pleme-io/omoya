@@ -43,6 +43,7 @@ impl Omoya {
                 };
 
                 let mut owed: Option<String> = None;
+                let mut switched: Option<i32> = None;
                 keyboard.input::<(), _>(
                     self,
                     event.key_code(),
@@ -68,17 +69,52 @@ impl Omoya {
                         if let Some(hk) = crate::chord::hotkey_from(modifiers, handle.modified_sym())
                             && let Some(claim) = state.reserved.claim_on(&hk)
                         {
+                            // ★ ACT ON IT. This counted and forwarded, which
+                            // was right in the NESTED backend — there the host
+                            // owns the VT and eating the chord would remove an
+                            // escape omoya cannot provide. On DRM omoya owns
+                            // the seat, and forwarding hands it to a kernel
+                            // that logind's TakeControl has already put in
+                            // K_OFF, so it reaches nothing at all.
+                            //
+                            // The counter still increments and is only undone
+                            // by a switch that returns Ok, so it keeps meaning
+                            // "chords seen that produced no switch" rather than
+                            // becoming decoration.
                             state.owed_vt_switches += 1;
                             owed = Some(format!("{hk} — {}", claim.purpose));
+                            if let Some(vt) = crate::chord::vt_of(&hk) {
+                                if let Some(sw) = state.vt_switch.as_mut() {
+                                    match sw(vt) {
+                                        Ok(()) => {
+                                            state.owed_vt_switches =
+                                                state.owed_vt_switches.saturating_sub(1);
+                                            switched = Some(vt);
+                                        }
+                                        Err(e) => tracing::error!(
+                                            vt, error = %e,
+                                            "VT switch REFUSED — this seat has no escape hatch"
+                                        ),
+                                    }
+                                } else {
+                                    tracing::error!(
+                                        vt,
+                                        "VT chord seen but no session can switch — no escape hatch"
+                                    );
+                                }
+                            }
                         }
                         FilterResult::Forward
                     },
                 );
+                if let Some(vt) = switched {
+                    tracing::info!(vt, "VT switch performed — the seat released the display");
+                }
                 if let Some(what) = owed {
                     tracing::info!(
                         chord = %what,
                         owed_total = self.owed_vt_switches,
-                        "reserved chord recognised but NOT acted on (nested backend owns no VT)"
+                        "reserved chord recognised"
                     );
                 }
             }

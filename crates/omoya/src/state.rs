@@ -109,6 +109,21 @@ pub struct Omoya {
     /// Splitting the two is what keeps the advertised format list and the
     /// renderer's real capability from becoming two hand-maintained lists that
     /// drift — the shape that produced an invisible window here already.
+    /// How to switch VT, if a session that can is running.
+    ///
+    /// ★ THE ESCAPE HATCH, AND IT WAS NEVER CONNECTED. `change_vt` is
+    /// implemented on the session (`logind.rs`) and was called from nowhere;
+    /// `input.rs` recognised Ctrl+Alt+F<n>, counted it, and forwarded.
+    ///
+    /// That is worse on this seat than on most, and the reason is measured:
+    /// logind's `TakeControl` puts the VT in `K_OFF`, so the KERNEL is not
+    /// processing VT-switch keys either. With the compositor also not acting on
+    /// them, Ctrl+Alt+F2 reaches nothing at all — the only way out of a wedged
+    /// seat is ssh, on a machine whose console IS the seat.
+    ///
+    /// A boxed closure rather than a session handle because `Omoya` must not be
+    /// generic over the session type for one call site.
+    pub vt_switch: Option<Box<dyn FnMut(i32) -> Result<(), String>>>,
     pub dmabuf_state: DmabufState,
     /// `Some` once a renderer has advertised its formats. `None` means clients
     /// see `wl_shm` only, which is a working seat rather than a broken one.
@@ -183,6 +198,7 @@ impl Omoya {
             compositor_state,
             xdg_shell_state,
             shm_state,
+            vt_switch: None,
             dmabuf_state: DmabufState::new(),
             dmabuf_global: None,
             output_manager_state,

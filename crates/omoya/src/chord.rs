@@ -194,3 +194,35 @@ mod tests {
         assert!(Reserved::fleet_linux().claim_on(&hk).is_some());
     }
 }
+
+/// Which VT a reserved chord asks for, if it is a VT-switch chord.
+///
+/// ★ Ctrl+Alt+F1..F12 map to VT 1..12. Returned as an `Option` rather than
+/// assumed, because `Reserved::fleet_linux()` also claims chords that are not
+/// VT switches, and acting on one of those as though it were would switch the
+/// seat away for a keystroke that meant something else entirely.
+#[must_use]
+pub fn vt_of(hk: &awase::KeyChord) -> Option<i32> {
+    let s = hk.to_string();
+    // The catalog spells these as Ctrl+Alt+F<n>; match on the function key and
+    // require both modifiers, so a bare F2 never moves the seat.
+    if !(s.contains("Ctrl") && s.contains("Alt")) {
+        return None;
+    }
+    let idx = s.rfind('F')?;
+    let n: i32 = s[idx + 1..].trim().parse().ok()?;
+    (1..=12).contains(&n).then_some(n)
+}
+
+#[cfg(test)]
+mod vt_tests {
+    #[test]
+    fn only_ctrl_alt_function_keys_move_the_seat() {
+        // A bare function key must never switch VT — that would make F2 in a
+        // terminal throw the operator to a getty.
+        let f2 = awase::KeyChord::parse("F2").ok();
+        if let Some(c) = f2 {
+            assert_eq!(super::vt_of(&c), None, "bare F2 must not switch VT");
+        }
+    }
+}
