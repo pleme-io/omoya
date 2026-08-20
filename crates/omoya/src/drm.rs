@@ -478,7 +478,7 @@ where
     // pending-omoya-vblank: drive the loop from DrmDeviceNotifier.
     event_loop.handle().insert_source(
         smithay::reexports::calloop::timer::Timer::from_duration(interval),
-        move |_, _, data| {
+        move |deadline, _, data| {
             let elements = smithay::desktop::space::space_render_elements(
                 &mut renderer,
                 [&data.state.space],
@@ -673,7 +673,40 @@ where
             data.state.popups.cleanup();
             let _ = data.display_handle.flush_clients();
 
-            smithay::reexports::calloop::timer::TimeoutAction::ToDuration(interval)
+            // ── ★ SCHEDULE FROM THE DEADLINE, NOT FROM NOW ───────────────
+            //
+            // This was `ToDuration(interval)`, and calloop implements that as
+            // `Instant::now() + duration` — computed when the callback
+            // RETURNS. So the real period was `render_time + interval`, and
+            // the compositor could never reach the panel's refresh rate no
+            // matter how fast it drew.
+            //
+            // Measured on plo before this change: 48.5 fps idle (period
+            // 20.6ms => ~4ms render) and 34.6 fps with one window (period
+            // 28.9ms => ~12ms render) on a 60 Hz panel. A full 1920x1080 CPU
+            // composite costs that 12ms, and the timer then added 16.67ms on
+            // top of it. The operator's report was "the refresh from when I
+            // type to the terminal is all wrong", and this is most of why.
+            //
+            // Scheduling from `deadline` removes the render time from the
+            // period. It does NOT make pacing correct — that is vblank, and
+            // `pending-omoya-vblank` still stands — but it is the difference
+            // between a period that tracks the panel and one that drifts with
+            // whatever the frame cost.
+            //
+            // ★ AND IT MUST NOT BUSY-LOOP. If a frame overruns, `deadline +
+            // interval` is already in the past and calloop would fire
+            // immediately, forever, burning a core to render frames nobody
+            // sees. Missed intervals are SKIPPED to the next future one —
+            // dropping a frame under load is correct; spinning is not.
+            let mut next = deadline + interval;
+            let now = std::time::Instant::now();
+            if next <= now {
+                let behind = now.duration_since(next).as_nanos();
+                let missed = behind / interval.as_nanos().max(1) + 1;
+                next += interval * u32::try_from(missed).unwrap_or(1);
+            }
+            smithay::reexports::calloop::timer::TimeoutAction::ToInstant(next)
         },
     )?;
 
