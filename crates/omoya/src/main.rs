@@ -318,13 +318,80 @@ where
     use smithay::reexports::rustix::fs::OFlags;
     use std::sync::atomic::Ordering;
 
-    let path = std::path::Path::new("/dev/dri/card0");
-    // O_RDWR so we can modeset; O_NONBLOCK because the event loop reads vblank
-    // events off this fd and a blocking read would stall every frame.
-    let fd = session
-        .open(path, OFlags::RDWR | OFlags::NONBLOCK)
-        .map_err(|e| format!("session refused {}: {e:?}", path.display()))?;
-    let (device, drm_fd, drm_notifier) = crate::drm::device_from_fd(fd)?;
+    // ── ★ FIND THE CARD; DO NOT ASSUME `card0` ────────────────────────────
+    //
+    // This was `/dev/dri/card0` and that is not a device that exists on every
+    // machine. Measured on plo: the only DRM node is **`card1`** (nvidia, with
+    // `nvidia_modeset` loaded, monitor on `card1-DP-1`) and there is no
+    // `card0` at all — so the compositor could not open a display on the one
+    // machine it ships to, while the vkms gate passed because vkms happens to
+    // enumerate as `card0`.
+    //
+    // The number is a kernel enumeration order, not an identity. What we
+    // actually want is "the card with something plugged into it", so that is
+    // what we look for: open each candidate through the session and keep the
+    // first whose `probe` finds a connected connector.
+    //
+    // Order matters for a reason beyond tidiness — a machine can carry a
+    // render-only node or a headless card alongside the real one, and picking
+    // by index would land on either.
+    let mut candidates: Vec<std::path::PathBuf> = std::fs::read_dir("/dev/dri")
+        .map_err(|e| format!("cannot enumerate /dev/dri: {e}"))?
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("card"))
+        })
+        .collect();
+    // Stable order so a failure is reproducible rather than dependent on
+    // readdir order.
+    candidates.sort();
+    if candidates.is_empty() {
+        return Err("no /dev/dri/card* exists — there is no DRM device to drive".into());
+    }
+
+    let mut opened = None;
+    let mut refusals: Vec<String> = Vec::new();
+    for path in &candidates {
+        // O_RDWR so we can modeset; O_NONBLOCK because the event loop reads
+        // vblank events off this fd and a blocking read would stall every frame.
+        let fd = match session.open(path, OFlags::RDWR | OFlags::NONBLOCK) {
+            Ok(fd) => fd,
+            Err(e) => {
+                refusals.push(format!("{}: session refused ({e:?})", path.display()));
+                continue;
+            }
+        };
+        let (device, drm_fd, drm_notifier) = match crate::drm::device_from_fd(fd) {
+            Ok(t) => t,
+            Err(e) => {
+                refusals.push(format!("{}: not a usable DRM device ({e})", path.display()));
+                continue;
+            }
+        };
+        match crate::drm::probe(&device) {
+            Ok(target) => {
+                tracing::info!(card = %path.display(), "DRM device selected — it has a connected connector");
+                opened = Some((device, drm_fd, drm_notifier, target));
+                break;
+            }
+            Err(e) => {
+                refusals.push(format!("{}: no connected connector ({e})", path.display()));
+            }
+        }
+    }
+
+    // Every refusal is named. A bare "no display found" on a machine with four
+    // card nodes is the message that costs an hour.
+    let (device, drm_fd, drm_notifier, target) = opened.ok_or_else(|| {
+        format!(
+            "no DRM device with a connected connector. Tried {}: {}",
+            candidates.len(),
+            refusals.join("; ")
+        )
+    })?;
 
     // ★ DRAIN THE DRM EVENT QUEUE, OR SCANOUT DIES AFTER ~135 FRAMES.
     //
@@ -349,7 +416,9 @@ where
         })
         .map_err(|e| format!("inserting the DRM notifier: {e}"))?;
 
-    let target = crate::drm::probe(&device)?;
+    // `target` came from the selection loop above — probing again here would
+    // re-ask a question already answered, and could answer it differently if a
+    // cable moved in between.
     tracing::info!(
         connector = %target.name,
         mode = %format_args!("{}x{}", target.mode.size().0, target.mode.size().1),
