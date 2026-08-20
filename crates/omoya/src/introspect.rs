@@ -41,7 +41,7 @@
 //! `calloop::ping::make_ping` so the enqueue itself wakes the loop.
 
 use std::sync::{
-    Arc,
+    Arc, Mutex,
     atomic::{AtomicU64, Ordering},
 };
 
@@ -169,11 +169,11 @@ impl Introspect for OmoyaIntrospect {
             )),
             "frames" => Ok(n(&self.frames)),
             "presented" => Ok(n(&self.presented)),
-            "layout" => Ok(kanshou::Value::from(
+            "layout" => Ok(serde_json::json!(
                 self.layout
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
-                    .join(" | "),
+                    .join(" | ")
             )),
             "windows" => Ok(n(&self.windows)),
             "owed_vt_switches" => Ok(n(&self.owed_vt_switches)),
