@@ -285,16 +285,7 @@ impl crate::state::Omoya {
         // up and cannot say what was requested, so when the two disagree
         // there is otherwise no way to tell a broken split from a broken
         // placement from an early return above.
-        *self
-            .introspect
-            .layout
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = arranged
-            .iter()
-            .map(|(_, r)| format!("{},{} {}x{}", r.loc.x, r.loc.y, r.size.w, r.size.h))
-            .collect();
-
-        for (window, rect) in arranged {
+        for (window, rect) in &arranged {
             if let Some(t) = window.toplevel() {
                 t.with_pending_state(|state| {
                     state.size = Some(rect.size);
@@ -304,12 +295,46 @@ impl crate::state::Omoya {
                 // over a settled screen sends no messages at all. Calling the
                 // unconditional form here would configure every window on
                 // every map and make clients redraw for nothing — which,
-                // with damage tracking now live, would be the one thing that
+                // with damage tracking live, would be the one thing that
                 // reliably defeats it.
                 t.send_pending_configure();
             }
-            self.space.map_element(window, rect.loc, false);
+            self.space.map_element(window.clone(), rect.loc, false);
         }
+
+        // ★ PUBLISH WHAT `Space` HOLDS, NOT WHAT THE TREE ASKED FOR — read
+        // back AFTER the writes.
+        //
+        // The first version published `arranged` alone, which reported
+        // `0,0 512x768 | 512,0 512x768` while only one window was visible.
+        // That is the tree's REQUEST, and a request that is correct proves
+        // nothing about whether it was applied: `map_element` could be
+        // repositioning nothing at all and this leaf would look identical.
+        // Reading the position back turns the leaf from a restatement of the
+        // input into a measurement of the result.
+        *self
+            .introspect
+            .layout
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = arranged
+            .iter()
+            .map(|(w, r)| {
+                let live = self.space.element_location(w);
+                match live {
+                    Some(p) if p == r.loc => {
+                        format!("{},{} {}x{}", r.loc.x, r.loc.y, r.size.w, r.size.h)
+                    }
+                    Some(p) => format!(
+                        "asked {},{} {}x{} BUT SPACE HAS {},{}",
+                        r.loc.x, r.loc.y, r.size.w, r.size.h, p.x, p.y
+                    ),
+                    None => format!(
+                        "asked {},{} {}x{} BUT NOT IN SPACE",
+                        r.loc.x, r.loc.y, r.size.w, r.size.h
+                    ),
+                }
+            })
+            .collect();
     }
 }
 
