@@ -411,7 +411,13 @@
                   # client. `nc` cannot frame it and /dev/tcp cannot reach a
                   # Unix socket.
                   (pkgs.writers.writePython3Bin "kanshou-capture" { } ''
-                    import glob, json, socket, struct, sys, time
+                    import glob
+                    import json
+                    import socket
+                    import struct
+                    import sys
+                    import time
+
 
                     def q(sock, path, args):
                         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -425,6 +431,7 @@
                             b += s.recv(n - len(b))
                         s.close()
                         return json.loads(b)
+
 
                     dest = sys.argv[1]
                     socks = glob.glob("/run/user/*/kanshou/omoya-*.sock")
