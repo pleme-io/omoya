@@ -50,7 +50,6 @@ use std::{
 use smithay::{
     backend::{
         libinput::{LibinputInputBackend, LibinputSessionInterface},
-        session::libseat::LibSeatSession,
         allocator::{Fourcc as DrmFourcc, dumb::DumbAllocator},
         drm::{DrmDevice, DrmDeviceFd, DrmSurface, compositor::{DrmCompositor, FrameFlags}},
         renderer::{
@@ -276,94 +275,16 @@ pub fn frame_interval(target: &ScanoutTarget) -> Duration {
     Duration::from_nanos(1_000_000_000 / u64::from(hz))
 }
 
-/// Marker so the renderer element type is named in one place; the winit backend
-/// uses the same one, and a mismatch between them is a confusing type error far
-/// from its cause.
-pub type Element = WaylandSurfaceRenderElement<PixmanRenderer>;
-
-/// The compositor type for this backend, named once.
-///
-/// The type parameters are the whole design in one line: allocate DUMB buffers,
-/// export framebuffers through the DEVICE FD itself, carry no per-frame user
-/// data, and — the important one — `NoGbm` in the gbm slot, because this path
-/// has no gbm device at all.
-type Scanner = DrmCompositor<DumbAllocator, DrmDeviceFd, (), DrmDeviceFd>;
-
-/// ★ The element type follows the RENDERER, which is why it is now a type
-/// alias with a parameter rather than a fixed one. `WaylandSurfaceRenderElement`
-/// is generic over the renderer because a texture from one renderer is
-/// meaningless to another — the type system is carrying a real constraint here,
-/// not bookkeeping.
-pub type ElementOf<R> = WaylandSurfaceRenderElement<R>;
-
-/// Paint one frame of the seat background onto a real display, and hold it.
-///
-/// ── WHY DUMB BUFFERS REACH A PIXMAN RENDERER AT ALL ───────────────────────
-/// `PixmanRenderer` implements `Bind<Dmabuf>`, NOT `Bind<DumbBuffer>` — which
-/// looks at first like this whole path cannot work. It does, because
-/// `impl AsDmabuf for DumbBuffer` (`backend/allocator/dumb.rs:104`) exports the
-/// dumb buffer as a dmabuf, and `DrmCompositor` performs that export itself.
-/// So the chain is DumbAllocator → DumbBuffer → dmabuf → pixman, with no GPU
-/// anywhere in it.
-///
-/// # Errors
-/// Returns an error if the surface cannot be created, the compositor cannot be
-/// built, or the frame cannot be queued to the CRTC.
-pub fn paint_background(
-    device: &mut DrmDevice,
-    fd: &DrmDeviceFd,
-    target: &ScanoutTarget,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let surface = device.create_surface(target.crtc, target.mode, &[target.connector])?;
-    let (output, _mode) = output_for(target);
-
-    let allocator = DumbAllocator::new(fd.clone());
-
-    // ARGB/XRGB8888 is the format simpledrm and every KMS driver worth the name
-    // supports. Offering both lets the compositor pick; offering only one is
-    // how a mode-set fails on a driver that wanted the other.
-    let color_formats = [DrmFourcc::Argb8888, DrmFourcc::Xrgb8888];
-    let mut compositor: Scanner = DrmCompositor::new(
-        OutputModeSource::Static {
-            size: output.current_mode().map_or((0, 0).into(), |m| m.size),
-            scale: output.current_scale().fractional_scale().into(),
-            transform: output.current_transform(),
-        },
-        surface,
-        None,
-        allocator,
-        fd.clone(),
-        color_formats,
-        // ★ The renderer's ACTUAL formats, not an empty list.
-        //
-        // I first passed `[]` here, and the failure was exact about it:
-        //   WARN  Preferred format AR24 not available: NoSupportedRendererFormat
-        //   ERROR No supported renderer buffer format found
-        // With no renderer formats declared, DrmCompositor can intersect the
-        // CRTC's formats with nothing, so every candidate is unsupported. The
-        // DRM surface and the Output had already been created correctly by that
-        // point — the mode was set and the connector bound — which is what made
-        // the empty list the only remaining variable.
-        //
-        // `ImportDma::dmabuf_formats` is the right source: pixman reaches the
-        // dumb buffer through the dmabuf export, so the formats it can import
-        // over dmabuf are exactly the formats it can render into here.
-        renderer.dmabuf_formats(),
-        // Cursor plane size, not a display dimension — I first passed the
-        // mode's width here, which is a `u16` where this wants
-        // `Size<u32, Buffer>`. 64x64 is the size every KMS driver supports for
-        // a hardware cursor; M4a draws no cursor at all (there is no input
-        // yet), so this only reserves the plane.
-        (64u32, 64u32).into(),
-        None,
-    )?;
-
-    let elements: Vec<Element> = Vec::new();
-    compositor.render_frame(&mut renderer, &elements, background(), FrameFlags::empty())?;
-    compositor.queue_frame(())?;
-
-    Ok(())
-}
+// ── ★ `paint_background` REMOVED, not repaired ───────────────────────────
+// It was M4a's one-shot probe: create a surface, paint Nord once, queue a
+// frame. The persistent loop below superseded it and nothing has called it
+// since — `grep paint_background` outside its own definition returns nothing.
+//
+// It surfaced now because it was the last thing in this file constructing a
+// `PixmanRenderer` directly, so making the renderer selectable broke code no
+// caller reaches. Repairing dead code to keep it compiling is how a file grows
+// a second, subtly different render path that nobody exercises; MODULARIZE,
+// DON'T DELETE governs configured-off FEATURES, not uncalled functions.
 
 /// M4b — the persistent scanout loop.
 ///
@@ -401,6 +322,11 @@ pub fn run<R>(
 where
     R: smithay::backend::renderer::Renderer
         + smithay::backend::renderer::ImportAll
+        // ★ `ImportDma` is needed for `dmabuf_formats()`, which the compositor
+        // must be told at construction — passing an empty list makes
+        // DrmCompositor fail with `NoSupportedRendererFormat`, an error that
+        // names the renderer rather than the missing declaration.
+        + smithay::backend::renderer::ImportDma
         + smithay::backend::renderer::Bind<smithay::backend::allocator::dmabuf::Dmabuf>
         + 'static,
     R::TextureId: Clone + smithay::backend::renderer::Texture + 'static,
