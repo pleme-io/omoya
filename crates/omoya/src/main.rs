@@ -342,7 +342,7 @@ where
     // consumes the events. Doing both from here is the eventual fix.
     event_loop
         .handle()
-        .insert_source(drm_notifier, |event, (), _data| {
+        .insert_source(drm_notifier, |event, _meta, _data| {
             if let smithay::backend::drm::DrmEvent::Error(err) = event {
                 tracing::warn!(?err, "DRM device reported an error");
             }
