@@ -354,6 +354,17 @@ where
         // names the renderer rather than the missing declaration.
         + smithay::backend::renderer::ImportDma
         + smithay::backend::renderer::Bind<smithay::backend::allocator::dmabuf::Dmabuf>
+        // ★ `ExportMem` so the seat can be SCREENSHOT. This is a real
+        // constraint on what may drive this loop, and it is the right one: a
+        // renderer whose output cannot be read back produces a seat that can
+        // only be debugged by walking to the machine and looking at it. The
+        // whole reason `capture()` exists is that "the screen is blank" is
+        // otherwise unanswerable from anywhere else.
+        //
+        // `NuriRenderer` implements it (`nuri_renderer.rs`), so this costs the
+        // shipping path nothing; it only excludes a future renderer that
+        // cannot read its own framebuffer back.
+        + smithay::backend::renderer::ExportMem
         + 'static,
     R::TextureId: Clone + smithay::backend::renderer::Texture + 'static,
     R::Error: Send + Sync + 'static,
