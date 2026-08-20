@@ -671,6 +671,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 for deed in deeds {
                     tracing::info!(?deed, "performing a deed requested over kanshou");
                     data.state.perform(deed);
+                    // Counted HERE, by the thread that did the work — see
+                    // `OmoyaIntrospect::deeds_performed`. The `do` leaf's
+                    // "queued" answer cannot distinguish a drained deed from
+                    // one nothing ever drains.
+                    sink.deeds_performed
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 }
             }) {
                 tracing::error!(error = %e, "no deed source — the seat is read-only");

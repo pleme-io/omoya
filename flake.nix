@@ -787,7 +787,30 @@
               # subsequent split would target. Closing or spawning would also
               # work but are harder to undo inside one gate.
               print("verbs:", machine.succeed("kanshou-get verbs").strip())
+
+              # ★ COMPARE TWO INDEPENDENTLY-SOURCED COUNTS, NOT THE REPLY.
+              #
+              # The `do` leaf answers `queued: <verb>` the instant it pushes.
+              # That is true and proves nothing: a deed nothing drains answers
+              # identically to one that ran, so asserting on that string tests
+              # only that the socket is reachable. The first version of this
+              # block did exactly that.
+              #
+              # `deeds_performed` is written on the far side of the seam, by
+              # the compositor thread that actually ran it, so the two numbers
+              # can disagree — and the disagreement is precisely "the ping did
+              # not wake the loop", which on an idle seat is the whole risk.
+              before = int(machine.succeed("kanshou-get deeds_performed").strip())
               print("do:", machine.succeed("kanshou-get do/focus-right").strip())
+              machine.sleep(2)
+              after = int(machine.succeed("kanshou-get deeds_performed").strip())
+              print(f"deeds performed: {before} -> {after}")
+              assert after == before + 1, (
+                  f"deeds_performed went {before} -> {after}. The verb was "
+                  "accepted and never executed: the calloop ping did not wake "
+                  "the loop, which is exactly the failure this design exists "
+                  "to prevent on an idle seat."
+              )
 
               # An unknown verb must be REFUSED, by name — not defaulted to
               # something adjacent, and not silently accepted. `kanshou-get`

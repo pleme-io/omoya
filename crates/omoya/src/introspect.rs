@@ -119,6 +119,20 @@ pub struct OmoyaIntrospect {
     /// here may touch `Omoya`; the socket thread enqueues, the compositor
     /// thread drains.
     pub pending_deeds: Mutex<Vec<crate::deed::Deed>>,
+    /// Deeds the COMPOSITOR THREAD has actually performed.
+    ///
+    /// ★ THE READ-BACK FOR THE WRITE SURFACE, AND IT WAS MISSING ONCE.
+    /// The `do` leaf answers `queued: <verb>` the instant it pushes, which is
+    /// true and says nothing about execution — a deed that nothing drains
+    /// answers exactly the same as one that ran. The first version of the
+    /// gate asserted on that string and therefore proved only that the socket
+    /// was reachable.
+    ///
+    /// This counter is written on the other side of the seam, by the thread
+    /// that does the work, so `queued` and `performed` are two independently
+    /// sourced numbers that can disagree. A caller polls it to learn the deed
+    /// LANDED rather than that it was accepted.
+    pub deeds_performed: AtomicU64,
     /// Wakes the compositor's event loop after an enqueue.
     ///
     /// ★ THE PING IS LOAD-BEARING, AND MORE SO SINCE DAMAGE TRACKING LANDED.
@@ -256,6 +270,7 @@ impl Introspect for OmoyaIntrospect {
                 Ok(serde_json::json!(format!("queued: {verb}")))
             }
             "verbs" => Ok(serde_json::json!(crate::deed::Deed::VERBS)),
+            "deeds_performed" => Ok(n(&self.deeds_performed)),
             "elements" => Ok(n(&self.elements)),
             "geometry" => Ok(serde_json::json!(
                 self.geometry
@@ -315,6 +330,7 @@ impl Introspect for OmoyaIntrospect {
                 "socket": self.socket.get().cloned().unwrap_or_default(),
                 "frames": self.frames.load(Ordering::Relaxed),
                 "presented": self.presented.load(Ordering::Relaxed),
+                "deeds_performed": self.deeds_performed.load(Ordering::Relaxed),
                 "elements": self.elements.load(Ordering::Relaxed),
                 "geometry": self.geometry.lock().unwrap_or_else(|e| e.into_inner()).clone(),
                 "layout": self.layout.lock().unwrap_or_else(|e| e.into_inner()).clone(),
@@ -338,6 +354,7 @@ impl Introspect for OmoyaIntrospect {
             "frames",
             "presented",
             "verbs",
+            "deeds_performed",
             "elements",
             "geometry",
             "layout",
