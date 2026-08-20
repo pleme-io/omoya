@@ -411,10 +411,29 @@
               # ── the compositor, in a REAL logind session ──
               # PAMName=login is what makes GetSessionByPID succeed; see the
               # comment above the check.
+              # ★ A SESSION IS NOT ENOUGH — IT MUST BE A *SEAT* SESSION.
+              # PAMName=login alone yields a session logind refuses to hand
+              # devices to:
+              #
+              #   TakeDevice: org.freedesktop.DBus.Error.NotSupported:
+              #     Session class doesn't support taking device control.
+              #
+              # Device control is granted only to a session attached to a seat
+              # with a VT. pam_systemd derives both from XDG_SEAT and XDG_VTNR,
+              # which a getty normally supplies and systemd-run does not — so
+              # they are passed explicitly, along with a TTY for the unit to
+              # own. Measured, not guessed: the error above is what a session
+              # without them gets.
               machine.succeed(
                   "systemd-run --unit=omoya --collect "
                   "--property=PAMName=login "
                   "--property=User=seat "
+                  "--property=TTYPath=/dev/tty2 "
+                  "--property=StandardInput=tty "
+                  "--property=StandardOutput=journal "
+                  "--property=StandardError=journal "
+                  "--property=Environment=XDG_SEAT=seat0 "
+                  "--property=Environment=XDG_VTNR=2 "
                   "--property=Environment=XDG_RUNTIME_DIR=/run/user/1000 "
                   "--property=Environment=RUST_LOG=info "
                   "${wrapped}/bin/omoya --backend drm --session logind"
