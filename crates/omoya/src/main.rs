@@ -141,7 +141,13 @@ enum RendererKind {
 fn parse_args() -> Result<Args, String> {
     let mut mode = SeatMode::Session;
     let mut spawn = None;
+    // The nested backend is the convenient default when it exists, because
+    // that build is for developing on a machine that already has a session.
+    // A shipped binary has no such backend and takes a seat: Drm.
+    #[cfg(feature = "nested")]
     let mut backend = Backend::Nested;
+    #[cfg(not(feature = "nested"))]
+    let mut backend = Backend::Drm;
     let mut session = SessionBackend::Logind;
     // ★ THE DEFAULTS ARE OURS NOW. Each was proven before it was promoted:
     // nuri has 11 green tests and a mapped Bind; evdev decodes the kernel's own
