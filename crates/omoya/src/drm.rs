@@ -368,10 +368,11 @@ pub fn frame_interval(target: &ScanoutTarget) -> Duration {
 /// `ImportAll` is a blanket impl satisfied by `ImportMemWl + ImportDmaWl`,
 /// which is why `nuri` implements those two rather than `ImportAll` directly.
 pub fn run<R>(
-    /// Set when a page flip is issued, cleared by the VBlank event. See the
-    /// comment at its creation in `main.rs`: the kernel refuses a flip issued
-    /// while the previous is still pending, and the frame period used to be
-    /// long enough to hide that.
+    // Set when a page flip is issued, cleared by the VBlank event. See the
+    // comment at its creation in `main.rs`: the kernel refuses a flip issued
+    // while the previous is still pending, and the frame period used to be
+    // long enough to hide that. (A plain comment, not a doc comment — rustc
+    // refuses `///` on a parameter.)
     flip_pending: std::sync::Arc<std::sync::atomic::AtomicBool>,
     event_loop: &mut smithay::reexports::calloop::EventLoop<'static, crate::CalloopData>,
     data: &mut crate::CalloopData,
