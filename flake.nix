@@ -420,6 +420,7 @@
                   (pkgs.writers.writePython3Bin "ppm-probe" { } (builtins.readFile ./nix/ppm-probe.py))
                   (pkgs.writers.writePython3Bin "ppm-colours" { } (builtins.readFile ./nix/ppm-colours.py))
                   (pkgs.writers.writePython3Bin "kanshou-get" { } (builtins.readFile ./nix/kanshou-get.py))
+                  (pkgs.writers.writePython3Bin "ppm-region" { } (builtins.readFile ./nix/ppm-region.py))
                   (pkgs.writers.writePython3Bin "kanshou-capture" { } ''
                     import glob
                     import json
@@ -716,18 +717,45 @@
                   "so the tiling assertion below would measure nothing."
               )
 
-              # Sample the middle of each half. A vertical split puts one
-              # window left of centre and one right of it, so BOTH samples
-              # must differ from the background. Stacked windows leave one
-              # half empty and this fails.
-              left = machine.succeed("ppm-probe /tmp/two.ppm 256 384").strip()
-              right = machine.succeed("ppm-probe /tmp/two.ppm 768 384").strip()
-              print(f"left-half(256,384) = {left} | right-half(768,384) = {right}")
+              # ★ COUNT CONTENT IN EACH HALF, DO NOT SAMPLE A POINT.
+              #
+              # The first version of this sampled (256,384) and (768,384) and
+              # failed with both halves reading as background — while `windows`
+              # said 2 and (4,4) held client pixels. The layout was fine; the
+              # ASSERTION was wrong. A client decides its own size and is free
+              # to ignore the size in an xdg configure, and weston's demos do
+              # exactly that: they are fixed-size. So a point at the centre of
+              # a half lands on background whenever the window is small, and
+              # the failure reads as "stacked" when the truth is "small".
+              #
+              # What actually distinguishes tiled from stacked is whether there
+              # is ANY client content in the right half — under stacking both
+              # windows sit at the same origin and that half is empty.
               nord0 = "46 52 64"
-              assert left != nord0 and right != nord0, (
-                  f"left={left} right={right}, background={nord0}. A half that "
-                  "is still background means the two windows are stacked, not "
-                  "tiled — check Tiling::map and apply_layout."
+              lc, lt = (
+                  int(v) for v in
+                  machine.succeed(
+                      f"ppm-region /tmp/two.ppm 0 0 512 768 {nord0}"
+                  ).split()
+              )
+              rc, rt = (
+                  int(v) for v in
+                  machine.succeed(
+                      f"ppm-region /tmp/two.ppm 512 0 512 768 {nord0}"
+                  ).split()
+              )
+              print(f"content: left {lc}/{lt} px, right {rc}/{rt} px")
+              # The totals are the denominator: 0 non-background out of 0
+              # scanned would mean the rectangle fell off the image, which is
+              # a different bug from an empty half and must not read as one.
+              assert lt > 0 and rt > 0, (
+                  f"scanned {lt} and {rt} pixels — the sample rectangles are "
+                  "off the image, so the counts below measure nothing."
+              )
+              assert lc > 0 and rc > 0, (
+                  f"left half has {lc} non-background pixels, right half {rc}. "
+                  "An empty half means both windows are at the same origin — "
+                  "stacked, not tiled. Check Tiling::map and apply_layout."
               )
 
               # ── ★ DOES PARTIAL REPAINT ACTUALLY SKIP ANYTHING? ──────────
