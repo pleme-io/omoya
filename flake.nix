@@ -410,7 +410,39 @@
                   # length-prefixed JSON over a Unix socket, which needs a real
                   # client. `nc` cannot frame it and /dev/tcp cannot reach a
                   # Unix socket.
-                  pkgs.python3
+                  (pkgs.writers.writePython3Bin "kanshou-capture" { } ''
+                    import glob, json, socket, struct, sys, time
+
+                    def q(sock, path, args):
+                        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                        s.settimeout(10)
+                        s.connect(sock)
+                        r = json.dumps({"path": path, "args": args}).encode()
+                        s.sendall(struct.pack(">I", len(r)) + r)
+                        n = struct.unpack(">I", s.recv(4))[0]
+                        b = b""
+                        while len(b) < n:
+                            b += s.recv(n - len(b))
+                        s.close()
+                        return json.loads(b)
+
+                    dest = sys.argv[1]
+                    socks = glob.glob("/run/user/*/kanshou/omoya-*.sock")
+                    if not socks:
+                        print("no omoya kanshou socket found")
+                        sys.exit(1)
+                    sock = socks[0]
+                    print("socket:", sock)
+                    print("request:", q(sock, ["capture"], [dest]))
+                    for _ in range(50):
+                        time.sleep(0.2)
+                        r = q(sock, ["capture_result"], [])
+                        if r.get("Ok"):
+                            print("result:", r["Ok"])
+                            sys.exit(0 if str(r["Ok"]).startswith("ok:") else 1)
+                    print("capture never completed")
+                    sys.exit(1)
+                  '')
                 ];
                 # ★ A REAL LOGIN, NOT A SIMULATED ONE. Three attempts with
                 # `systemd-run --property=PAMName=login` produced a session
@@ -523,36 +555,18 @@
               # taken by the render loop, and a file with real pixels in it.
               # Nothing short of the file proves it — "the call compiles" and
               # "the log says captured" were both true while it was broken.
-              sock = machine.succeed(
-                  "ls /run/user/*/kanshou/omoya-*.sock | head -1"
-              ).strip()
-              print(f"kanshou socket: {sock}")
-
-              machine.succeed(
-                  "python3 - " + sock + " <<'EOF'\n"
-                  "import socket,struct,json,sys,time\n"
-                  "p=sys.argv[1]\n"
-                  "def q(path,args):\n"
-                  "    s=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)\n"
-                  "    s.settimeout(10); s.connect(p)\n"
-                  "    r=json.dumps({'path':path,'args':args}).encode()\n"
-                  "    s.sendall(struct.pack('>I',len(r))+r)\n"
-                  "    n=struct.unpack('>I',s.recv(4))[0]; b=b''\n"
-                  "    while len(b)<n: b+=s.recv(n-len(b))\n"
-                  "    s.close(); return json.loads(b)\n"
-                  "print('request:', q(['capture'],['/tmp/seat.ppm']))\n"
-                  "for _ in range(50):\n"
-                  "    time.sleep(0.2)\n"
-                  "    r=q(['capture_result'],[])\n"
-                  "    if r.get('Ok'):\n"
-                  "        print('result:', r['Ok'])\n"
-                  "        sys.exit(0 if str(r['Ok']).startswith('ok:') else 1)\n"
-                  "print('capture never completed'); sys.exit(1)\n"
-                  "EOF"
-              )
+              # Ask for a capture over kanshou and wait for the render loop to
+              # take it. The client is a packaged script (`kanshou-capture`)
+              # rather than inline python: this text already sits inside a Nix
+              # indented-string literal inside a python test script, and a third
+              # level of quoting is how the first attempt became a syntax error.
+              # (Including, on the second attempt, a pair of single quotes in
+              # this very comment, which ended the Nix string.)
+              out = machine.succeed("kanshou-capture /tmp/seat.ppm")
+              print(out)
 
               # The file must exist and be big enough to be a real frame. A
-              # 1024x768 ARGB dump is ~2.3MB; anything tiny means a header was
+              # 1024x768 dump is ~2.3MB; anything tiny means a header was
               # written and the pixels were not.
               size = int(machine.succeed("stat -c %s /tmp/seat.ppm").strip())
               print(f"capture size: {size} bytes")
