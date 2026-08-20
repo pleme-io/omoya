@@ -28,12 +28,34 @@ def q(sock, path, args):
     return json.loads(b)
 
 
+def live_socket():
+    """The first socket that ANSWERS, not the first that exists.
+
+    ★ A KANSHOU SOCKET OUTLIVES ITS PROCESS WHEN THAT PROCESS DIES HARD.
+    The server removes it on Drop, which covers a clean exit and covers
+    nothing else — a SIGKILL or an abort leaves the file behind. Measured on
+    plo: four stale omoya sockets against one live compositor. `socks[0]` is
+    then a coin flip, and picking a dead one fails in a way that reads as
+    "the compositor is not answering" rather than "that file has no owner".
+    """
+    socks = sorted(glob.glob("/run/user/*/kanshou/omoya-*.sock"))
+    for cand in socks:
+        try:
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            s.settimeout(2)
+            s.connect(cand)
+            s.close()
+            return cand
+        except OSError:
+            continue
+    return None
+
+
 def main():
-    socks = glob.glob("/run/user/*/kanshou/omoya-*.sock")
-    if not socks:
-        print("no omoya kanshou socket found", file=sys.stderr)
+    sock = live_socket()
+    if sock is None:
+        print("no LIVE omoya kanshou socket found", file=sys.stderr)
         return 1
-    sock = socks[0]
     for leaf in sys.argv[1:]:
         r = q(sock, [leaf], [])
         # `kotae`: an answer says WHICH of four things happened. A missing

@@ -96,6 +96,13 @@ pub struct Omoya {
     pub owed_vt_switches: u64,
 
     pub space: Space<Window>,
+    /// The keymap. `awase::BindingMap`, not a bespoke table — the fleet rule
+    /// is that awase owns keys and a hand-rolled `Keymap` is the violation.
+    pub bindings: awase::BindingMap<crate::deed::Deed>,
+    /// What `Logo+Return` launches — the same command omoya was given after
+    /// `--`, so the chord opens another of whatever the seat opened first
+    /// rather than a second hardcoded guess at the operator's terminal.
+    pub session_command: Option<Vec<String>>,
     /// How the windows are arranged. See `layout.rs` — the algebra is
     /// `kukaku`'s, and only "a leaf is a Window" and "a rect is pixels" are
     /// omoya's.
@@ -198,6 +205,8 @@ impl Omoya {
             owed_vt_switches: 0,
             space,
             tiling: crate::layout::Tiling::default(),
+            bindings: crate::deed::default_bindings(),
+            session_command: None,
             loop_signal,
             socket_name,
             compositor_state,

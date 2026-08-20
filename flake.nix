@@ -444,11 +444,28 @@
 
 
                     dest = sys.argv[1]
-                    socks = glob.glob("/run/user/*/kanshou/omoya-*.sock")
-                    if not socks:
-                        print("no omoya kanshou socket found")
+                    # The first socket that ANSWERS — see nix/kanshou-get.py.
+                    # A kanshou socket outlives a process that dies hard, and
+                    # picking a dead one reads as "the compositor is not
+                    # answering" rather than "that file has no owner".
+                    sock = None
+                    for cand in sorted(
+                        glob.glob("/run/user/*/kanshou/omoya-*.sock")
+                    ):
+                        try:
+                            probe = socket.socket(
+                                socket.AF_UNIX, socket.SOCK_STREAM
+                            )
+                            probe.settimeout(2)
+                            probe.connect(cand)
+                            probe.close()
+                            sock = cand
+                            break
+                        except OSError:
+                            continue
+                    if sock is None:
+                        print("no LIVE omoya kanshou socket found")
                         sys.exit(1)
-                    sock = socks[0]
                     print("socket:", sock)
                     print("request:", q(sock, ["capture"], [dest]))
                     for _ in range(50):

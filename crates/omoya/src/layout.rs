@@ -73,9 +73,13 @@ impl Tiling {
                         let dir = if self.depth_of(&tree, t) % 2 == 0 {
                             Direction::Right
                         } else {
-                            Direction::Down
+                            Direction::Below
                         };
-                        tree.split_leaf(t, id, dir, None);
+                        // 0.5: an even split. kukaku takes the ratio as a plain f32
+                        // and refines it internally, so there is no
+                        // "unspecified" to pass — an even split IS the
+                        // default, stated rather than implied.
+                        tree.split_leaf(t, id, dir, 0.5);
                         tree
                     }
                     // Focus names a window the tree does not hold — possible

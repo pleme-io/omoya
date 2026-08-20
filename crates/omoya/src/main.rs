@@ -19,6 +19,7 @@ mod logind;
 mod nuri_renderer;
 mod scanout;
 mod chord;
+mod deed;
 #[cfg(target_os = "linux")]
 mod drm;
 mod handlers;
@@ -698,6 +699,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         mode = args.mode.name(),
         "omoya is up — WAYLAND_DISPLAY is set for children"
     );
+
+    // Remember it so `Logo+Return` opens another of the same thing. Stored
+    // rather than re-read from args at chord time because `args` is consumed
+    // below, and because the seat's terminal is state the compositor should be
+    // able to answer about, not an argument it happens to still be holding.
+    data.state.session_command = args.spawn.clone();
 
     if let Some(cmd) = args.spawn
         && let Some((program, rest)) = cmd.split_first()

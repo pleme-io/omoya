@@ -20,7 +20,7 @@
 use smithay::{
     backend::input::{
         AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputBackend, InputEvent,
-        KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent,
+        KeyState, KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent,
     },
     input::{
         keyboard::FilterResult,
@@ -38,12 +38,22 @@ impl Omoya {
             InputEvent::Keyboard { event, .. } => {
                 let serial = SERIAL_COUNTER.next_serial();
                 let time = Event::time_msec(&event);
+                // Read BEFORE `event` is consumed by `keyboard.input`.
+                let event_state = event.state();
                 let Some(keyboard) = self.seat.get_keyboard() else {
                     return;
                 };
 
                 let mut owed: Option<String> = None;
                 let mut switched: Option<i32> = None;
+                // The deed a chord asked for, carried OUT of the filter
+                // closure. It cannot be performed inside: the closure holds
+                // `&mut Omoya` as `state`, and every deed needs the whole
+                // compositor — spawning reads the session command, focus
+                // moves the seat's keyboard focus, closing sends a configure.
+                // Deciding inside and acting outside is what keeps the filter
+                // a pure classification.
+                let mut deed: Option<crate::deed::Deed> = None;
                 keyboard.input::<(), _>(
                     self,
                     event.key_code(),
@@ -104,9 +114,47 @@ impl Omoya {
                                 }
                             }
                         }
+
+                        // ── ★ SEAT DEEDS: CLASSIFY HERE, ACT BELOW ────────
+                        //
+                        // Only on PRESS. `match_key` is stateful — it drives
+                        // awase's chord sequencing — so feeding it releases
+                        // too would advance a pending sequence twice per
+                        // keystroke and make every two-key chord unreachable.
+                        //
+                        // And CONSUMED, which is the opposite of the VT arm
+                        // above: a VT chord is forwarded because the seat
+                        // cannot provide the escape it represents, while a
+                        // seat deed must never also reach the client, or
+                        // Logo+Q closes the window AND the client reads a Q.
+                        if event_state == KeyState::Pressed {
+                            let hk = crate::chord::hotkey_from(
+                                modifiers,
+                                handle.modified_sym(),
+                            );
+                            if let Some(hk) = hk {
+                                let m = state.bindings.match_key(
+                                    hk,
+                                    &awase::mode::MatchContext::default(),
+                                );
+                                if let awase::mode::MatchResult::Matched {
+                                    action,
+                                    consume,
+                                } = m
+                                {
+                                    deed = Some(action);
+                                    if consume {
+                                        return FilterResult::Intercept(());
+                                    }
+                                }
+                            }
+                        }
                         FilterResult::Forward
                     },
                 );
+                if let Some(d) = deed {
+                    self.perform(d);
+                }
                 if let Some(vt) = switched {
                     tracing::info!(vt, "VT switch performed — the seat released the display");
                 }

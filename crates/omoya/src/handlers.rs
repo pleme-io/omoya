@@ -194,7 +194,7 @@ impl XdgShellHandler for Omoya {
         else {
             return;
         };
-        self.space.unmap_element(&window);
+        self.space.unmap_elem(&window);
         self.tiling.unmap(&window);
         self.apply_layout();
 
