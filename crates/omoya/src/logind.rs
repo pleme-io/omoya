@@ -484,3 +484,53 @@ impl smithay::reexports::calloop::EventSource for LogindSessionNotifier {
         self.rx.unregister(poll)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The logind path, actually EXECUTED — not merely compiled.
+    ///
+    /// ── ★ WHAT THIS CAN PROVE WITHOUT A SEAT ──────────────────────────────
+    /// Full verification needs a real session and a VT switch, which means a
+    /// machine whose display is at stake. That belongs on plo or a `vkms` VM
+    /// and has not been run.
+    ///
+    /// What CAN be proven from any Linux box with a system bus is the half
+    /// that silently doesn't: that the code reaches logind at all, that the
+    /// replies deserialise against the shapes measured off the wire, and that
+    /// a process outside a session gets a TYPED refusal rather than a panic or
+    /// a hang.
+    ///
+    /// ★ It is a UNIT test, not an integration one, because this crate has no
+    /// `lib.rs` — it is a binary, so `tests/` cannot import `crate::logind`.
+    /// Worth stating: the obvious file placement does not compile here.
+    #[test]
+    #[ignore = "talks to the real system bus; run with --ignored"]
+    fn a_process_outside_a_session_is_refused_by_type_not_by_panic() {
+        // ★ On a machine where the test process IS in a session this returns
+        // Ok — a different and better outcome — so both are accepted and
+        // distinguished in the output. An assertion demanding failure would
+        // break precisely on the machines that work.
+        match LogindSession::new() {
+            Err(Error::NoSession(why)) => {
+                println!("refused outside a session, as designed: {why}");
+            }
+            Err(Error::Bus(why)) => {
+                panic!("no system bus — this test needs one: {why}");
+            }
+            Err(other) => {
+                // Reaching logind and being refused LATER is still evidence the
+                // wire works: a TakeControl failure means GetSessionByPID and
+                // both property reads succeeded first, which is most of the
+                // contract.
+                println!("reached logind, refused later in the sequence: {other}");
+            }
+            Ok((session, _notifier)) => {
+                let seat = session.seat();
+                assert!(!seat.is_empty(), "a session always belongs to a seat");
+                println!("took control of a real session on seat {seat}");
+            }
+        }
+    }
+}
