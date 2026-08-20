@@ -1,0 +1,12 @@
+[package]
+name = "hairetsu"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "hairetsu (配列) — pure-Rust keyboard layout, modifier state, and XKB keymap emission"
+
+[dependencies]
+xkeysym = "0.2"
+
+[lints.clippy]
+pedantic = "warn"

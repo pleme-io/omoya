@@ -11,6 +11,23 @@ rust-version.workspace = true
 name = "omoya"
 path = "src/main.rs"
 
+# ── ★ WHY `nested` IS OFF BY DEFAULT ──────────────────────────────────────
+# The nested (winit) backend is a development convenience: it composites into
+# a window on an existing session so renderer and input work can be exercised
+# without a seat. It is NOT part of the shipped compositor.
+#
+# It is gated because winit pulls `xkbcommon-dl`, which **`dlopen`s
+# libxkbcommon at runtime**. A dlopen is invisible to `ldd` — so a binary
+# carrying winit would report a clean library census while loading the exact C
+# library this tree replaced. That is the same shape as `ash` dlopening
+# libvulkan, and it makes the census lie in the flattering direction, which is
+# worse than an honest link.
+#
+# Turning this on is fine for local work; it must not be on in what ships.
+[features]
+default = []
+nested = ["smithay/backend_winit"]
+
 [dependencies]
 omoya-spec = { path = "../omoya-spec", version = "0.1.0" }
 # The palette. NOT a hex literal in this crate — `irodori::NORD` is where Nord
@@ -52,7 +69,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 version = "0.7"
 default-features = false
 features = [
-  "backend_winit",
+  # `backend_winit` is NOT here — it arrives only through omoya's own
+  # `nested` feature, which is off by default. See the note above [features].
   "wayland_frontend",
   "desktop",
   # M4a: the DRM/KMS scanout path. `renderer_pixman` is the software

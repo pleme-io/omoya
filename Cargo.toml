@@ -1,7 +1,21 @@
 [workspace]
 resolver = "3"
-members = ["crates/omoya-spec", "crates/nuri",
+members = ["crates/omoya-spec", "crates/nuri", "crates/hairetsu",
+    "crates/xkbcommon-hairetsu",
     "crates/omoya"]
+
+# Replace the `xkbcommon` FFI binding with our pure-Rust one, fleet-wide.
+#
+# smithay depends on `xkbcommon` unconditionally and re-exports it in its
+# public API, so no feature choice drops `libxkbcommon.so` and removing it by
+# editing smithay would mean forking a dependency we deliberately keep. Cargo
+# patches by PACKAGE NAME, so replacing the dependency leaves smithay's source
+# untouched while changing what it links.
+#
+# The replacement serves one layout (`us`) and REFUSES anything else rather
+# than silently substituting — see `crates/xkbcommon-hairetsu`.
+[patch.crates-io]
+xkbcommon = { path = "crates/xkbcommon-hairetsu" }
 
 [workspace.package]
 version = "0.1.14"

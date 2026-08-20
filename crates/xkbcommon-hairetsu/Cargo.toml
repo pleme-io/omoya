@@ -1,0 +1,21 @@
+# The package NAME must be `xkbcommon`: cargo's `[patch.crates-io]` matches on
+# package name, and that is the whole mechanism by which this replaces the FFI
+# binding without smithay being modified at all. The directory is named for
+# what it actually is.
+[package]
+name = "xkbcommon"
+version = "0.8.0"
+edition = "2024"
+license = "MIT"
+description = "Pure-Rust xkbcommon API surface, backed by hairetsu"
+
+[dependencies]
+hairetsu = { path = "../hairetsu" }
+xkeysym = "0.2"
+
+[features]
+# The real crate gates these; consumers name them, so they must exist.
+# Neither changes behaviour here — there is no C library to link either way.
+default = ["wayland"]
+wayland = []
+x11 = []

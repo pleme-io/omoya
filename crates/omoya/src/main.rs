@@ -25,6 +25,9 @@ mod introspect;
 mod input;
 mod state;
 mod theme;
+/// The nested development backend. Off by default — it drags in winit, which
+/// `dlopen`s libxkbcommon behind `ldd`'s back. See `Cargo.toml`'s `[features]`.
+#[cfg(feature = "nested")]
 mod winit;
 
 use smithay::reexports::{
@@ -63,6 +66,12 @@ struct Args {
 enum Backend {
     /// smithay `backend_winit` — composites into a window belonging to an
     /// existing X11 or Wayland session. Needs no DRM device, no root, no VT.
+    ///
+    /// Development only, and absent unless built with `--features nested`:
+    /// the variant is gated rather than left to fail at runtime, so
+    /// `--backend nested` on a shipped binary is a clear "unknown backend"
+    /// rather than a start-up that dies later for an unrelated-looking reason.
+    #[cfg(feature = "nested")]
     Nested,
     /// smithay `backend_drm` — takes a display. M4a: scanout only, no input.
     Drm,
@@ -152,6 +161,7 @@ fn parse_args() -> Result<Args, String> {
             "--backend" => {
                 let v = it.next().ok_or("--backend needs a value (nested | drm)")?;
                 backend = match v.as_str() {
+                    #[cfg(feature = "nested")]
                     "nested" | "winit" => Backend::Nested,
                     "drm" | "kms" => Backend::Drm,
                     other => {
@@ -467,6 +477,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     match args.backend {
+        #[cfg(feature = "nested")]
         Backend::Nested => {
             introspect.backend.store(0, std::sync::atomic::Ordering::Relaxed);
             crate::winit::init_winit(&mut event_loop, &mut data)?;
