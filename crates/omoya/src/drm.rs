@@ -421,7 +421,7 @@ where
                     // which is the tell that the element model splits
                     // "where is it" from "how does it paint".
                     for element in &elements {
-                        let geo = element.geometry(scale);
+                        let geo = element.geometry(scale.into());
                         element.draw(&mut frame, element.src(), geo, &[geo], &[])?;
                     }
                     let _sync = frame.finish()?;
@@ -451,10 +451,10 @@ where
             if let Ok(path) = std::env::var("OMOYA_CAPTURE")
                 && !path.is_empty()
             {
-                match compositor.frame_submitted() {
-                    Ok(_) => {}
-                    Err(e) => tracing::debug!(error = %e, "frame_submitted"),
-                }
+                // ★ No `frame_submitted()` to call. That was DrmCompositor
+                // acknowledging its own queued frame; `DirectScanout::flip`
+                // has already page-flipped synchronously by the time this
+                // runs, so there is nothing outstanding to reap.
                 // Re-render into a bindable target to read back. Done AFTER the
                 // scanout frame so the capture reflects what was shown, not a
                 // frame composed specially for it.
