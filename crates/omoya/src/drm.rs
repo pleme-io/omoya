@@ -450,6 +450,37 @@ where
                         element.draw(&mut frame, element.src(), geo, &[geo], &[])?;
                     }
                     let _sync = frame.finish()?;
+
+                    // ★ CAPTURE HERE, WHERE THE FRAMEBUFFER IS STILL BOUND.
+                    //
+                    // This used to live after the frame, outside this block,
+                    // where it logged "capture requested" and called nothing —
+                    // a stub that reported success while producing no file.
+                    // It could not have worked there: `fb` is dropped at the
+                    // closing brace, and `capture` needs it.
+                    //
+                    // Placed after `finish()` so what is read back is the frame
+                    // that was actually composed, and before `flip()` so it
+                    // reflects the buffer being handed to the display rather
+                    // than whatever the previous flip left in the other slot.
+                    //
+                    // `frame` is consumed by `finish()`, so `renderer` is free
+                    // again here; `Framebuffer<'buffer>` borrows the dmabuf,
+                    // not the renderer, which is what makes this legal at all.
+                    if let Ok(path) = std::env::var("OMOYA_CAPTURE")
+                        && !path.is_empty()
+                    {
+                        let size = (mode.size.w, mode.size.h);
+                        match capture(&mut renderer, &fb, size, std::path::Path::new(&path)) {
+                            Ok(()) => tracing::info!(path = %path, w = size.0, h = size.1, "captured"),
+                            // Reported, never fatal: a failed screenshot must
+                            // not take down the seat it was meant to diagnose.
+                            Err(e) => tracing::error!(error = %e, path = %path, "capture failed"),
+                        }
+                        // One-shot: a capture every frame would fill the disk
+                        // and change the timing it exists to observe.
+                        unsafe { std::env::remove_var("OMOYA_CAPTURE") };
+                    }
                 }
                 scanout.flip()?;
                 Ok(())
@@ -469,26 +500,12 @@ where
                     |_, _| Some(output.clone()),
                 );
             });
-            // ★ Capture on demand. Env-gated rather than a flag because the
-            // useful moment is usually "the seat is already running and
-            // something looks wrong" — restarting it to add a flag would
-            // destroy the state being investigated.
-            if let Ok(path) = std::env::var("OMOYA_CAPTURE")
-                && !path.is_empty()
-            {
-                // ★ No `frame_submitted()` to call. That was DrmCompositor
-                // acknowledging its own queued frame; `DirectScanout::flip`
-                // has already page-flipped synchronously by the time this
-                // runs, so there is nothing outstanding to reap.
-                // Re-render into a bindable target to read back. Done AFTER the
-                // scanout frame so the capture reflects what was shown, not a
-                // frame composed specially for it.
-                tracing::info!(path = %path, "capture requested");
-                // Clearing the var makes this one-shot: a capture every frame
-                // would fill the disk and change the timing it is meant to
-                // observe.
-                unsafe { std::env::remove_var("OMOYA_CAPTURE") };
-            }
+            // ★ Capture is handled INSIDE the frame closure above, where the
+            // framebuffer is still bound. It was here, and here it could only
+            // ever log — `fb` is out of scope by this point. Env-gated rather
+            // than a flag because the useful moment is "the seat is already
+            // running and something looks wrong", and restarting it to pass a
+            // flag destroys the state being investigated.
 
             // ★ Publish the frame counter HERE, in the loop that actually
             // renders. The first cut incremented it nowhere, so a live query
@@ -497,6 +514,27 @@ where
             // frame_perf 0 at 120fps). A counter that is never incremented is
             // indistinguishable from a compositor that is stuck.
             introspect.tick(data.state.space.elements().count() as u64);
+
+            // ★ AND PUBLISH `owed_vt_switches`, WHICH NOTHING WAS WRITING.
+            //
+            // There are two fields with this name: `Omoya::owed_vt_switches`
+            // (a plain u64, incremented by the chord handler at
+            // `input.rs:71`) and `OmoyaIntrospect::owed_vt_switches` (the
+            // AtomicU64 the kanshou leaf actually reads). Only the first was
+            // ever written, so the leaf answered `0` forever — and answering
+            // is exactly what made it look healthy. It was quoted as evidence
+            // of a good VT state repeatedly on 2026-08-20; it meant nothing.
+            //
+            // Published from the render loop for the same reason `frames` is:
+            // the socket thread must not lock `Omoya` (see introspect.rs's
+            // header), so the owner pushes rather than the reader pulling.
+            //
+            // `every_schema_leaf_answers` did not catch this, and could not:
+            // it proves a leaf ANSWERS, never that anything FEEDS it. A leaf
+            // with no writer is the vacuous-gate shape in miniature.
+            introspect
+                .owed_vt_switches
+                .store(data.state.owed_vt_switches, std::sync::atomic::Ordering::Relaxed);
 
             data.state.space.refresh();
             data.state.popups.cleanup();
