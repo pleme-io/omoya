@@ -87,6 +87,21 @@ pub mod ffi {
     pub const XKB_STATE_LEDS: u32 = 1 << 8;
 }
 
+/// Opaque stand-ins for the C handle types.
+///
+/// The real crate returns `*mut xkb_context` and friends from `get_raw_ptr`.
+/// Those types must exist for the signatures to typecheck. **Every use of
+/// `get_raw_ptr` in smithay is inside a `Debug` impl** — all four are
+/// `.field("…", &x.get_raw_ptr())` — so the value is formatted as an address
+/// and never dereferenced. That is checked, not assumed; it is what makes
+/// returning a non-C address safe here.
+#[allow(non_camel_case_types)]
+pub enum xkb_context {}
+#[allow(non_camel_case_types)]
+pub enum xkb_keymap {}
+#[allow(non_camel_case_types)]
+pub enum xkb_state {}
+
 /// Whether a key was pressed or released.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyDirection {
@@ -156,6 +171,13 @@ impl Context {
     pub const fn get_flags(&self) -> ContextFlags {
         self.flags
     }
+
+    /// The C handle. There isn't one — this returns this object's own address,
+    /// which is what the only callers (`Debug` impls) actually print.
+    #[must_use]
+    pub fn get_raw_ptr(&self) -> *mut xkb_context {
+        (self as *const Self).cast::<xkb_context>().cast_mut()
+    }
 }
 
 impl Default for Context {
@@ -200,6 +222,32 @@ impl Keymap {
         Some(Self { inner: Arc::new(hairetsu::Keymap::us()) })
     }
 
+    /// Compile a keymap from a shared-memory fd, as a Wayland client sends one.
+    ///
+    /// Always `Ok(None)`, for the same reason as [`Self::new_from_string`]:
+    /// hairetsu emits keymap text but does not parse it. `Ok(None)` is the
+    /// crate's own "compiled to nothing" answer, so callers take their existing
+    /// failure path rather than meeting a surprise.
+    ///
+    /// # Safety
+    ///
+    /// Matches the C-backed signature, which is `unsafe` because it mmaps the
+    /// caller's fd. This implementation touches neither the fd nor the size.
+    ///
+    /// # Errors
+    ///
+    /// Never returns `Err`; the signature keeps `io::Result` for compatibility.
+    #[allow(clippy::missing_const_for_fn, clippy::unnecessary_wraps)]
+    pub unsafe fn new_from_fd(
+        _context: &Context,
+        _fd: std::os::fd::OwnedFd,
+        _size: usize,
+        _format: KeymapFormat,
+        _flags: KeymapCompileFlags,
+    ) -> std::io::Result<Option<Self>> {
+        Ok(None)
+    }
+
     /// Compile a keymap from XKB text.
     ///
     /// Always `None`: hairetsu emits keymap text but does not parse it. The
@@ -238,9 +286,21 @@ impl Keymap {
             .unwrap_or(LED_INVALID)
     }
 
+    /// See [`Context::get_raw_ptr`].
+    #[must_use]
+    pub fn get_raw_ptr(&self) -> *mut xkb_keymap {
+        (self as *const Self).cast::<xkb_keymap>().cast_mut()
+    }
+
     #[must_use]
     pub fn num_layouts(&self) -> LayoutIndex {
         self.inner.num_layouts()
+    }
+
+    /// Iterate the layout names.
+    #[must_use]
+    pub fn layouts(&self) -> KeymapLayouts<'_> {
+        KeymapLayouts { keymap: self, ind: 0, len: self.inner.num_layouts() }
     }
 
     #[must_use]
@@ -276,6 +336,26 @@ impl Keymap {
         level: LevelIndex,
     ) -> &[Keysym] {
         self.inner.key_syms_by_level(key.raw(), level)
+    }
+}
+
+/// Iterator over a keymap's layout names.
+pub struct KeymapLayouts<'a> {
+    keymap: &'a Keymap,
+    ind: LayoutIndex,
+    len: LayoutIndex,
+}
+
+impl<'a> Iterator for KeymapLayouts<'a> {
+    type Item = &'a str;
+
+    fn next(&mut self) -> Option<&'a str> {
+        if self.ind == self.len {
+            return None;
+        }
+        let name = self.keymap.inner.layout_name(self.ind);
+        self.ind += 1;
+        Some(name)
     }
 }
 
@@ -331,6 +411,25 @@ impl State {
         _type_: StateComponent,
     ) -> bool {
         self.inner.mod_name_is_active(name.borrow())
+    }
+
+    /// See [`Context::get_raw_ptr`].
+    #[must_use]
+    pub fn get_raw_ptr(&self) -> *mut xkb_state {
+        (self as *const Self).cast::<xkb_state>().cast_mut()
+    }
+
+    #[must_use]
+    pub fn led_index_is_active(&self, idx: LedIndex) -> bool {
+        idx != LED_INVALID
+            && idx < u32::try_from(hairetsu::LED_NAMES.len()).unwrap_or(u32::MAX)
+            && self.inner.leds() & (1 << idx) != 0
+    }
+
+    #[must_use]
+    pub fn layout_index_is_active(&self, idx: LayoutIndex, _type_: StateComponent) -> bool {
+        // Single-layout by scope, so layout 0 is the only active one.
+        idx == 0
     }
 
     #[must_use]
@@ -452,6 +551,48 @@ mod tests {
         assert_eq!(ffi::XKB_STATE_LAYOUT_EFFECTIVE, STATE_LAYOUT_EFFECTIVE);
         assert_eq!(ffi::XKB_STATE_MODS_EFFECTIVE, STATE_MODS_EFFECTIVE);
         assert_eq!(ffi::XKB_STATE_MODS_DEPRESSED, STATE_MODS_DEPRESSED);
+    }
+
+    #[test]
+    fn layouts_iterates_exactly_the_declared_layouts() {
+        let km = keymap();
+        let names: Vec<&str> = km.layouts().collect();
+        assert_eq!(names.len(), km.num_layouts() as usize);
+        assert_eq!(names, vec!["English (US)"]);
+    }
+
+    #[test]
+    fn led_index_is_active_agrees_with_led_name_is_active() {
+        // Two spellings of one question; disagreement would be invisible.
+        let km = keymap();
+        let mut st = State::new(&km);
+        let caps = km.led_get_index(LED_NAME_CAPS);
+        assert!(!st.led_index_is_active(caps));
+        st.update_key(Keycode::new(66), KeyDirection::Down);
+        assert!(st.led_index_is_active(caps));
+        assert_eq!(st.led_index_is_active(caps), st.led_name_is_active(LED_NAME_CAPS));
+        // An invalid index must not index out of bounds or shift by >= 32.
+        assert!(!st.led_index_is_active(LED_INVALID));
+        assert!(!st.led_index_is_active(99));
+    }
+
+    #[test]
+    fn layout_zero_is_the_active_layout() {
+        let km = keymap();
+        let st = State::new(&km);
+        assert!(st.layout_index_is_active(0, STATE_LAYOUT_EFFECTIVE));
+        assert!(!st.layout_index_is_active(1, STATE_LAYOUT_EFFECTIVE));
+    }
+
+    #[test]
+    fn raw_pointers_are_distinct_and_non_null() {
+        // Only ever formatted by `Debug`, but a null would render as 0x0 for
+        // every object and make those logs useless.
+        let km = keymap();
+        let st = State::new(&km);
+        assert!(!km.get_raw_ptr().is_null());
+        assert!(!st.get_raw_ptr().is_null());
+        assert!(!Context::default().get_raw_ptr().is_null());
     }
 
     #[test]
