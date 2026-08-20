@@ -25,7 +25,7 @@
 
 use std::sync::Arc;
 
-use smithay::backend::allocator::Fourcc;
+use smithay::backend::allocator::{Buffer as _, Fourcc};
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::renderer::{
     Bind, Color32F, DebugFlags, Frame, ImportDma, ImportDmaWl, ImportMem, ImportMemWl, Renderer,
@@ -101,15 +101,24 @@ impl Texture for NuriFramebuffer<'_> {
 }
 
 /// The renderer.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct NuriRenderer {
     debug: DebugFlags,
+}
+
+impl Default for NuriRenderer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl NuriRenderer {
     #[must_use]
     pub fn new() -> Self {
-        Self::default()
+        // `DebugFlags` has no Default impl — spelled out rather than derived.
+        Self {
+            debug: DebugFlags::empty(),
+        }
     }
 
     /// The formats nuri can address.
@@ -357,7 +366,73 @@ impl ImportMem for NuriRenderer {
     }
 }
 
-impl ImportMemWl for NuriRenderer {}
+impl ImportMemWl for NuriRenderer {
+    /// Import a client's SHM buffer.
+    ///
+    /// ── ★ THIS IS THE PATH THAT ACTUALLY CARRIES CLIENTS ──────────────────
+    /// On the software scanout path a Wayland client draws into shared memory
+    /// and hands over a `wl_buffer`. `import_dmabuf` is refused above because
+    /// nothing on this path uses it; THIS is where a window's pixels come
+    /// from, so it is implemented rather than deferred.
+    ///
+    /// `with_buffer_contents` is the only sanctioned way to read one: it holds
+    /// the pool lock for the callback's duration. Copying inside that closure
+    /// is deliberate — the client may release or resize the pool the moment it
+    /// returns, and a texture holding a borrow into it would read freed
+    /// memory on the next frame.
+    fn import_shm_buffer(
+        &mut self,
+        buffer: &smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer,
+        _surface: Option<&smithay::wayland::compositor::SurfaceData>,
+        _damage: &[Rectangle<i32, BufferCoord>],
+    ) -> Result<Self::TextureId, Self::Error> {
+        use smithay::wayland::shm;
+
+        shm::with_buffer_contents(buffer, |ptr, len, data| {
+            let fourcc = shm::shm_format_to_fourcc(data.format)
+                .ok_or(Error::Unsupported("shm format with no fourcc"))?;
+            if !matches!(fourcc, Fourcc::Argb8888 | Fourcc::Xrgb8888) {
+                return Err(Error::Unsupported("shm format nuri cannot address"));
+            }
+
+            #[allow(clippy::cast_sign_loss)]
+            let (offset, stride, height, width) = (
+                data.offset as usize,
+                data.stride as usize,
+                data.height as usize,
+                data.width,
+            );
+
+            // ★ CHECKED, not trusted. `offset`, `stride` and `height` come
+            // from the CLIENT. A pool shorter than they claim is how a
+            // malicious or buggy client reads compositor memory, and the only
+            // place to stop it is here, before the copy.
+            let need = offset
+                .checked_add(stride.checked_mul(height).ok_or(Error::Unsupported(
+                    "shm stride * height overflows",
+                ))?)
+                .ok_or(Error::Unsupported("shm offset + size overflows"))?;
+            if need > len {
+                return Err(Error::Unsupported("shm buffer shorter than its geometry"));
+            }
+
+            // SAFETY: `ptr` is valid for `len` bytes for the callback's
+            // duration, and the range is bounds-checked above.
+            let bytes = unsafe { std::slice::from_raw_parts(ptr.add(offset), need - offset) };
+
+            Ok(NuriTexture {
+                data: Arc::new(bytes.to_vec()),
+                #[allow(clippy::cast_sign_loss)]
+                width: width as u32,
+                #[allow(clippy::cast_sign_loss)]
+                height: data.height as u32,
+                stride,
+                format: fourcc,
+            })
+        })
+        .map_err(|e| Error::Map(format!("shm pool: {e:?}")))?
+    }
+}
 
 impl ImportDma for NuriRenderer {
     fn dmabuf_formats(&self) -> smithay::backend::allocator::format::FormatSet {
