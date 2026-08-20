@@ -23,6 +23,35 @@ The draft called plo "a live desktop". That is a three-way understatement and on
 
 So the blast radius of a wedged seat is **DNS for the LAN and the tailnet route into the home subnet** — not the cluster. And the recursion is real: the route you would use to reach plo is advertised by plo.
 
+**★ ADDED 2026-08-20, THE HARD WAY. plo has NO memory guard and NO watchdog.**
+Measured after wedging it: `grep -riE 'watchdog|kernel\.panic|oomd|MemoryMax|MemoryHigh'`
+over `nodes/plo/*.nix` and both profiles returns **nothing**. So on this node:
+
+- nothing bounds any process's memory,
+- nothing kills a runaway before the box starves,
+- and nothing reboots it afterwards.
+
+The failure mode is not theoretical — it happened. Two `mado` processes at
+~1.4 GB each were left running alongside the session; within the hour plo
+stopped scheduling userspace. The kernel stayed alive throughout (ICMP answered,
+latency degrading 3 ms → 26–192 ms erratic; TCP/53 still completed its handshake
+while dnsmasq never serviced it) — which is precisely what makes it
+unrecoverable remotely: **the machine looks up and is unreachable.** Port 22 is
+filtered on the LAN by design, tailscale was the only door, and tailscaled was
+one of the starved processes. It needed the power button.
+
+This belongs above every rendering item in §3. A seat that can starve its own
+node has a reliability bug that no frame-rate work addresses:
+
+- **`systemd-oomd`, or `MemoryMax=` on the session slice** — bound what a seat
+  session may consume, so a leaking client cannot take DNS and the tailnet route
+  with it.
+- **A hardware watchdog** (`boot.kernelModules` + `systemd.watchdog.runtimeTime`)
+  — on a node whose console is a single point of failure, self-recovery is worth
+  more than on any other machine in the fleet.
+
+Both are config, not code, and neither needs the compositor to change.
+
 **Consequence, adopted as a standing rule:** no seat change lands on plo until it has (a) passed on vkms and (b) a verified ssh path exists at the moment of landing.
 
 ---
