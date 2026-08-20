@@ -116,6 +116,22 @@ pub struct Omoya {
     pub tiling: crate::layout::Tiling,
     pub loop_signal: LoopSignal,
 
+    /// `wp_presentation` — when a frame actually reached the screen.
+    ///
+    /// Added because every client that animates smoothly wants it: a seat
+    /// without `wp_presentation` forces them all onto frame-callback timing
+    /// alone, with no way to learn when a buffer actually reached the screen.
+    ///
+    /// ★ IT IS ALSO A HYPOTHESIS, AND IT IS LABELLED AS ONE. On the vkms gate
+    /// a second `weston-presentation-shm` mapped, stayed alive, logged
+    /// nothing and drew nothing, while the layout tree was verifiably correct
+    /// (`0,0 512x768 | 512,0 512x768`). A client built around presentation
+    /// feedback waiting for a global that never arrives fits that shape — but
+    /// **fits is not proves**, and the first instance of the same binary DID
+    /// draw, which the hypothesis does not yet explain. The `elements` leaf
+    /// beside `windows` is the measurement that settles it either way; this
+    /// protocol earns its place on the first reason regardless of the second.
+    pub presentation_state: smithay::wayland::presentation::PresentationState,
     pub compositor_state: CompositorState,
     pub xdg_shell_state: XdgShellState,
     pub shm_state: ShmState,
@@ -179,6 +195,14 @@ impl Omoya {
         let compositor_state = CompositorState::new::<Self>(&dh);
         let xdg_shell_state = XdgShellState::new::<Self>(&dh);
         let shm_state = ShmState::new::<Self>(&dh, vec![]);
+        // CLOCK_MONOTONIC. The clock id is not cosmetic: it tells the client
+        // which clock the timestamps are on, so naming the wrong one makes
+        // every presentation time silently WRONG rather than absent.
+        //
+        // Built here beside its siblings rather than inline in the struct
+        // literal, because `dh` is moved into `display_handle` there.
+        let presentation_state =
+            smithay::wayland::presentation::PresentationState::new::<Self>(&dh, 1);
         let output_manager_state = OutputManagerState::new_with_xdg_output::<Self>(&dh);
         let mut seat_state = SeatState::new();
         let data_device_state = DataDeviceState::new::<Self>(&dh);
@@ -232,6 +256,7 @@ impl Omoya {
             session_command: None,
             loop_signal,
             socket_name,
+            presentation_state,
             compositor_state,
             xdg_shell_state,
             shm_state,

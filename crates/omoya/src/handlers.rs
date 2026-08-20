@@ -221,6 +221,9 @@ impl XdgShellHandler for Omoya {
 }
 
 delegate_xdg_shell!(Omoya);
+// `wp_presentation` — see `Omoya::presentation_state`. No handler trait to
+// implement: the protocol is pure output, so the delegate is the whole wiring.
+smithay::delegate_presentation!(Omoya);
 
 /// Called on every `WlSurface::commit`.
 ///
