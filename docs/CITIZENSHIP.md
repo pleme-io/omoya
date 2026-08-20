@@ -227,7 +227,7 @@ $ ldd .../rust_omoya-0.1.14/bin/omoya
     libc.so.6   libgcc_s.so.1   libm.so.6   linux-vdso.so.1   ld-linux-x86-64.so.2
 
 $ strings -a .../bin/omoya | grep -oE 'lib[a-zA-Z0-9_.+-]*\.so[0-9.]*' | sort -u
-    libc.so.6   libgcc_s.so.1   libm.so.6
+    libc.so.6   libgcc_s.so.1   libm.so.6   libwayland-server.so
 
 $ nix path-info -r .../rust_omoya-0.1.14 | grep -icE 'wayland|xkb|libinput|pixman|seatd|gbm|mesa'
     0                                   # closure is 5 paths, was 107
@@ -235,6 +235,14 @@ $ nix path-info -r .../rust_omoya-0.1.14 | grep -icE 'wayland|xkb|libinput|pixma
 
 Before this work the same binary linked nine: `libc libgbm libgcc_s libinput
 libm libpixman-1 libseat libudev libxkbcommon`.
+
+**`libwayland-server.so` in that `strings` output is the one thing here that
+needs explaining rather than celebrating.** It is `wayland-backend`'s
+`server_system` path — the FFI alternative to the pure-Rust backend omoya
+actually uses — and the name survives in the binary as a dead string. The
+closure is what settles it: the library **is not there**, so nothing can open
+it. That is the whole reason both censuses are run instead of one. Had the
+closure listed wayland, this paragraph would say the opposite.
 
 **The closure is why the wrapper had to go.** `ldd` was already clean while
 `nix path-info -r` still listed wayland, pixman, libinput, mesa-libgbm and
