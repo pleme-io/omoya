@@ -225,16 +225,22 @@ impl Introspect for OmoyaIntrospect {
             // `found`, an unknown verb is `refused` BY NAME, and a missing
             // argument is refused as such rather than defaulting.
             "do" => {
+                // `unknown_field`, not a bespoke variant — kanshou's error
+                // vocabulary is closed (UnknownField / UnknownMethod /
+                // TypeMismatch / BadArity / Internal) and there is no
+                // NotFound. Reaching for one that does not exist is how a
+                // refusal ends up rendered as an internal error, which reads
+                // to the caller as "the seat is broken" rather than "you
+                // asked for something that is not a verb".
                 let Some(verb) = q.path.get(1) else {
-                    return Err(QueryError::NotFound(
-                        "do: needs a verb, e.g. do/focus-right; \
-                         list them with `verbs`"
-                            .into(),
+                    return Err(QueryError::unknown_field(
+                        "do needs a verb, e.g. do/focus-right — \
+                         list them with `verbs`",
                     ));
                 };
                 let Some(deed) = crate::deed::Deed::parse(verb) else {
-                    return Err(QueryError::NotFound(format!(
-                        "do: {verb:?} is not a verb this seat accepts; \
+                    return Err(QueryError::unknown_field(format!(
+                        "{verb:?} is not a verb this seat accepts; \
                          the accepted set is `verbs`"
                     )));
                 };

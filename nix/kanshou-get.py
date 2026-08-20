@@ -57,7 +57,11 @@ def main():
         print("no LIVE omoya kanshou socket found", file=sys.stderr)
         return 1
     for leaf in sys.argv[1:]:
-        r = q(sock, [leaf], [])
+        # A slash means a multi-segment path: `do/focus-right` is the path
+        # ["do", "focus-right"], which is how the mutating leaf takes its
+        # verb. Split here rather than adding a second script — the wire
+        # already carries a path, so nothing new is needed on the server.
+        r = q(sock, leaf.split("/"), [])
         # `kotae`: an answer says WHICH of four things happened. A missing
         # leaf must not print as a number, or a typo in the test reads as a
         # measurement of zero.

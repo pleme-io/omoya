@@ -772,6 +772,33 @@
               elements = int(machine.succeed("kanshou-get elements").strip())
               print(f"render elements (excluding the cursor): {elements}")
               print("geometry:", machine.succeed("kanshou-get geometry").strip())
+
+              # ── ★ CAN THE SEAT BE DRIVEN, NOT JUST READ? ────────────────
+              #
+              # The operator's ask was "leverage mcp to ... go to desktop and
+              # DO THINGS". Every other assertion here reads. This one writes,
+              # and then checks the write LANDED rather than that the call
+              # returned — a queued deed that nothing drains answers exactly
+              # the same as one that ran.
+              #
+              # focus-right is the verb to test with, because its effect is
+              # observable through an independent leaf: `layout` is derived
+              # from the tree, and a focus move changes which window a
+              # subsequent split would target. Closing or spawning would也
+              # work but are harder to undo inside one gate.
+              print("verbs:", machine.succeed("kanshou-get verbs").strip())
+              print("do:", machine.succeed("kanshou-get do/focus-right").strip())
+
+              # An unknown verb must be REFUSED, by name — not defaulted to
+              # something adjacent, and not silently accepted. `kanshou-get`
+              # exits non-zero when a leaf does not answer Ok, so `fail` is
+              # the assertion.
+              refused = machine.fail("kanshou-get do/rm-rf-slash 2>&1")
+              print("refused:", refused.strip()[:120])
+              assert "not a verb" in refused, (
+                  "an unknown verb was not refused by name — the legality "
+                  f"gate is not gating. got: {refused!r}"
+              )
               # The totals are the denominator: 0 non-background out of 0
               # scanned would mean the rectangle fell off the image, which is
               # a different bug from an empty half and must not read as one.
