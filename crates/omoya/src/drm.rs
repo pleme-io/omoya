@@ -529,12 +529,21 @@ pub fn capture(
 /// Returns an error if the session cannot be acquired or the source cannot be
 /// inserted. A failure here leaves the seat renderable but not typeable, which
 /// the caller must decide about — this function will not silently continue.
-pub fn attach_input(
+/// ★ GENERIC OVER THE SESSION, not tied to libseat.
+///
+/// `LibinputSessionInterface<S>` is already generic over `S: Session`
+/// (`smithay .../backend/libinput/mod.rs:676-687`), so nothing about libinput
+/// required the concrete `LibSeatSession` this used to take — the coupling was
+/// ours, not smithay's. Making it generic is what lets the pure-Rust logind
+/// session be selected without touching a line of the input path.
+pub fn attach_input<S>(
     event_loop: &mut smithay::reexports::calloop::EventLoop<'static, crate::CalloopData>,
-    session: LibSeatSession,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let mut context =
-        Libinput::new_with_udev::<LibinputSessionInterface<LibSeatSession>>(session.into());
+    session: S,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    S: smithay::backend::session::Session + Clone + Send + 'static,
+{
+    let mut context = Libinput::new_with_udev::<LibinputSessionInterface<S>>(session.into());
     // The seat NAME, not a device path: libinput resolves the set of devices
     // belonging to this seat itself, which is what makes hotplug work without
     // omoya enumerating anything.

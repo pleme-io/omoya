@@ -48,6 +48,8 @@ struct Args {
     /// wrong in the second direction, blanks the console of a machine the
     /// operator may be sitting in front of. An operator asks for DRM.
     backend: Backend,
+    /// Which `Session` implementation arbitrates devices. See [`SessionBackend`].
+    session: SessionBackend,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -59,10 +61,31 @@ enum Backend {
     Drm,
 }
 
+/// Which implementation of `smithay::backend::session::Session` to use.
+///
+/// ── ★ WHY BOTH EXIST, AND WHY libseat IS STILL THE DEFAULT ────────────────
+/// `Logind` is the pure-Rust one (`crate::logind`) and it is the destination:
+/// it retires `libseat.so.1`, one of the six C libraries this compositor
+/// links. It is NOT the default yet, because a session backend owns the
+/// descriptors the display depends on, plo is the operator's live desktop, and
+/// nothing here has yet survived a VT switch on real hardware.
+///
+/// So both ship, selection is typed, and the default is the code that has been
+/// running. The flip is a one-line change gated on a witnessed VT switch —
+/// which is the point of making it selectable rather than swapping it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionBackend {
+    /// libseat — the C library, and what runs today.
+    LibSeat,
+    /// logind over D-Bus, pure Rust. The destination.
+    Logind,
+}
+
 fn parse_args() -> Result<Args, String> {
     let mut mode = SeatMode::Session;
     let mut spawn = None;
     let mut backend = Backend::Nested;
+    let mut session = SessionBackend::LibSeat;
     let mut it = std::env::args().skip(1);
 
     while let Some(arg) = it.next() {
@@ -83,6 +106,18 @@ fn parse_args() -> Result<Args, String> {
                     }
                 };
             }
+            "--session" => {
+                let v = it.next().ok_or("--session needs a value (libseat | logind)")?;
+                session = match v.as_str() {
+                    "libseat" => SessionBackend::LibSeat,
+                    "logind" => SessionBackend::Logind,
+                    other => {
+                        return Err(format!(
+                            "unknown session backend `{other}` — expected `libseat` or `logind`"
+                        ));
+                    }
+                };
+            }
             "--" => {
                 let rest: Vec<String> = it.by_ref().collect();
                 if !rest.is_empty() {
@@ -94,9 +129,12 @@ fn parse_args() -> Result<Args, String> {
                 return Err(concat!(
                     "omoya — the pleme-io Wayland compositor\n\n",
                     "  omoya [--mode entrance|session] [--backend nested|drm]\n",
-                    "        [-- CMD ARGS...]\n\n",
+                    "        [--session libseat|logind] [-- CMD ARGS...]\n\n",
                     "--backend nested  composite into an existing session's window\n",
-                    "--backend drm     take a display (M4a: scanout only, no input)\n\n",
+                    "--backend drm     take a display (M4a: scanout only, no input)\n",
+                    "--session libseat the C library (default — what has been running)\n",
+                    "--session logind  logind over D-Bus, pure Rust. Retires libseat.so.1;\n",
+                    "                  not yet the default, see SessionBackend.\n\n",
                     "`lock` is not a launchable mode: it is in-process session\n",
                     "state (theory/OMOYA.md §4.2)."
                 )
@@ -107,9 +145,66 @@ fn parse_args() -> Result<Args, String> {
     }
     Ok(Args {
         mode,
+        session,
         spawn,
         backend,
     })
+}
+
+/// Attach input and wire the session notifier into the event loop.
+///
+/// ── ★ WHY THE NOTIFIER IS INSERTED AND NEVER JUST HELD ────────────────────
+/// It is the session's only strong reference AND its event source. Binding it
+/// to `_notifier` — which is what this code did until 2026-08-19 — dropped it
+/// at the end of the match arm, so every later `Session::open` failed with
+/// `SessionLost` and VT-switch events were never delivered at all. Inserting it
+/// into the loop fixes both: the loop owns it, so it outlives every open.
+fn attach_session<S, N>(
+    event_loop: &mut smithay::reexports::calloop::EventLoop<'static, CalloopData>,
+    session: S,
+    notifier: N,
+    introspect: &std::sync::Arc<crate::introspect::OmoyaIntrospect>,
+) where
+    S: smithay::backend::session::Session + Clone + Send + 'static,
+    N: smithay::reexports::calloop::EventSource<
+            Event = smithay::backend::session::Event,
+            Metadata = (),
+            Ret = (),
+        > + 'static,
+    N::Error: Into<Box<dyn std::error::Error + Sync + Send>>,
+{
+    use std::sync::atomic::Ordering;
+
+    if let Err(e) = crate::drm::attach_input(event_loop, session) {
+        tracing::error!(error = %e, "input attach failed — seat is look-only");
+    } else {
+        introspect.input_attached.store(1, Ordering::Relaxed);
+    }
+
+    let intro = introspect.clone();
+    match event_loop.handle().insert_source(notifier, move |event, (), _data| {
+        use smithay::backend::session::Event as SessionEvent;
+        match event {
+            SessionEvent::ActivateSession => {
+                intro.session_active.store(1, Ordering::Relaxed);
+                tracing::info!("session ACTIVATED — the seat is ours again");
+            }
+            SessionEvent::PauseSession => {
+                intro.session_active.store(0, Ordering::Relaxed);
+                tracing::info!("session PAUSED — another VT holds the seat");
+            }
+        }
+        intro.session_events.fetch_add(1, Ordering::Relaxed);
+    }) {
+        Ok(_token) => introspect.session_active.store(1, Ordering::Relaxed),
+        // Reported, not fatal: a seat that cannot observe VT switches is
+        // degraded; a seat that refuses to start is worse.
+        Err(e) => tracing::error!(
+            error = %e,
+            "session notifier not inserted — VT switches will go unobserved and \
+             later device opens will fail"
+        ),
+    }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -201,82 +296,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // to come up at all is a worse one — on a machine whose only
             // console this may be, degrading to "visible but not typeable"
             // beats degrading to "black".
-            match smithay::backend::session::libseat::LibSeatSession::new() {
-                Ok((session, notifier)) => {
-                    if let Err(e) = crate::drm::attach_input(&mut event_loop, session) {
-                        tracing::error!(error = %e, "input attach failed — seat is look-only");
-                    } else {
-                        introspect
-                            .input_attached
-                            .store(1, std::sync::atomic::Ordering::Relaxed);
-                    }
-
-                    // ── ★ THE NOTIFIER IS THE SESSION'S ONLY STRONG REFERENCE ──
-                    // It was bound as `_notifier` and dropped at the end of this
-                    // arm. That is not a stylistic slip: `LibSeatSessionNotifier`
-                    // holds the only `Rc<LibSeatSessionImpl>` while every
-                    // `LibSeatSession` holds a `Weak`, and `Session::open` starts
-                    // with `self.internal.upgrade()`. Dropping it makes every
-                    // later open fail with `SessionLost`.
-                    //
-                    // What that cost, precisely: `udev_assign_seat` enumerates
-                    // and opens the devices present AT STARTUP, inside this arm,
-                    // while the Rc is still alive — so the seat came up typeable
-                    // and the bug stayed invisible. It bit afterwards, on
-                    // hotplug (a keyboard plugged in later cannot be opened) and
-                    // on VT switch (device resume needs the session).
-                    //
-                    // ★ And it is ALSO an EventSource. Dropping it meant
-                    // `ActivateSession`/`PauseSession` were never delivered at
-                    // all — so on a VT switch away, omoya kept rendering to a
-                    // device whose DRM master it no longer held, with nothing
-                    // in the loop even aware the switch had happened.
-                    //
-                    // Inserting it into the event loop fixes both at once: the
-                    // loop owns it, so it outlives every open, and the events
-                    // arrive. That is why this is an insert and not a `let`
-                    // binding hoisted up the function.
-                    let session_intro = introspect.clone();
-                    match event_loop.handle().insert_source(notifier, move |event, (), _data| {
-                        use smithay::backend::session::Event as SessionEvent;
-                        match event {
-                            SessionEvent::ActivateSession => {
-                                session_intro
-                                    .session_active
-                                    .store(1, std::sync::atomic::Ordering::Relaxed);
-                                tracing::info!("session ACTIVATED — the seat is ours again");
-                            }
-                            SessionEvent::PauseSession => {
-                                session_intro
-                                    .session_active
-                                    .store(0, std::sync::atomic::Ordering::Relaxed);
-                                tracing::info!("session PAUSED — another VT holds the seat");
-                            }
+            // ── ★ ONE SHAPE, TWO BACKENDS ────────────────────────────────
+            // Both arms do exactly the same three things — attach input,
+            // insert the notifier, publish that the session is live — and the
+            // only difference is which `Session` impl arbitrates devices. The
+            // duplication is real and deliberate: the two notifier types are
+            // distinct concrete types, and unifying them behind a trait object
+            // would need `EventSource` to be object-safe, which it is not.
+            //
+            // A macro would hide three lines and cost the reader the ability to
+            // see that the arms ARE the same, which is the property that makes
+            // flipping the default safe.
+            match args.session {
+                SessionBackend::LibSeat => {
+                    match smithay::backend::session::libseat::LibSeatSession::new() {
+                        Ok((session, notifier)) => {
+                            attach_session(&mut event_loop, session, notifier, &introspect);
                         }
-                        session_intro
-                            .session_events
-                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    }) {
-                        Ok(_token) => {
-                            introspect
-                                .session_active
-                                .store(1, std::sync::atomic::Ordering::Relaxed);
-                        }
-                        // Reported, not fatal — same reasoning as the arm above.
-                        // A seat that cannot observe VT switches is degraded;
-                        // a seat that refuses to start is worse.
                         Err(e) => tracing::error!(
                             error = %e,
-                            "session notifier not inserted — VT switches will go \
-                             unobserved and later device opens will fail"
+                            "no libseat session — seat is look-only. Run from a seat0 \
+                             session (a VT), not over ssh"
                         ),
                     }
                 }
-                Err(e) => tracing::error!(
-                    error = %e,
-                    "no libseat session — seat is look-only. Run from a seat0 \
-                     session (a VT), not over ssh"
-                ),
+                SessionBackend::Logind => match crate::logind::LogindSession::new() {
+                    Ok((session, notifier)) => {
+                        attach_session(&mut event_loop, session, notifier, &introspect);
+                    }
+                    Err(e) => tracing::error!(
+                        error = %e,
+                        "no logind session — seat is look-only. `--session logind` needs \
+                         this process to be IN a logind session; over ssh it is not"
+                    ),
+                },
             }
             // Fall through to the shared event loop below, which is what M2
             // already runs. That sharing is the point: one compositor, two
