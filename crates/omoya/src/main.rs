@@ -16,6 +16,7 @@
 mod evdev_backend;
 mod logind;
 mod nuri_renderer;
+mod scanout;
 mod chord;
 #[cfg(target_os = "linux")]
 mod drm;
