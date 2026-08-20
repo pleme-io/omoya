@@ -315,7 +315,6 @@ where
         > + 'static,
     N::Error: Into<Box<dyn std::error::Error + Sync + Send>>,
 {
-    use smithay::backend::session::Session as _;
     use smithay::reexports::rustix::fs::OFlags;
     use std::sync::atomic::Ordering;
 

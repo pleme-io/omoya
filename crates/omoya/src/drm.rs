@@ -485,7 +485,6 @@ where
     // compositor renders on", and omoya renders on the CPU into dumb buffers.
     // Naming a render node would be a claim it cannot back.
     {
-        use smithay::backend::renderer::ImportDma as _;
         let formats = renderer.dmabuf_formats();
         let count = formats.iter().count();
         let global = data
@@ -569,7 +568,11 @@ where
             let mut elements: Vec<SeatElements<R, _>> =
                 Vec::with_capacity(space_elements.len() + 1);
             {
-                use smithay::backend::renderer::element::{CommitCounter, Kind};
+                // `CommitCounter` is re-exported from `renderer::utils`, NOT
+                // from `element` — `element` imports it privately for its own
+                // use, so the obvious path compiles to "private struct".
+                use smithay::backend::renderer::element::Kind;
+                use smithay::backend::renderer::utils::CommitCounter;
                 use smithay::backend::renderer::element::solid::SolidColorRenderElement;
                 let p = data.state.pointer_location;
                 let (cw, ch) = (CURSOR_SIZE, CURSOR_SIZE);
@@ -645,7 +648,6 @@ where
                 };
 
                 let presented = {
-                    use smithay::backend::renderer::Bind;
                     let mut fb = renderer.bind(&mut dmabuf)?;
 
                     // ★ THE TRACKER OWNS CLEAR AND DRAW BOTH.
@@ -860,7 +862,6 @@ where
     R: smithay::backend::renderer::ExportMem,
     R::Error: Send + Sync + 'static,
 {
-    use smithay::backend::renderer::ExportMem;
     use std::io::Write;
 
     let region = smithay::utils::Rectangle::from_size((size.0, size.1).into());
