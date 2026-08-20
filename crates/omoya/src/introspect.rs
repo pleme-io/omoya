@@ -66,6 +66,20 @@ pub struct OmoyaIntrospect {
     pub backend: AtomicU64,
     /// Frames the render loop has queued since start.
     pub frames: AtomicU64,
+    /// Frames actually PRESENTED — i.e. page-flipped to the display.
+    ///
+    /// ★ THE DENOMINATOR FOR THE PARTIAL-REPAINT CLAIM, AND THE REASON IT IS
+    /// A CLAIM AND NOT AN ASSERTION. `frames` counts render-loop ticks and
+    /// goes up whether or not anything changed, so it cannot distinguish "we
+    /// now skip idle frames" from "we still composite the whole screen sixty
+    /// times a second". Damage tracking is exactly the kind of optimisation
+    /// that can be wired up, look correct in a screenshot, and quietly do
+    /// nothing — a stale element `Id` or a mis-derived buffer age turns every
+    /// frame into a full repaint while every pixel stays right.
+    ///
+    /// `presented < frames` on an idle seat is the measurement that says it is
+    /// working. Equal counts say it is not.
+    pub presented: AtomicU64,
     /// Windows currently mapped in the space.
     pub windows: AtomicU64,
     /// Reserved chords recognised but not acted on — the M4 debt counter.
@@ -144,6 +158,7 @@ impl Introspect for OmoyaIntrospect {
                 if self.backend.load(Ordering::Relaxed) == 1 { "drm" } else { "nested" }
             )),
             "frames" => Ok(n(&self.frames)),
+            "presented" => Ok(n(&self.presented)),
             "windows" => Ok(n(&self.windows)),
             "owed_vt_switches" => Ok(n(&self.owed_vt_switches)),
             // Ask for a screenshot. `capture` with a path argument leaves the
@@ -189,6 +204,7 @@ impl Introspect for OmoyaIntrospect {
                 "mode": self.mode.get().cloned().unwrap_or_default(),
                 "socket": self.socket.get().cloned().unwrap_or_default(),
                 "frames": self.frames.load(Ordering::Relaxed),
+                "presented": self.presented.load(Ordering::Relaxed),
                 "windows": self.windows.load(Ordering::Relaxed),
                 "input_attached": self.input_attached.load(Ordering::Relaxed) == 1,
                 "output": {
@@ -207,6 +223,7 @@ impl Introspect for OmoyaIntrospect {
         &[
             "backend",
             "frames",
+            "presented",
             "windows",
             "owed_vt_switches",
             "capture_result",

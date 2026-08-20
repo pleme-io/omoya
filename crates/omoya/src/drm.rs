@@ -724,6 +724,13 @@ where
                     scanout.flip()?;
                     // Accepted, not retired — the VBlank event clears this.
                     flip_pending.store(true, std::sync::atomic::Ordering::Release);
+                    // Counted HERE and not beside `frames`, because the gap
+                    // between the two counters IS the partial-repaint
+                    // measurement. Incremented after the flip is accepted, so
+                    // a refused flip is not counted as a presentation.
+                    introspect
+                        .presented
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 }
                 Ok(())
             })();

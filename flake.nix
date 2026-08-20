@@ -419,6 +419,7 @@
                   pkgs.weston
                   (pkgs.writers.writePython3Bin "ppm-probe" { } (builtins.readFile ./nix/ppm-probe.py))
                   (pkgs.writers.writePython3Bin "ppm-colours" { } (builtins.readFile ./nix/ppm-colours.py))
+                  (pkgs.writers.writePython3Bin "kanshou-get" { } (builtins.readFile ./nix/kanshou-get.py))
                   (pkgs.writers.writePython3Bin "kanshou-capture" { } ''
                     import glob
                     import json
@@ -665,6 +666,51 @@
                   "is not reaching the framebuffer. Check "
                   "NuriRenderer::context_id stability and the Xrgb alpha "
                   "normalisation."
+              )
+
+              # ── ★ DOES PARTIAL REPAINT ACTUALLY SKIP ANYTHING? ──────────
+              #
+              # Every assertion above passes just as happily when the
+              # compositor repaints the entire screen sixty times a second,
+              # because they check WHAT is on the display and not what it
+              # cost. Damage tracking is precisely the kind of change that can
+              # be wired up, look right in a screenshot, and do nothing — one
+              # unstable element `Id` or one mis-derived buffer age turns
+              # every frame back into a full repaint with every pixel still
+              # correct. Without this the commit message would be a claim and
+              # the gate would be its rubber stamp.
+              #
+              # The client is killed first so the seat is genuinely idle: with
+              # weston-presentation-shm running there IS new content every
+              # frame and presenting each one is the right answer, so a
+              # measurement taken then would prove nothing either way.
+              machine.succeed("pkill -f weston-presentation-shm || true")
+              machine.sleep(2)
+              f0, p0 = [
+                  int(x) for x in
+                  machine.succeed("kanshou-get frames presented").split()
+              ]
+              machine.sleep(3)
+              f1, p1 = [
+                  int(x) for x in
+                  machine.succeed("kanshou-get frames presented").split()
+              ]
+              ticks, flips = f1 - f0, p1 - p0
+              print(f"idle: {ticks} render ticks, {flips} presentations")
+              # The loop must still be ALIVE — otherwise zero presentations is
+              # a dead compositor rather than a quiet one, and the two look
+              # identical from the flip counter alone. This is the denominator
+              # that keeps the assertion below from passing vacuously.
+              assert ticks > 10, (
+                  f"only {ticks} render ticks in 3s — the render loop is not "
+                  "running, so the presentation count below measures nothing."
+              )
+              assert flips * 4 < ticks, (
+                  f"{flips} presentations for {ticks} idle render ticks. "
+                  "Nothing on screen changed, so damage tracking should have "
+                  "skipped nearly all of them. Suspect an unstable element "
+                  "Id (a fresh Id::new() per frame re-damages everything) or "
+                  "DirectScanout::back_buffer_age returning 0 forever."
               )
             '';
           };
