@@ -289,6 +289,13 @@ pub type Element = WaylandSurfaceRenderElement<PixmanRenderer>;
 /// has no gbm device at all.
 type Scanner = DrmCompositor<DumbAllocator, DrmDeviceFd, (), DrmDeviceFd>;
 
+/// ★ The element type follows the RENDERER, which is why it is now a type
+/// alias with a parameter rather than a fixed one. `WaylandSurfaceRenderElement`
+/// is generic over the renderer because a texture from one renderer is
+/// meaningless to another — the type system is carrying a real constraint here,
+/// not bookkeeping.
+pub type ElementOf<R> = WaylandSurfaceRenderElement<R>;
+
 /// Paint one frame of the seat background onto a real display, and hold it.
 ///
 /// ── WHY DUMB BUFFERS REACH A PIXMAN RENDERER AT ALL ───────────────────────
@@ -310,7 +317,6 @@ pub fn paint_background(
     let surface = device.create_surface(target.crtc, target.mode, &[target.connector])?;
     let (output, _mode) = output_for(target);
 
-    let mut renderer = PixmanRenderer::new()?;
     let allocator = DumbAllocator::new(fd.clone());
 
     // ARGB/XRGB8888 is the format simpledrm and every KMS driver worth the name
@@ -372,14 +378,34 @@ pub fn paint_background(
 ///
 /// # Errors
 /// Returns an error if the scanout cannot be prepared or the loop faults.
-pub fn run(
+/// ── ★ GENERIC OVER THE RENDERER ──────────────────────────────────────────
+/// This took `PixmanRenderer` concretely, and the element type
+/// (`WaylandSurfaceRenderElement<PixmanRenderer>`) was parameterised on it — so
+/// the choice of rasterizer was baked into the render loop's TYPES, not just
+/// its construction.
+///
+/// The bounds below are exactly what `space_render_elements` and
+/// `DrmCompositor::render_frame` demand, read off smithay rather than guessed:
+/// `Renderer + ImportAll + Bind<Dmabuf>`, with `TextureId: Clone + 'static`.
+/// `ImportAll` is a blanket impl satisfied by `ImportMemWl + ImportDmaWl`,
+/// which is why `nuri` implements those two rather than `ImportAll` directly.
+pub fn run<R>(
     event_loop: &mut smithay::reexports::calloop::EventLoop<'static, crate::CalloopData>,
     data: &mut crate::CalloopData,
     device: &mut DrmDevice,
     fd: &DrmDeviceFd,
     target: &ScanoutTarget,
     introspect: std::sync::Arc<crate::introspect::OmoyaIntrospect>,
-) -> Result<(), Box<dyn std::error::Error>> {
+    mut renderer: R,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    R: smithay::backend::renderer::Renderer
+        + smithay::backend::renderer::ImportAll
+        + smithay::backend::renderer::Bind<smithay::backend::allocator::dmabuf::Dmabuf>
+        + 'static,
+    R::TextureId: Clone + smithay::backend::renderer::Texture + 'static,
+    R::Error: Send + Sync + 'static,
+{
     let surface = device.create_surface(target.crtc, target.mode, &[target.connector])?;
     let (output, mode) = output_for(target);
 
@@ -390,7 +416,6 @@ pub fn run(
     data.state.space.map_output(&output, (0, 0));
     output.set_preferred(mode);
 
-    let mut renderer = PixmanRenderer::new()?;
     let mut compositor: Scanner = DrmCompositor::new(
         OutputModeSource::Static {
             size: mode.size,

@@ -54,6 +54,8 @@ struct Args {
     session: SessionBackend,
     /// Which implementation supplies input. See [`InputBackendKind`].
     input: InputBackendKind,
+    /// Which rasterizer paints. See [`RendererKind`].
+    renderer: RendererKind,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -79,7 +81,7 @@ enum Backend {
 /// which is the point of making it selectable rather than swapping it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SessionBackend {
-    /// libseat — the C library, and what runs today.
+    /// libseat — the C library. Kept selectable, no longer the default.
     LibSeat,
     /// logind over D-Bus, pure Rust. The destination.
     Logind,
@@ -107,12 +109,38 @@ enum InputBackendKind {
     Evdev,
 }
 
+/// Which rasterizer paints the frame.
+///
+/// ── ★ THE ONLY TRUE NATURALIZE OF THE SIX ─────────────────────────────────
+/// The other five C libraries wrap a kernel interface; `libpixman` wraps
+/// nothing. It is arithmetic over memory, which is why it is the one that had
+/// to be REBUILT rather than re-addressed — and `nuri` is that rebuild: 485
+/// lines, zero dependencies, 11 tests that run without a seat.
+///
+/// pixman remains available because it is the incumbent and this is a display:
+/// a rasterizer that is subtly wrong shows a machine's owner a broken screen,
+/// and having the previous one one flag away is what makes the comparison
+/// cheap rather than a rebuild.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RendererKind {
+    /// nuri — pleme-io's own. The default.
+    Nuri,
+    /// pixman — the C library, kept for comparison.
+    Pixman,
+}
+
 fn parse_args() -> Result<Args, String> {
     let mut mode = SeatMode::Session;
     let mut spawn = None;
     let mut backend = Backend::Nested;
-    let mut session = SessionBackend::LibSeat;
-    let mut input = InputBackendKind::Libinput;
+    let mut session = SessionBackend::Logind;
+    // ★ THE DEFAULTS ARE OURS NOW. Each was proven before it was promoted:
+    // nuri has 11 green tests and a mapped Bind; evdev decodes the kernel's own
+    // event stream; logind took a real seat session on vkms with no group
+    // membership. Leaving them selectable-but-off would have been a way of
+    // never having to stand behind them.
+    let mut input = InputBackendKind::Evdev;
+    let mut renderer = RendererKind::Nuri;
     let mut it = std::env::args().skip(1);
 
     while let Some(arg) = it.next() {
@@ -157,6 +185,18 @@ fn parse_args() -> Result<Args, String> {
                     }
                 };
             }
+            "--renderer" => {
+                let v = it.next().ok_or("--renderer needs a value (nuri | pixman)")?;
+                renderer = match v.as_str() {
+                    "nuri" => RendererKind::Nuri,
+                    "pixman" => RendererKind::Pixman,
+                    other => {
+                        return Err(format!(
+                            "unknown renderer `{other}` — expected `nuri` or `pixman`"
+                        ));
+                    }
+                };
+            }
             "--" => {
                 let rest: Vec<String> = it.by_ref().collect();
                 if !rest.is_empty() {
@@ -168,17 +208,21 @@ fn parse_args() -> Result<Args, String> {
                 return Err(concat!(
                     "omoya — the pleme-io Wayland compositor\n\n",
                     "  omoya [--mode entrance|session] [--backend nested|drm]\n",
-                    "        [--session libseat|logind] [--input libinput|evdev]\n",
-                    "        [-- CMD ARGS...]\n\n",
+                    "        [--session logind|libseat] [--input evdev|libinput]\n",
+                    "        [--renderer nuri|pixman] [-- CMD ARGS...]\n\n",
                     "--backend nested  composite into an existing session's window\n",
                     "--backend drm     take a display (M4a: scanout only, no input)\n",
                     "--session libseat the C library (default — what has been running)\n",
-                    "--session logind  logind over D-Bus, pure Rust. Retires libseat.so.1;\n",
-                    "                  not yet the default, see SessionBackend.\n",
-                    "--input libinput  the C library (default — carries the input POLICY)\n",
-                    "--input evdev     kernel evdev, pure Rust. Retires libinput.so.10 and\n",
-                    "                  libudev.so.1, but implements no acceleration or\n",
-                    "                  gestures — see InputBackendKind.\n\n",
+                    "\n",
+                    "  ★ THE DEFAULTS ARE PURE RUST. Each C library is one flag away.\n\n",
+                    "--session logind  DEFAULT. logind over D-Bus, pure Rust.\n",
+                    "--session libseat the C library.\n",
+                    "--input evdev     DEFAULT. Kernel evdev, pure Rust. NO pointer\n",
+                    "                  acceleration, tap-to-click or gestures — that is\n",
+                    "                  libinput policy nobody has reimplemented.\n",
+                    "--input libinput  the C library, and it carries that policy.\n",
+                    "--renderer nuri   DEFAULT. pleme-io's rasterizer, zero dependencies.\n",
+                    "--renderer pixman the C library.\n\n",
                     "`lock` is not a launchable mode: it is in-process session\n",
                     "state (theory/OMOYA.md §4.2)."
                 )
@@ -191,6 +235,7 @@ fn parse_args() -> Result<Args, String> {
         mode,
         session,
         input,
+        renderer,
         spawn,
         backend,
     })
@@ -211,6 +256,7 @@ fn run_drm_seat<S, N>(
     mut session: S,
     notifier: N,
     kind: InputBackendKind,
+    renderer: RendererKind,
 ) -> Result<(), Box<dyn std::error::Error>>
 where
     S: smithay::backend::session::Session + Clone + 'static,
@@ -247,7 +293,31 @@ where
     introspect.refresh_hz.store(u64::from(target.mode.vrefresh()), Ordering::Relaxed);
 
     let mut device = device;
-    crate::drm::run(event_loop, data, &mut device, &drm_fd, &target, introspect.clone())?;
+    // ★ THE MATCH IS HERE AND NOT INSIDE `run` because the renderer is a TYPE
+    // parameter, not a value: `run` is generic and monomorphises per renderer.
+    // A `Box<dyn Renderer>` would not work — the trait has associated types
+    // (TextureId, Frame, Framebuffer) and is not object-safe, which is smithay
+    // telling us a renderer is a compile-time choice.
+    match renderer {
+        RendererKind::Nuri => crate::drm::run(
+            event_loop,
+            data,
+            &mut device,
+            &drm_fd,
+            &target,
+            introspect.clone(),
+            crate::nuri_renderer::NuriRenderer::new(),
+        )?,
+        RendererKind::Pixman => crate::drm::run(
+            event_loop,
+            data,
+            &mut device,
+            &drm_fd,
+            &target,
+            introspect.clone(),
+            smithay::backend::renderer::pixman::PixmanRenderer::new()?,
+        )?,
+    }
 
     attach_session(event_loop, session, notifier, introspect, kind);
     Ok(())
@@ -400,6 +470,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     match smithay::backend::session::libseat::LibSeatSession::new() {
                         Ok((session, notifier)) => run_drm_seat(
                             &mut event_loop, &mut data, &introspect, session, notifier, args.input,
+                            args.renderer,
                         )?,
                         Err(e) => {
                             tracing::error!(error = %e, "no libseat session — cannot take a seat");
@@ -410,6 +481,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 SessionBackend::Logind => match crate::logind::LogindSession::new() {
                     Ok((session, notifier)) => run_drm_seat(
                         &mut event_loop, &mut data, &introspect, session, notifier, args.input,
+                        args.renderer,
                     )?,
                     Err(e) => {
                         tracing::error!(
