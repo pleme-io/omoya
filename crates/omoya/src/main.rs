@@ -151,6 +151,62 @@ fn parse_args() -> Result<Args, String> {
     })
 }
 
+/// Take the seat: open the DRM device THROUGH the session, probe it, run the
+/// render loop, then attach input and the session notifier.
+///
+/// ── ★ WHY THE DEVICE OPEN IS IN HERE AND NOT BEFORE ───────────────────────
+/// Because it must come from `Session::open`. A DRM fd opened directly is
+/// invisible to logind — it cannot be paused on a VT switch — and needs
+/// filesystem permission the session would otherwise grant. Both facts point
+/// the same way: the session is created first and hands out the device.
+fn run_drm_seat<S, N>(
+    event_loop: &mut smithay::reexports::calloop::EventLoop<'static, CalloopData>,
+    data: &mut CalloopData,
+    introspect: &std::sync::Arc<crate::introspect::OmoyaIntrospect>,
+    mut session: S,
+    notifier: N,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    S: smithay::backend::session::Session + Clone + 'static,
+    N: smithay::reexports::calloop::EventSource<
+            Event = smithay::backend::session::Event,
+            Metadata = (),
+            Ret = (),
+        > + 'static,
+    N::Error: Into<Box<dyn std::error::Error + Sync + Send>>,
+{
+    use smithay::backend::session::Session as _;
+    use smithay::reexports::rustix::fs::OFlags;
+    use std::sync::atomic::Ordering;
+
+    let path = std::path::Path::new("/dev/dri/card0");
+    // O_RDWR so we can modeset; O_NONBLOCK because the event loop reads vblank
+    // events off this fd and a blocking read would stall every frame.
+    let fd = session
+        .open(path, OFlags::RDWR | OFlags::NONBLOCK)
+        .map_err(|e| format!("session refused {}: {e:?}", path.display()))?;
+    let (device, drm_fd) = crate::drm::device_from_fd(fd)?;
+
+    let target = crate::drm::probe(&device)?;
+    tracing::info!(
+        connector = %target.name,
+        mode = %format_args!("{}x{}", target.mode.size().0, target.mode.size().1),
+        refresh_hz = target.mode.vrefresh(),
+        "DRM scanout target acquired — opened THROUGH the session"
+    );
+
+    introspect.backend.store(1, Ordering::Relaxed);
+    introspect.output_w.store(u64::from(target.mode.size().0), Ordering::Relaxed);
+    introspect.output_h.store(u64::from(target.mode.size().1), Ordering::Relaxed);
+    introspect.refresh_hz.store(u64::from(target.mode.vrefresh()), Ordering::Relaxed);
+
+    let mut device = device;
+    crate::drm::run(event_loop, data, &mut device, &drm_fd, &target, introspect.clone())?;
+
+    attach_session(event_loop, session, notifier, introspect);
+    Ok(())
+}
+
 /// Attach input and wire the session notifier into the event loop.
 ///
 /// ── ★ WHY THE NOTIFIER IS INSERTED AND NEVER JUST HELD ────────────────────
@@ -258,77 +314,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             crate::winit::init_winit(&mut event_loop, &mut data)?;
         }
         Backend::Drm => {
-            // M4a is a SCANOUT PROBE, not yet a render loop: it opens the
-            // device, takes master, finds a connected connector and its
-            // preferred mode, and reports what it would drive. Saying that
-            // plainly is the honest rung — a `--backend drm` that silently did
-            // nothing, or that claimed a display it never programmed, is
-            // exactly the round-up this project keeps refusing.
-            let path = std::path::Path::new("/dev/dri/card0");
-            let (device, _fd) = crate::drm::open_device(path)?;
-            let target = crate::drm::probe(&device)?;
-            tracing::info!(
-                connector = %target.name,
-                mode = %format_args!("{}x{}", target.mode.size().0, target.mode.size().1),
-                refresh_hz = target.mode.vrefresh(),
-                frame_interval_us = crate::drm::frame_interval(&target).as_micros() as u64,
-                "DRM scanout target acquired — M4a probe"
-            );
-            // Hold the display and serve clients — M4b. The one-shot paint
-            // below is kept as `--backend drm-probe` would be if it earned a
-            // flag; today the persistent loop supersedes it.
-            introspect.backend.store(1, std::sync::atomic::Ordering::Relaxed);
-            introspect
-                .output_w
-                .store(u64::from(target.mode.size().0), std::sync::atomic::Ordering::Relaxed);
-            introspect
-                .output_h
-                .store(u64::from(target.mode.size().1), std::sync::atomic::Ordering::Relaxed);
-            introspect
-                .refresh_hz
-                .store(u64::from(target.mode.vrefresh()), std::sync::atomic::Ordering::Relaxed);
-
-            let mut device = device;
-            crate::drm::run(&mut event_loop, &mut data, &mut device, &_fd, &target, introspect.clone())?;
-
-            // M4c. A failure here is REPORTED, not fatal: a seat that renders
-            // but cannot be typed into is a bad seat, and a seat that refuses
-            // to come up at all is a worse one — on a machine whose only
-            // console this may be, degrading to "visible but not typeable"
-            // beats degrading to "black".
-            // ── ★ ONE SHAPE, TWO BACKENDS ────────────────────────────────
-            // Both arms do exactly the same three things — attach input,
-            // insert the notifier, publish that the session is live — and the
-            // only difference is which `Session` impl arbitrates devices. The
-            // duplication is real and deliberate: the two notifier types are
-            // distinct concrete types, and unifying them behind a trait object
-            // would need `EventSource` to be object-safe, which it is not.
+            // ── ★ THE SESSION COMES FIRST, AND OPENS THE DEVICE ───────────
+            // This used to open /dev/dri/card0 directly and create the session
+            // afterwards, as an afterthought for input. That ordering was the
+            // bug: a directly-opened DRM fd is INVISIBLE to logind, which can
+            // only pause and resume devices taken through `TakeDevice`. So the
+            // compositor kept DRM master across a VT switch while another VT
+            // owned the seat, and `Session::open` — the trait's entire purpose
+            // — was never called for the one device that matters most.
             //
-            // A macro would hide three lines and cost the reader the ability to
-            // see that the arms ARE the same, which is the property that makes
-            // flipping the default safe.
+            // Found by the vkms check on its first run: omoya died with
+            // PermissionDenied as an unprivileged user, which is the mild
+            // symptom of the same cause. Taking the fd from the session also
+            // removes the need for `video` group membership.
             match args.session {
                 SessionBackend::LibSeat => {
                     match smithay::backend::session::libseat::LibSeatSession::new() {
-                        Ok((session, notifier)) => {
-                            attach_session(&mut event_loop, session, notifier, &introspect);
+                        Ok((session, notifier)) => run_drm_seat(
+                            &mut event_loop, &mut data, &introspect, session, notifier,
+                        )?,
+                        Err(e) => {
+                            tracing::error!(error = %e, "no libseat session — cannot take a seat");
+                            return Err(Box::new(e));
                         }
-                        Err(e) => tracing::error!(
-                            error = %e,
-                            "no libseat session — seat is look-only. Run from a seat0 \
-                             session (a VT), not over ssh"
-                        ),
                     }
                 }
                 SessionBackend::Logind => match crate::logind::LogindSession::new() {
-                    Ok((session, notifier)) => {
-                        attach_session(&mut event_loop, session, notifier, &introspect);
+                    Ok((session, notifier)) => run_drm_seat(
+                        &mut event_loop, &mut data, &introspect, session, notifier,
+                    )?,
+                    Err(e) => {
+                        tracing::error!(
+                            error = %e,
+                            "no logind session — `--session logind` needs this process to be IN \
+                             one; over ssh it is not"
+                        );
+                        return Err(Box::new(e));
                     }
-                    Err(e) => tracing::error!(
-                        error = %e,
-                        "no logind session — seat is look-only. `--session logind` needs \
-                         this process to be IN a logind session; over ssh it is not"
-                    ),
                 },
             }
             // Fall through to the shared event loop below, which is what M2

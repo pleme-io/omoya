@@ -86,6 +86,44 @@ pub struct ScanoutTarget {
 /// Returns an error if the device cannot be opened or master cannot be
 /// acquired — the latter being the normal outcome when something else already
 /// owns the display, which is a *diagnosis* rather than a surprise.
+/// Build a `DrmDevice` from an fd the SESSION opened.
+///
+/// ── ★ WHY THIS EXISTS ALONGSIDE `open_device` ─────────────────────────────
+/// `open_device` opens the node directly, which needs filesystem permission
+/// (the `video` group) and — the part that actually matters — leaves the fd
+/// INVISIBLE TO logind. logind can only pause and resume devices taken through
+/// `TakeDevice`, so a directly-opened DRM fd is never released on a VT switch
+/// and the compositor keeps master while another VT owns the seat.
+///
+/// Taking the fd from `Session::open` fixes both: no group membership, and the
+/// device participates in the pause/resume handshake the `Session` trait exists
+/// to carry.
+///
+/// Found by the `vkms` check on its first run — omoya died with
+/// `PermissionDenied` as an unprivileged user, which is the *mild* symptom of
+/// the same cause.
+///
+/// # Errors
+/// If the device cannot be initialised or master cannot be acquired.
+pub fn device_from_fd(fd: OwnedFd) -> Result<(DrmDevice, DrmDeviceFd), Box<dyn std::error::Error>> {
+    let fd = DrmDeviceFd::new(DeviceFd::from(fd));
+    // Same `disable_connectors = true` reasoning as `open_device`: start from a
+    // known state rather than inheriting whatever the previous owner left
+    // programmed.
+    let (device, _notifier) = DrmDevice::new(fd.clone(), true)?;
+    Ok((device, fd))
+}
+
+/// Open a DRM device directly and take master.
+///
+/// ★ PREFER `device_from_fd` WITH A SESSION. This bypasses logind entirely —
+/// see that function's header for what that costs. Kept for the case where no
+/// session exists at all, which is a diagnostic path rather than a seat.
+///
+/// # Errors
+/// Returns an error if the device cannot be opened or master cannot be
+/// acquired — the latter being the normal outcome when something else already
+/// owns the display, which is a *diagnosis* rather than a surprise.
 pub fn open_device(path: &Path) -> Result<(DrmDevice, DrmDeviceFd), Box<dyn std::error::Error>> {
     // O_RDWR + O_NONBLOCK: the event loop reads vblank events off this fd, and
     // a blocking read there would stall the whole compositor on a missed flip.
