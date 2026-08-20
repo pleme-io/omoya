@@ -102,6 +102,15 @@ pub struct OmoyaIntrospect {
     /// problem. Those live in different files and a screenshot cannot tell
     /// them apart.
     pub elements: AtomicU64,
+    /// Each render element's geometry, as the RENDERER sees it.
+    ///
+    /// ★ THE THIRD INDEPENDENT VIEW OF THE SAME QUESTION. `layout` is what
+    /// `Space` holds; this is what `space_render_elements` produced from it.
+    /// They are computed by different code from different inputs, so they can
+    /// disagree — and if they do, the gap is precisely between "the
+    /// compositor's model" and "what the frame was told to draw", which is a
+    /// seam no screenshot exposes.
+    pub geometry: Mutex<Vec<String>>,
     /// Windows currently mapped in the space.
     pub windows: AtomicU64,
     /// Reserved chords recognised but not acted on — the M4 debt counter.
@@ -182,6 +191,12 @@ impl Introspect for OmoyaIntrospect {
             "frames" => Ok(n(&self.frames)),
             "presented" => Ok(n(&self.presented)),
             "elements" => Ok(n(&self.elements)),
+            "geometry" => Ok(serde_json::json!(
+                self.geometry
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .join(" | ")
+            )),
             "layout" => Ok(serde_json::json!(
                 self.layout
                     .lock()
@@ -235,6 +250,7 @@ impl Introspect for OmoyaIntrospect {
                 "frames": self.frames.load(Ordering::Relaxed),
                 "presented": self.presented.load(Ordering::Relaxed),
                 "elements": self.elements.load(Ordering::Relaxed),
+                "geometry": self.geometry.lock().unwrap_or_else(|e| e.into_inner()).clone(),
                 "layout": self.layout.lock().unwrap_or_else(|e| e.into_inner()).clone(),
                 "windows": self.windows.load(Ordering::Relaxed),
                 "input_attached": self.input_attached.load(Ordering::Relaxed) == 1,
@@ -256,6 +272,7 @@ impl Introspect for OmoyaIntrospect {
             "frames",
             "presented",
             "elements",
+            "geometry",
             "layout",
             "windows",
             "owed_vt_switches",

@@ -615,6 +615,24 @@ where
                 (elements.len().saturating_sub(1)) as u64,
                 std::sync::atomic::Ordering::Relaxed,
             );
+            // And each element's geometry as the RENDERER sees it — a third
+            // independent view, computed by `space_render_elements` from the
+            // Space positions rather than restating them. If this disagrees
+            // with the `layout` leaf, the gap is between the compositor's
+            // model and what the frame was told to draw.
+            {
+                use smithay::backend::renderer::element::Element as _;
+                *introspect
+                    .geometry
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = elements
+                    .iter()
+                    .map(|e| {
+                        let g = e.geometry(1.0.into());
+                        format!("{},{} {}x{}", g.loc.x, g.loc.y, g.size.w, g.size.h)
+                    })
+                    .collect();
+            }
 
             // ── ★ RENDER INTO THE BACK BUFFER, THEN FLIP ────────────────
             // `DrmCompositor` did allocate-bind-render-export-flip in one

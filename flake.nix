@@ -771,6 +771,7 @@
               # dropped it. Different files, identical screenshot.
               elements = int(machine.succeed("kanshou-get elements").strip())
               print(f"render elements (excluding the cursor): {elements}")
+              print("geometry:", machine.succeed("kanshou-get geometry").strip())
               # The totals are the denominator: 0 non-background out of 0
               # scanned would mean the rectangle fell off the image, which is
               # a different bug from an empty half and must not read as one.
