@@ -209,7 +209,10 @@ mod tests {
 pub fn vt_of(hk: &Hotkey) -> Option<i32> {
     use awase::Key;
 
-    if !(hk.modifiers.ctrl && hk.modifiers.alt) {
+    // `Modifiers` is a bitflag newtype, not a struct of bools — `contains`
+    // is the test. Requiring BOTH means a bare F2 in a terminal can never
+    // move the seat, which is the failure this guard exists for.
+    if !hk.modifiers.contains(Modifiers::CTRL) || !hk.modifiers.contains(Modifiers::ALT) {
         return None;
     }
     Some(match hk.key {
@@ -236,20 +239,20 @@ mod vt_tests {
 
     #[test]
     fn ctrl_alt_f2_is_vt_2() {
-        let hk = Hotkey::new(Modifiers { ctrl: true, alt: true, ..Default::default() }, Key::F2);
+        let hk = Hotkey::new(Modifiers::CTRL.with(Modifiers::ALT), Key::F2);
         assert_eq!(vt_of(&hk), Some(2));
     }
 
     #[test]
     fn a_bare_function_key_never_moves_the_seat() {
         // The guard that matters: F2 typed into a terminal must not switch VT.
-        let hk = Hotkey::new(Modifiers::default(), Key::F2);
+        let hk = Hotkey::new(Modifiers::NONE, Key::F2);
         assert_eq!(vt_of(&hk), None);
     }
 
     #[test]
     fn ctrl_alt_on_a_non_function_key_is_not_a_vt_switch() {
-        let hk = Hotkey::new(Modifiers { ctrl: true, alt: true, ..Default::default() }, Key::A);
+        let hk = Hotkey::new(Modifiers::CTRL.with(Modifiers::ALT), Key::A);
         assert_eq!(vt_of(&hk), None);
     }
 }
