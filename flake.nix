@@ -481,6 +481,8 @@
                 virtualisation.memorySize = 2048;
               };
             testScript = ''
+              import re
+
               machine.wait_for_unit("multi-user.target")
 
               # ── the virtual card ──
@@ -680,11 +682,32 @@
               # correct. Without this the commit message would be a claim and
               # the gate would be its rubber stamp.
               #
-              # The client is killed first so the seat is genuinely idle: with
+              # The client is PAUSED first so the seat is genuinely idle: with
               # weston-presentation-shm running there IS new content every
               # frame and presenting each one is the right answer, so a
               # measurement taken then would prove nothing either way.
-              machine.succeed("pkill -f weston-presentation-shm || true")
+              #
+              # ★ SIGSTOP, NOT SIGTERM, AND BY PID FROM OMOYA'S OWN LOG.
+              #
+              # Two traps, both hit on the first attempt. `pkill -f
+              # weston-presentation-shm` matches THE SHELL RUNNING PKILL —
+              # its own command line contains the pattern — so the test
+              # killed itself and reported exit 143, which reads as the
+              # client refusing to die. And killing the client for real
+              # ends the login session (`pam_unix(login:session): session
+              # closed`), taking the compositor with it, so the measurement
+              # would have had nothing to query.
+              #
+              # A name match is not the fix either: Linux truncates `comm`
+              # to 15 characters, so this process is `weston-presenta` and
+              # `pkill -x weston-presentation-shm` matches nothing at all —
+              # silently, exit 1, no output. omoya logs the pid it spawned,
+              # so the pid is read from there rather than searched for.
+              spawned = int(re.search(
+                  r"spawned into the seat pid=(\d+)",
+                  machine.succeed("cat /tmp/omoya.log"),
+              ).group(1))
+              machine.succeed(f"kill -STOP {spawned}")
               machine.sleep(2)
               f0, p0 = [
                   int(x) for x in
