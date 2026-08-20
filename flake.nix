@@ -605,10 +605,35 @@
               ).strip()
               print(f"pixel(4,4) = {px}")
               r, g, b = (int(v) for v in px.split())
-              assert min(r, g, b) > 180, (
-                  f"pointer not visible at (4,4): got rgb({r},{g},{b}). "
-                  "Either nothing draws a cursor, or it was written in the "
-                  "wrong encoding and came out too dark to see."
+              # ★ EXACT, NOT "bright enough". A >180 threshold passed while the
+              # encoding was WRONG: the cursor came out rgb(214,220,231), which
+              # is snow_storm[2] (#ECEFF4 = 236,239,244) written LINEAR into a
+              # non-sRGB framebuffer. It was bright, so the loose check passed,
+              # and the same mistake on the BACKGROUND rendered Nord0 as
+              # rgb(7,9,13) — a screen the operator reasonably called black.
+              #
+              # The scanout buffer is DRM_FORMAT_ARGB8888, which applies no
+              # conversion, so the bytes written must already be sRGB. Asserting
+              # the exact colour is what makes the encoding checkable at all; a
+              # range cannot tell "right colour" from "right hue, wrong gamma",
+              # and wrong gamma is the entire failure mode.
+              assert (r, g, b) == (236, 239, 244), (
+                  f"pointer at (4,4) is rgb({r},{g},{b}), expected "
+                  "rgb(236,239,244) = Nord snow_storm[2]. "
+                  "rgb(214,220,231) specifically means the LINEAR encoding was "
+                  "written into a non-sRGB framebuffer — check "
+                  "theme::cursor_for_surface's format_is_srgb flag."
+              )
+
+              # And the BACKGROUND, which is what the operator actually looks
+              # at. Nord0 = #2E3440. rgb(7,9,13) is its linear value and is the
+              # exact shade that got reported as "a blank black screen".
+              bg = machine.succeed("ppm-probe /tmp/seat.ppm 900 700").strip()
+              print(f"background(900,700) = {bg}")
+              br, bgc, bb = (int(v) for v in bg.split())
+              assert (br, bgc, bb) == (46, 52, 64), (
+                  f"background is rgb({br},{bgc},{bb}), expected rgb(46,52,64) "
+                  "= Nord0. rgb(7,9,13) means linear-into-non-sRGB again."
               )
             '';
           };

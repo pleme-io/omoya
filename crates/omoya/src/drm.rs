@@ -248,21 +248,36 @@ pub fn output_for(target: &ScanoutTarget) -> (Output, OutputMode) {
 
 /// The clear colour for this backend.
 ///
-/// ★ A DRM scanout target is sRGB-encoded, unlike the nested winit surface —
-/// which is exactly why `theme::background_for_surface` takes a flag instead of
-/// being a constant. Getting this backwards is invisible: the frame is a
-/// plausible dark grey either way, and only arithmetic on a captured pixel says
-/// which one it should have been. See theme.rs for the measurement.
+/// ★ CORRECTED 2026-08-20, ON THE SCREEN. This passed `true` — "a DRM scanout
+/// target is sRGB-encoded" — and that is FALSE for this path. The scanout
+/// buffer is `DRM_FORMAT_ARGB8888` (see the `copy_framebuffer` call and
+/// `scanout.rs`), a plain format with no sRGB conversion: the display
+/// interprets those bytes directly. Writing LINEAR values into it renders
+/// everything about six times too dark.
+///
+/// Measured by capturing the live screen on plo:
+///
+///     99% of 1920x1080 = rgb(7, 9, 13)
+///
+/// Nord0 is #2E3440 = (46,52,64), and (7,9,13) is exactly its linear value
+/// written as raw bytes — the identical arithmetic theme.rs already records
+/// from omoya's first frame. The operator's report was "login, then a blank
+/// black screen", and it was not blank: it was Nord0, too dark to see.
+///
+/// The vkms gate had the evidence and it was misread. `pixel(4,4) = 214 220 231`
+/// against a cursor of #ECEFF4 = (236,239,244) is the same linear encoding, and
+/// it was rationalised as correct-for-sRGB rather than read as the defect.
+/// A number that needs explaining away is a finding.
 #[must_use]
 pub fn background() -> [f32; 4] {
-    theme::background_for_surface(true)
+    theme::background_for_surface(false)
 }
 
 /// The pointer's colour for this backend. Same sRGB reasoning as
 /// [`background`] — see theme.rs.
 #[must_use]
 pub fn cursor() -> [f32; 4] {
-    theme::cursor_for_surface(true)
+    theme::cursor_for_surface(false)
 }
 
 /// The pointer's size in physical pixels.
