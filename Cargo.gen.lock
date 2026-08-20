@@ -1,11 +1,11 @@
 {
   "schema_version": 2,
-  "cargo_lock_sha256": "a798d6755e194cb0c1f6fd6f0caf6d593f55c8afaaa34f71880b27636c9338cc",
+  "cargo_lock_sha256": "94d7d5839249e966ee5fdc236cfd6fe7e8774f429e8a552fff4f03546289ceb1",
   "manifest_sha256": {
     "Cargo.toml": "e979fdd1c8bb7d7fb9cb98d09744bd62cf875eb8cfe1ef47f60476635d7aac1a",
     "crates/nuri/Cargo.toml": "c5c860abe8b16241d437c1bc3c202378eb59ea1da2a485154fdd6099e1452d41",
     "crates/omoya-spec/Cargo.toml": "75cd6d31f2ef617df89556610445abab8cf9cddb49d7bbf04c28ac5b7fc89031",
-    "crates/omoya/Cargo.toml": "587853d63cd39bce2e8676534c481fbb2205582cb3780c2057075b54ffc4931a"
+    "crates/omoya/Cargo.toml": "0710274a9583f1e12059bdcdf63e5b5fc2e2a276358ab0f1049914e0fcec1823"
   },
   "target_resolves": {
     "base": {
@@ -1421,90 +1421,6 @@
           "std"
         ]
       },
-      "input-0.9.1": {
-        "runtime_dependencies": [
-          {
-            "name": "bitflags",
-            "package_key": "bitflags-2.13.1",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": true,
-            "optional": false,
-            "target": null,
-            "tree": "target"
-          },
-          {
-            "name": "input_sys",
-            "package_key": "input-sys-1.19.0",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": false,
-            "optional": false,
-            "target": null,
-            "tree": "target"
-          },
-          {
-            "name": "libc",
-            "package_key": "libc-0.2.189",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": true,
-            "optional": false,
-            "target": null,
-            "tree": "target"
-          },
-          {
-            "name": "udev",
-            "package_key": "udev-0.9.3",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": true,
-            "optional": true,
-            "target": null,
-            "tree": "target"
-          }
-        ],
-        "build_dependencies": [],
-        "features": [
-          "libinput_1_11",
-          "libinput_1_14",
-          "libinput_1_15",
-          "libinput_1_19",
-          "udev"
-        ]
-      },
-      "input-sys-1.19.0": {
-        "runtime_dependencies": [],
-        "build_dependencies": [],
-        "features": [
-          "libinput_1_11",
-          "libinput_1_14",
-          "libinput_1_15",
-          "libinput_1_19"
-        ]
-      },
-      "io-lifetimes-1.0.11": {
-        "runtime_dependencies": [
-          {
-            "name": "libc",
-            "package_key": "libc-0.2.189",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": true,
-            "optional": true,
-            "target": "cfg(not(windows))",
-            "tree": "target"
-          }
-        ],
-        "build_dependencies": [],
-        "features": [
-          "close",
-          "default",
-          "hermit-abi",
-          "libc",
-          "windows-sys"
-        ]
-      },
       "irodori-0.2.0": {
         "runtime_dependencies": [
           {
@@ -1753,33 +1669,6 @@
       },
       "libseat-sys-0.2.0": {
         "runtime_dependencies": [],
-        "build_dependencies": [
-          {
-            "name": "pkg_config",
-            "package_key": "pkg-config-0.3.34",
-            "kind": "build",
-            "features": [],
-            "uses_default_features": true,
-            "optional": false,
-            "target": null,
-            "tree": "host"
-          }
-        ],
-        "features": []
-      },
-      "libudev-sys-0.1.4": {
-        "runtime_dependencies": [
-          {
-            "name": "libc",
-            "package_key": "libc-0.2.189",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": true,
-            "optional": false,
-            "target": null,
-            "tree": "target"
-          }
-        ],
         "build_dependencies": [
           {
             "name": "pkg_config",
@@ -2059,9 +1948,7 @@
             "features": [
               "backend_drm",
               "backend_gbm",
-              "backend_libinput",
               "backend_session_libseat",
-              "backend_udev",
               "backend_winit",
               "desktop",
               "wayland_frontend"
@@ -2950,18 +2837,6 @@
             "tree": "target"
           },
           {
-            "name": "input",
-            "package_key": "input-0.9.1",
-            "kind": "normal",
-            "features": [
-              "libinput_1_19"
-            ],
-            "uses_default_features": false,
-            "optional": true,
-            "target": null,
-            "tree": "target"
-          },
-          {
             "name": "libc",
             "package_key": "libc-0.2.189",
             "kind": "normal",
@@ -3077,16 +2952,6 @@
             "features": [],
             "uses_default_features": true,
             "optional": false,
-            "target": null,
-            "tree": "target"
-          },
-          {
-            "name": "udev",
-            "package_key": "udev-0.9.3",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": true,
-            "optional": true,
             "target": null,
             "tree": "target"
           },
@@ -3232,10 +3097,8 @@
           "backend_drm",
           "backend_egl",
           "backend_gbm",
-          "backend_libinput",
           "backend_session",
           "backend_session_libseat",
-          "backend_udev",
           "backend_winit",
           "cc",
           "desktop",
@@ -3243,13 +3106,11 @@
           "drm-ffi",
           "gbm",
           "gl_generator",
-          "input",
           "libloading",
           "libseat",
           "pkg-config",
           "renderer_gl",
           "tempfile",
-          "udev",
           "wayland-client",
           "wayland-cursor",
           "wayland-egl",
@@ -4230,53 +4091,6 @@
       "typenum-1.20.1": {
         "runtime_dependencies": [],
         "build_dependencies": [],
-        "features": []
-      },
-      "udev-0.9.3": {
-        "runtime_dependencies": [
-          {
-            "name": "io_lifetimes",
-            "package_key": "io-lifetimes-1.0.11",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": true,
-            "optional": false,
-            "target": null,
-            "tree": "target"
-          },
-          {
-            "name": "libc",
-            "package_key": "libc-0.2.189",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": true,
-            "optional": false,
-            "target": null,
-            "tree": "target"
-          },
-          {
-            "name": "libudev_sys",
-            "package_key": "libudev-sys-0.1.4",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": true,
-            "optional": false,
-            "target": null,
-            "tree": "target"
-          }
-        ],
-        "build_dependencies": [
-          {
-            "name": "pkg_config",
-            "package_key": "pkg-config-0.3.34",
-            "kind": "build",
-            "features": [],
-            "uses_default_features": true,
-            "optional": false,
-            "target": null,
-            "tree": "host"
-          }
-        ],
         "features": []
       },
       "unicode-ident-1.0.24": {
@@ -13201,17 +13015,6 @@
     "indexmap-2.14.0": {
       "edition": "2024"
     },
-    "input-0.9.1": {
-      "edition": "2018"
-    },
-    "input-sys-1.19.0": {
-      "edition": "2018",
-      "build_script": "build.rs"
-    },
-    "io-lifetimes-1.0.11": {
-      "edition": "2018",
-      "build_script": "build.rs"
-    },
     "irodori-0.2.0": {
       "edition": "2024"
     },
@@ -13249,11 +13052,6 @@
     "libseat-sys-0.2.0": {
       "edition": "2018",
       "build_script": "build.rs"
-    },
-    "libudev-sys-0.1.4": {
-      "edition": "2015",
-      "build_script": "build.rs",
-      "links": "libudev"
     },
     "linux-raw-sys-0.12.1": {
       "edition": "2021"
@@ -13559,9 +13357,6 @@
     },
     "typenum-1.20.1": {
       "edition": "2018"
-    },
-    "udev-0.9.3": {
-      "edition": "2015"
     },
     "unicode-ident-1.0.24": {
       "edition": "2021"
