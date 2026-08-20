@@ -303,12 +303,29 @@ impl Frame for NuriFrame<'_, '_> {
         damage: &[Rectangle<i32, Physical>],
         color: Color32F,
     ) -> Result<(), Self::Error> {
-        // ★ Clipped to the DAMAGE, not just to dst. Painting the whole
-        // rectangle when only part of it changed is correct on screen and
-        // wrong for a damage-tracked compositor: it would make every partial
-        // update cost a full one.
+        // ★ DAMAGE IS RELATIVE TO `dst`. THIS IS THE CONTRACT, AND GETTING IT
+        // WRONG MAKES EVERY OFF-ORIGIN DRAW VANISH.
+        //
+        // `render_output` computes each element's damage in output
+        // coordinates and then does `d.loc -= element_geometry.loc` before
+        // calling `draw`, so what arrives here is relative to `dst`. smithay's
+        // own pixman backend adds it straight back (`rect.loc += dst_loc`)
+        // before clipping — that line is the whole specification.
+        //
+        // Intersecting the RELATIVE damage with the ABSOLUTE `dst` is empty
+        // for everything not at the origin, and empty in a way that looks
+        // exactly like correct occlusion: no error, no warning, the element
+        // simply is not there. It cost a full tiling investigation — the tree
+        // was right, Space was right, the element geometry was right
+        // (`512,0 250x250`), and the window was still invisible.
+        //
+        // It also explains the cursor: at (0,0) relative and absolute
+        // coincide, so the pointer was the one thing that always drew, and
+        // "a white square in the top-left corner" was that accident.
         for d in damage {
-            if let Some(area) = to_rect(dst).intersect(to_rect(*d)) {
+            let mut abs = *d;
+            abs.loc += dst.loc;
+            if let Some(area) = to_rect(dst).intersect(to_rect(abs)) {
                 self.surface.fill(area, nuri::Rgba(color.components()));
             }
         }
@@ -339,7 +356,17 @@ impl Frame for NuriFrame<'_, '_> {
             src.size.w as i32,
             src.size.h as i32,
         );
-        let dmg: Vec<nuri::Rect> = damage.iter().map(|r| to_rect(*r)).collect();
+        // Damage arrives RELATIVE to `dst` — see the note in `draw_solid`.
+        // nuri's blit clips against the absolute destination, so it has to be
+        // translated first or every window away from the origin draws nothing.
+        let dmg: Vec<nuri::Rect> = damage
+            .iter()
+            .map(|r| {
+                let mut abs = *r;
+                abs.loc += dst.loc;
+                to_rect(abs)
+            })
+            .collect();
 
         self.surface.blit(
             &src_ref,
@@ -719,6 +746,45 @@ mod tests {
         ] {
             let _ = map_transform(t);
         }
+    }
+
+    /// ★ THE CONTRACT THAT COST A WHOLE INVESTIGATION: element damage is
+    /// RELATIVE to `dst`, and a renderer that treats it as absolute silently
+    /// drops every element away from the origin.
+    ///
+    /// `render_output` does `d.loc -= element_geometry.loc` before calling
+    /// `draw`; smithay's own pixman backend adds it straight back
+    /// (`rect.loc += dst_loc`). nuri did not, so intersecting relative damage
+    /// with an absolute `dst` came out empty for a window at 512,0 — no
+    /// error, no warning, indistinguishable from correct occlusion. The tree
+    /// was right, `Space` was right, and the element geometry was right.
+    ///
+    /// This pins the arithmetic directly rather than through a renderer,
+    /// because the failure has no observable symptom short of a screenshot.
+    #[test]
+    fn element_damage_is_relative_to_dst() {
+        use smithay::utils::{Physical, Rectangle};
+        // A window at 512,0 sized 250x250, fully damaged. `render_output`
+        // hands the damage over with the element's origin subtracted, so a
+        // full-surface damage arrives as 0,0 250x250 — NOT 512,0.
+        let dst: Rectangle<i32, Physical> = Rectangle::new((512, 0).into(), (250, 250).into());
+        let relative: Rectangle<i32, Physical> =
+            Rectangle::new((0, 0).into(), (250, 250).into());
+
+        // The bug: intersecting as-is.
+        assert!(
+            dst.intersection(relative).is_none(),
+            "if this ever overlaps, the test no longer reproduces the defect"
+        );
+
+        // The fix: translate into the destination's frame first.
+        let mut abs = relative;
+        abs.loc += dst.loc;
+        assert_eq!(
+            dst.intersection(abs),
+            Some(dst),
+            "a fully-damaged element must clip to its whole destination"
+        );
     }
 
     #[test]
