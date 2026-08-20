@@ -64,6 +64,28 @@ pub struct NuriTexture {
     format: Fourcc,
 }
 
+/// Force the padding byte opaque for `X`-formats.
+///
+/// ★ nuri's blit reads byte 3 as ALPHA unconditionally
+/// (`crates/nuri/src/lib.rs`), and for `Xrgb8888` that byte is PADDING with no
+/// defined value. A buffer whose padding happens to be zero therefore
+/// composites at alpha 0 — the window is imported, cached, drawn, and
+/// invisible, with nothing logged.
+///
+/// Normalised at IMPORT rather than taught to the blitter: both import paths
+/// already copy the bytes, so this costs one pass over a buffer that was being
+/// copied anyway, and it keeps the hot loop free of a per-pixel format branch.
+///
+/// `NuriTexture` does carry `format`, which is exactly what made this easy to
+/// miss — the information was present and simply never consulted.
+fn normalise_opaque(bytes: &mut [u8], format: Fourcc) {
+    if matches!(format, Fourcc::Xrgb8888) {
+        for px in bytes.chunks_exact_mut(4) {
+            px[3] = 0xff;
+        }
+    }
+}
+
 impl Texture for NuriTexture {
     fn width(&self) -> u32 {
         self.width
@@ -120,6 +142,26 @@ impl Texture for NuriFramebuffer<'_> {
 #[derive(Debug)]
 pub struct NuriRenderer {
     debug: DebugFlags,
+    /// ★ MINTED ONCE, AT CONSTRUCTION — NOT PER CALL.
+    ///
+    /// `ContextId` is an Arc IDENTITY, not a value: `ContextId::new()`
+    /// allocates a fresh `Arc<InnerContextId>` and equality is on that Arc.
+    /// smithay stores a client's imported texture under
+    /// `renderer.context_id()` (`renderer/utils/wayland.rs`) and retrieves it
+    /// under `renderer.context_id()` (`renderer/element/surface.rs`), so the
+    /// two must be the SAME id.
+    ///
+    /// Returning a new one each call made every store use a fresh key and
+    /// every lookup miss. The lookup is `data.texture(...)?` — a `?` on None —
+    /// so the surface was reported as "not mapped" and silently dropped from
+    /// the render list. **omoya composited ZERO client surfaces**, shm
+    /// included, with no error logged anywhere.
+    ///
+    /// Measured on plo: mado rendered 10,329 frames while the captured screen
+    /// held exactly two colours, the background and the cursor. The compositor
+    /// reported `windows: 1` the whole time, because the window WAS mapped in
+    /// the space — it just never survived texture lookup.
+    context: smithay::backend::renderer::ContextId<NuriTexture>,
 }
 
 impl Default for NuriRenderer {
@@ -134,6 +176,7 @@ impl NuriRenderer {
         // `DebugFlags` has no Default impl — spelled out rather than derived.
         Self {
             debug: DebugFlags::empty(),
+            context: smithay::backend::renderer::ContextId::new(),
         }
     }
 
@@ -161,7 +204,7 @@ impl RendererSuper for NuriRenderer {
 
 impl Renderer for NuriRenderer {
     fn context_id(&self) -> smithay::backend::renderer::ContextId<Self::TextureId> {
-        smithay::backend::renderer::ContextId::new()
+        self.context.clone()
     }
 
     fn downscale_filter(&mut self, _: TextureFilter) -> Result<(), Self::Error> {
@@ -201,6 +244,7 @@ impl Renderer for NuriRenderer {
                 framebuffer.height,
                 framebuffer.stride,
             )?,
+            context: self.context.clone(),
             _marker: std::marker::PhantomData,
         })
     }
@@ -221,6 +265,10 @@ impl Renderer for NuriRenderer {
 /// One frame of painting.
 pub struct NuriFrame<'frame, 'buffer> {
     surface: nuri::Surface<'frame>,
+    /// Cloned from the renderer, for the reason in [`NuriRenderer::context`]:
+    /// the frame's id must match the renderer's or the same cache miss happens
+    /// one layer down.
+    context: smithay::backend::renderer::ContextId<NuriTexture>,
     _marker: std::marker::PhantomData<&'buffer ()>,
 }
 
@@ -239,7 +287,7 @@ impl Frame for NuriFrame<'_, '_> {
     type TextureId = NuriTexture;
 
     fn context_id(&self) -> smithay::backend::renderer::ContextId<Self::TextureId> {
-        smithay::backend::renderer::ContextId::new()
+        self.context.clone()
     }
 
     fn clear(&mut self, color: Color32F, at: &[Rectangle<i32, Physical>]) -> Result<(), Self::Error> {
@@ -352,8 +400,10 @@ impl ImportMem for NuriRenderer {
         #[allow(clippy::cast_sign_loss)]
         let (w, h) = (size.w as u32, size.h as u32);
         let stride = (size.w as usize) * 4;
+        let mut owned = data.to_vec();
+        normalise_opaque(&mut owned, format);
         Ok(NuriTexture {
-            data: Arc::new(data.to_vec()),
+            data: Arc::new(owned),
             width: w,
             height: h,
             stride,
@@ -436,8 +486,10 @@ impl ImportMemWl for NuriRenderer {
             // duration, and the range is bounds-checked above.
             let bytes = unsafe { std::slice::from_raw_parts(ptr.add(offset), need - offset) };
 
+            let mut owned = bytes.to_vec();
+            normalise_opaque(&mut owned, fourcc);
             Ok(NuriTexture {
-                data: Arc::new(bytes.to_vec()),
+                data: Arc::new(owned),
                 #[allow(clippy::cast_sign_loss)]
                 width: width as u32,
                 #[allow(clippy::cast_sign_loss)]
