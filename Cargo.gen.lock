@@ -1,11 +1,11 @@
 {
   "schema_version": 2,
-  "cargo_lock_sha256": "94d7d5839249e966ee5fdc236cfd6fe7e8774f429e8a552fff4f03546289ceb1",
+  "cargo_lock_sha256": "7341ee84b07561c1b2081516074081621053b1b2468a15adc519992bda5bf248",
   "manifest_sha256": {
     "Cargo.toml": "e979fdd1c8bb7d7fb9cb98d09744bd62cf875eb8cfe1ef47f60476635d7aac1a",
     "crates/nuri/Cargo.toml": "c5c860abe8b16241d437c1bc3c202378eb59ea1da2a485154fdd6099e1452d41",
     "crates/omoya-spec/Cargo.toml": "75cd6d31f2ef617df89556610445abab8cf9cddb49d7bbf04c28ac5b7fc89031",
-    "crates/omoya/Cargo.toml": "0710274a9583f1e12059bdcdf63e5b5fc2e2a276358ab0f1049914e0fcec1823"
+    "crates/omoya/Cargo.toml": "58c26bde23ffcfe946c880ab82e09b1909d8eaa234a0d07f8c48231ea07d35c5"
   },
   "target_resolves": {
     "base": {
@@ -1631,58 +1631,6 @@
         "build_dependencies": [],
         "features": []
       },
-      "libseat-0.2.4": {
-        "runtime_dependencies": [
-          {
-            "name": "errno",
-            "package_key": "errno-0.3.14",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": true,
-            "optional": false,
-            "target": null,
-            "tree": "target"
-          },
-          {
-            "name": "libseat_sys",
-            "package_key": "libseat-sys-0.2.0",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": true,
-            "optional": false,
-            "target": null,
-            "tree": "target"
-          },
-          {
-            "name": "log",
-            "package_key": "log-0.4.33",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": true,
-            "optional": false,
-            "target": null,
-            "tree": "target"
-          }
-        ],
-        "build_dependencies": [],
-        "features": []
-      },
-      "libseat-sys-0.2.0": {
-        "runtime_dependencies": [],
-        "build_dependencies": [
-          {
-            "name": "pkg_config",
-            "package_key": "pkg-config-0.3.34",
-            "kind": "build",
-            "features": [],
-            "uses_default_features": true,
-            "optional": false,
-            "target": null,
-            "tree": "host"
-          }
-        ],
-        "features": []
-      },
       "log-0.4.33": {
         "runtime_dependencies": [],
         "build_dependencies": [],
@@ -1948,7 +1896,7 @@
             "features": [
               "backend_drm",
               "backend_gbm",
-              "backend_session_libseat",
+              "backend_session",
               "backend_winit",
               "desktop",
               "wayland_frontend"
@@ -2857,16 +2805,6 @@
             "tree": "target"
           },
           {
-            "name": "libseat",
-            "package_key": "libseat-0.2.4",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": false,
-            "optional": true,
-            "target": null,
-            "tree": "target"
-          },
-          {
             "name": "profiling",
             "package_key": "profiling-1.0.18",
             "kind": "normal",
@@ -3098,7 +3036,6 @@
           "backend_egl",
           "backend_gbm",
           "backend_session",
-          "backend_session_libseat",
           "backend_winit",
           "cc",
           "desktop",
@@ -3107,7 +3044,6 @@
           "gbm",
           "gl_generator",
           "libloading",
-          "libseat",
           "pkg-config",
           "renderer_gl",
           "tempfile",
@@ -13044,14 +12980,6 @@
     },
     "libloading-0.8.9": {
       "edition": "2015"
-    },
-    "libseat-0.2.4": {
-      "edition": "2018",
-      "build_script": "build.rs"
-    },
-    "libseat-sys-0.2.0": {
-      "edition": "2018",
-      "build_script": "build.rs"
     },
     "linux-raw-sys-0.12.1": {
       "edition": "2021"

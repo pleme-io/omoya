@@ -81,9 +81,12 @@ enum Backend {
 /// which is the point of making it selectable rather than swapping it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SessionBackend {
-    /// libseat — the C library. Kept selectable, no longer the default.
-    LibSeat,
-    /// logind over D-Bus, pure Rust. The destination.
+    /// logind over D-Bus, pure Rust — and now the only one.
+    ///
+    /// ★ STILL NOT THE FULL ANSWER. logind is a C DAEMON, so this retires a
+    /// linked C library and leaves a C process holding the seat. The thing
+    /// that removes the daemon is a session speaking VT and DRM-master ioctls
+    /// directly, which is `pending-omoya-direct-session`.
     Logind,
 }
 
@@ -103,9 +106,7 @@ enum SessionBackend {
 /// `pending-omoya-input-policy: acceleration, tap-to-click, gestures`
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum InputBackendKind {
-    /// libinput — the C library, and what runs today. Carries the policy.
-    Libinput,
-    /// evdev straight from the kernel, pure Rust. Transport only.
+    /// evdev straight from the kernel, pure Rust — and now the only one.
     Evdev,
 }
 
@@ -162,8 +163,17 @@ fn parse_args() -> Result<Args, String> {
             "--session" => {
                 let v = it.next().ok_or("--session needs a value (libseat | logind)")?;
                 session = match v.as_str() {
-                    "libseat" => SessionBackend::LibSeat,
                     "logind" => SessionBackend::Logind,
+                    // ★ Not in the build: backend_session_libseat is off and
+                    // libseat.so.1 is not linked.
+                    "libseat" => {
+                        return Err(
+                            "session backend `libseat` is not in this build — the \
+                             backend_session_libseat feature is off and libseat is not \
+                             linked. `logind` is the only backend."
+                                .to_string(),
+                        );
+                    }
                     other => {
                         return Err(format!(
                             "unknown session backend `{other}` — expected `libseat` or `logind`"
@@ -174,12 +184,23 @@ fn parse_args() -> Result<Args, String> {
             "--input" => {
                 let v = it.next().ok_or("--input needs a value (libinput | evdev)")?;
                 input = match v.as_str() {
-                    "libinput" => InputBackendKind::Libinput,
                     "evdev" => InputBackendKind::Evdev,
+                    // ★ Not in the build: backend_libinput/backend_udev are off.
+                    // Someone reaching for this wants the input POLICY that came
+                    // with libinput — acceleration, tap-to-click, gestures — and
+                    // deserves that answer rather than "unknown value".
+                    "libinput" => {
+                        return Err(
+                            "input backend `libinput` is not in this build — the \
+                             backend_libinput/backend_udev features are off. `evdev` is \
+                             the only backend, and it implements no pointer \
+                             acceleration, tap-to-click or gestures \
+                             (pending-omoya-input-policy)."
+                                .to_string(),
+                        );
+                    }
                     other => {
-                        return Err(format!(
-                            "unknown input backend `{other}` — expected `libinput` or `evdev`"
-                        ));
+                        return Err(format!("unknown input backend `{other}` — expected `evdev`"));
                     }
                 };
             }
@@ -223,8 +244,9 @@ fn parse_args() -> Result<Args, String> {
                     "--session libseat the C library (default — what has been running)\n",
                     "\n",
                     "  ★ THE DEFAULTS ARE PURE RUST. Each C library is one flag away.\n\n",
-                    "--session logind  DEFAULT. logind over D-Bus, pure Rust.\n",
-                    "--session libseat the C library.\n",
+                    "--session logind  The session backend. logind over D-Bus, pure\n",
+                    "                  Rust; libseat is NOT LINKED. logind itself is a C\n",
+                    "                  daemon — see pending-omoya-direct-session.\n",
                     "--input evdev     DEFAULT. Kernel evdev, pure Rust. NO pointer\n",
                     "                  acceleration, tap-to-click or gestures — that is\n",
                     "                  libinput policy nobody has reimplemented.\n",
@@ -352,8 +374,6 @@ fn attach_session<S, N>(
     // so neither transport required a change to the handling code — the seam
     // existed before either backend did.
     let attached = match kind {
-        InputBackendKind::Libinput => crate::drm::attach_input(event_loop, session.clone())
-            .map_err(|e| format!("{e}")),
         InputBackendKind::Evdev => crate::evdev_backend::EvdevBackend::new(&mut session.clone())
             .map_err(|e| format!("{e}"))
             .and_then(|backend| {
@@ -465,18 +485,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // symptom of the same cause. Taking the fd from the session also
             // removes the need for `video` group membership.
             match args.session {
-                SessionBackend::LibSeat => {
-                    match smithay::backend::session::libseat::LibSeatSession::new() {
-                        Ok((session, notifier)) => run_drm_seat(
-                            &mut event_loop, &mut data, &introspect, session, notifier, args.input,
-                            args.renderer,
-                        )?,
-                        Err(e) => {
-                            tracing::error!(error = %e, "no libseat session — cannot take a seat");
-                            return Err(Box::new(e));
-                        }
-                    }
-                }
                 SessionBackend::Logind => match crate::logind::LogindSession::new() {
                     Ok((session, notifier)) => run_drm_seat(
                         &mut event_loop, &mut data, &introspect, session, notifier, args.input,

@@ -80,7 +80,12 @@ features = [
   # "no associated function named new_with_udev", which reads like the
   # method does not exist — while the crate's own docs use it, because
   # their doctest builds with the feature on.
-  "backend_session_libseat",
+  # ★ backend_session_libseat REMOVED — it linked libseat.so.1. `crate::logind`
+  # speaks org.freedesktop.login1 over zbus instead, which is pure Rust.
+  #
+  # `backend_session` (no libseat) stays: it is what defines the `Session`
+  # TRAIT our own impl satisfies, and it pulls nothing.
+  "backend_session",
   # ★ `renderer_pixman` REMOVED. `nuri` is the renderer now: it implements
   # Renderer, Frame, ImportMem/ImportMemWl, ImportDma/ImportDmaWl, Bind<Dmabuf>
   # and ExportMem, and nothing in this crate names PixmanRenderer any more.

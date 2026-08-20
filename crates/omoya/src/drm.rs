@@ -49,7 +49,6 @@ use std::{
 
 use smithay::{
     backend::{
-        libinput::{LibinputInputBackend, LibinputSessionInterface},
         allocator::{Fourcc as DrmFourcc, dumb::DumbAllocator},
         drm::{DrmDevice, DrmDeviceFd, DrmSurface, compositor::{DrmCompositor, FrameFlags}},
         renderer::{
@@ -62,7 +61,6 @@ use smithay::{
     utils::DeviceFd,
 };
 
-use smithay::reexports::input::Libinput;
 
 use crate::theme;
 
@@ -529,44 +527,11 @@ where
 /// Returns an error if the session cannot be acquired or the source cannot be
 /// inserted. A failure here leaves the seat renderable but not typeable, which
 /// the caller must decide about — this function will not silently continue.
-/// ★ GENERIC OVER THE SESSION, not tied to libseat.
-///
-/// `LibinputSessionInterface<S>` is already generic over `S: Session`
-/// (`smithay .../backend/libinput/mod.rs:676-687`), so nothing about libinput
-/// required the concrete `LibSeatSession` this used to take — the coupling was
-/// ours, not smithay's. Making it generic is what lets the pure-Rust logind
-/// session be selected without touching a line of the input path.
-pub fn attach_input<S>(
-    event_loop: &mut smithay::reexports::calloop::EventLoop<'static, crate::CalloopData>,
-    session: S,
-) -> Result<(), Box<dyn std::error::Error>>
-where
-    // ★ NO `Send` BOUND. `LibSeatSession` holds an `Rc` and is deliberately
-    // NOT Send — smithay keeps the session on the compositor thread, and
-    // libinput does too. Requiring Send here was speculative and rejected
-    // exactly the backend that has been running.
-    //
-    // `LogindSession` is internally `Arc` because its D-Bus SIGNAL LISTENER is
-    // a separate thread; the handle itself never crosses one. Those are
-    // different claims, and only the first needed the sync primitive.
-    S: smithay::backend::session::Session + Clone + 'static,
-{
-    let mut context = Libinput::new_with_udev::<LibinputSessionInterface<S>>(session.into());
-    // The seat NAME, not a device path: libinput resolves the set of devices
-    // belonging to this seat itself, which is what makes hotplug work without
-    // omoya enumerating anything.
-    context.udev_assign_seat("seat0").map_err(|()| "libinput refused seat0")?;
-
-    let backend = LibinputInputBackend::new(context);
-    event_loop
-        .handle()
-        .insert_source(backend, move |event, _, data| {
-            data.state.process_input_event(event);
-        })?;
-
-    tracing::info!("input attached — the seat is now typeable");
-    Ok(())
-}
+// ── ★ `attach_input` REMOVED — libinput is not in the build ──────────────
+// It built a `LibinputInputBackend` from `Libinput::new_with_udev`, which is
+// what linked libinput.so.10 and libudev.so.1. `crate::evdev_backend` replaced
+// it: same `InputBackend` trait, same `process_input_event` seam, kernel evdev
+// instead of a C library that wraps kernel evdev.
 
 #[cfg(test)]
 mod tests {
