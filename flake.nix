@@ -410,8 +410,12 @@
               )
 
               machine.sleep(8)
-              log = machine.succeed("journalctl -u omoya --no-pager | tail -60")
-              print(log)
+              # ★ NOT named `log` — the test driver already binds that to its
+              # AbstractLogger, and the type checker rejects the shadow. A
+              # useful refusal: shadowing it would have silently broken the
+              # driver's own logging for the rest of the script.
+              journal = machine.succeed("journalctl -u omoya --no-pager | tail -60")
+              print(journal)
 
               # ★ THE ASSERTION. Not "it exited 0" — a compositor that dies
               # instantly also exits 0 from systemd-run's point of view, since
@@ -421,7 +425,7 @@
               # And it must have taken the session through OUR code, not
               # libseat: the logind arm logs nothing on success, so the
               # negative is what proves it — no "no logind session" refusal.
-              assert "no logind session" not in log, (
+              assert "no logind session" not in journal, (
                   "omoya fell back to look-only: the logind session was refused"
               )
             '';
