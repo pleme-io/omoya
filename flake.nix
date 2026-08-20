@@ -784,7 +784,7 @@
               # focus-right is the verb to test with, because its effect is
               # observable through an independent leaf: `layout` is derived
               # from the tree, and a focus move changes which window a
-              # subsequent split would target. Closing or spawning would也
+              # subsequent split would target. Closing or spawning would also
               # work but are harder to undo inside one gate.
               print("verbs:", machine.succeed("kanshou-get verbs").strip())
               print("do:", machine.succeed("kanshou-get do/focus-right").strip())
