@@ -55,7 +55,6 @@ use smithay::{
             damage::OutputDamageTracker,
         },
     },
-    output::OutputModeSource,
     output::{Mode as OutputMode, Output, PhysicalProperties, Subpixel},
     reexports::drm::control::{Device as ControlDevice, connector, crtc},
     utils::DeviceFd,
@@ -364,6 +363,9 @@ where
     )?;
 
     let clear = background();
+    // Element geometry is expressed in physical pixels, so it needs the
+    // output's scale. Read once rather than per element per frame.
+    let scale = output.current_scale().fractional_scale();
     let interval = frame_interval(target);
 
     // A TIMER, not vblank, and that is an honest shortcut rather than a design.
@@ -392,6 +394,8 @@ where
             // flip must come after the frame is complete — a flip mid-render
             // shows a half-drawn frame, which reads as a renderer bug.
             let frame_result = (|| -> Result<(), Box<dyn std::error::Error>> {
+                use smithay::backend::renderer::element::{Element, RenderElement};
+                use smithay::utils::{Rectangle, Transform};
                 let dmabuf = {
                     use smithay::backend::allocator::dmabuf::AsDmabuf;
                     scanout.back_buffer().export()?
@@ -404,10 +408,20 @@ where
                     // Full-surface clear: see scanout's header — damage is not
                     // tracked across the alternating buffers, so every frame
                     // repaints wholly rather than leaving stale pixels behind.
-                    frame.clear(clear, &[Rectangle::from_size(mode.size)])?;
+                    // `Color32F`, not a bare [f32; 4] — the wrapper carries
+                    // the premultiplied-alpha contract that `background()`
+                    // already satisfies.
+                    frame.clear(
+                        smithay::backend::renderer::Color32F::from(clear),
+                        &[Rectangle::from_size(mode.size)],
+                    )?;
+                    // ★ `Element` supplies geometry()/src(); `RenderElement`
+                    // supplies draw(). Both must be in scope — the compiler
+                    // named the first and would have named the second next,
+                    // which is the tell that the element model splits
+                    // "where is it" from "how does it paint".
                     for element in &elements {
-                        use smithay::backend::renderer::element::RenderElement;
-                        let geo = element.geometry(output_scale);
+                        let geo = element.geometry(scale);
                         element.draw(&mut frame, element.src(), geo, &[geo], &[])?;
                     }
                     let _sync = frame.finish()?;
