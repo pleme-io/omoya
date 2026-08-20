@@ -342,6 +342,90 @@
             type = "app";
             program = "${wrapped}/bin/omoya";
           };
+
+          # ── ★ THE SEAT TEST — a REAL DRM device, in a VM, in CI ──────────
+          # Every previous verification of this compositor needed a person at
+          # plo. That is the reason a dropped session notifier and a mouse that
+          # moved nothing both shipped: the DRM path had no automated exercise
+          # at all, and the nested backend cannot show either bug.
+          #
+          # `vkms` — Virtual Kernel Mode Setting — is an in-tree kernel module
+          # that presents a real DRM device with real connectors and real dumb
+          # buffers, backed by nothing. So the whole scanout path runs here:
+          # mode-setting, dumb-buffer allocation, the renderer, and the session.
+          #
+          # ★ THE PAMName TRICK IS THE LOAD-BEARING PART. `--session logind`
+          # needs the process to be IN a logind session, and a test script's
+          # root shell is not one — `GetSessionByPID` answers "does not belong
+          # to any known session", which is exactly what it answers over ssh.
+          # `systemd-run --property=PAMName=login` runs the unit through PAM,
+          # which registers a session with logind. Without it this test would
+          # exercise the error path and look like it passed.
+          checks.vkms-seat = pkgs.testers.runNixOSTest {
+            name = "omoya-vkms-seat";
+            nodes.machine =
+              { ... }:
+              {
+                boot.kernelModules = [ "vkms" ];
+                # logind, and a user with a real account to hold the session.
+                services.displayManager.enable = false;
+                users.users.seat = {
+                  isNormalUser = true;
+                  password = "seat";
+                };
+                environment.systemPackages = [
+                  wrapped
+                  pkgs.libinput
+                ];
+                # A tmpfs /tmp would fight the VM's small RAM; the store is
+                # read-only and the test writes nothing large.
+                virtualisation.memorySize = 2048;
+              };
+            testScript = ''
+              machine.wait_for_unit("multi-user.target")
+
+              # ── the virtual card ──
+              machine.succeed("modprobe vkms")
+              machine.wait_until_succeeds("test -e /dev/dri/card0")
+              print(machine.succeed("ls -la /dev/dri/"))
+
+              # ★ It must have CONNECTORS and a mode, or "scanout works" would
+              # be vacuous — a card with nothing attached accepts a mode set
+              # that displays nowhere.
+              machine.succeed("test -d /sys/class/drm/card0-Virtual-1")
+              machine.wait_until_succeeds(
+                  "grep -q connected /sys/class/drm/card0-Virtual-1/status"
+              )
+
+              # ── the compositor, in a REAL logind session ──
+              # PAMName=login is what makes GetSessionByPID succeed; see the
+              # comment above the check.
+              machine.succeed(
+                  "systemd-run --unit=omoya --collect "
+                  "--property=PAMName=login "
+                  "--property=User=seat "
+                  "--property=Environment=XDG_RUNTIME_DIR=/run/user/1000 "
+                  "--property=Environment=RUST_LOG=info "
+                  "${wrapped}/bin/omoya --backend drm --session logind"
+              )
+
+              machine.sleep(8)
+              log = machine.succeed("journalctl -u omoya --no-pager | tail -60")
+              print(log)
+
+              # ★ THE ASSERTION. Not "it exited 0" — a compositor that dies
+              # instantly also exits 0 from systemd-run's point of view, since
+              # the failure is in the unit, not the spawn.
+              machine.succeed("systemctl is-active omoya")
+
+              # And it must have taken the session through OUR code, not
+              # libseat: the logind arm logs nothing on success, so the
+              # negative is what proves it — no "no logind session" refusal.
+              assert "no logind session" not in log, (
+                  "omoya fell back to look-only: the logind session was refused"
+              )
+            '';
+          };
         }
       );
     in
