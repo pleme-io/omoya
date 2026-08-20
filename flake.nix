@@ -413,7 +413,12 @@
                   # Reads one pixel out of a P6 PPM. Used to prove the
                   # pointer is drawn AND drawn in the right encoding — a claim
                   # only the pixels can settle.
+                  # A real Wayland shm client, so the gate can prove a
+                  # CLIENT SURFACE composites — not merely that the compositor
+                  # paints its own background and cursor.
+                  pkgs.weston
                   (pkgs.writers.writePython3Bin "ppm-probe" { } (builtins.readFile ./nix/ppm-probe.py))
+                  (pkgs.writers.writePython3Bin "ppm-colours" { } (builtins.readFile ./nix/ppm-colours.py))
                   (pkgs.writers.writePython3Bin "kanshou-capture" { } ''
                     import glob
                     import json
@@ -512,6 +517,7 @@
 
               machine.send_chars(
                   "exec ${wrapped}/bin/omoya --backend drm --session logind "
+                  "-- ${pkgs.weston}/bin/weston-presentation-shm "
                   "> /tmp/omoya.log 2>&1\n"
               )
 
@@ -634,6 +640,31 @@
               assert (br, bgc, bb) == (46, 52, 64), (
                   f"background is rgb({br},{bgc},{bb}), expected rgb(46,52,64) "
                   "= Nord0. rgb(7,9,13) means linear-into-non-sRGB again."
+              )
+
+              # ★ AND A CLIENT SURFACE MUST ACTUALLY COMPOSITE.
+              #
+              # This is the assertion whose absence hid the worst defect in the
+              # compositor. NuriRenderer::context_id() returned a FRESH
+              # ContextId per call; smithay stores an imported texture under
+              # that id and looks it up under it, so every lookup missed, the
+              # `?` returned None, and every client surface was silently
+              # dropped as "not mapped". omoya composited ZERO clients — shm
+              # included — while reporting windows: 1 and a healthy frame rate.
+              #
+              # Nothing short of counting COLOURS catches that. `windows` was
+              # right, `frames` was right, no error was logged, and the screen
+              # held exactly two colours: background and cursor.
+              colours = int(machine.succeed(
+                  "ppm-colours /tmp/seat.ppm"
+              ).strip())
+              print(f"distinct colours on screen: {colours}")
+              assert colours > 2, (
+                  f"only {colours} distinct colours — the background and the "
+                  "cursor. A client is connected (windows > 0) but its surface "
+                  "is not reaching the framebuffer. Check "
+                  "NuriRenderer::context_id stability and the Xrgb alpha "
+                  "normalisation."
               )
             '';
           };
