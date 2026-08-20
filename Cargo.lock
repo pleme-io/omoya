@@ -1018,7 +1018,7 @@ dependencies = [
 
 [[package]]
 name = "nuri"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "thiserror 2.0.20",
 ]
@@ -1234,7 +1234,7 @@ checksum = "bb7f9cb9982c5086e786c73b7c5dcca67937ffede389cc9c92928a7ab5b01148"
 
 [[package]]
 name = "omoya"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "awase",
  "evdev",
@@ -1254,7 +1254,7 @@ dependencies = [
 
 [[package]]
 name = "omoya-spec"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "thiserror 2.0.20",
  "tracing",
