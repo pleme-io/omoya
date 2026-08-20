@@ -54,7 +54,6 @@ use smithay::{
         drm::{DrmDevice, DrmDeviceFd, DrmSurface, compositor::{DrmCompositor, FrameFlags}},
         renderer::{
             ImportDma, damage::OutputDamageTracker,
-            element::surface::WaylandSurfaceRenderElement, pixman::PixmanRenderer,
         },
     },
     output::OutputModeSource,
@@ -274,6 +273,14 @@ pub fn frame_interval(target: &ScanoutTarget) -> Duration {
     let hz = target.mode.vrefresh().max(1);
     Duration::from_nanos(1_000_000_000 / u64::from(hz))
 }
+
+/// The scanout compositor.
+///
+/// ★ `DumbAllocator` and `DrmDeviceFd` as its own framebuffer exporter — the
+/// dumb-buffer path. The `()` is user data and the last parameter is the GBM fd
+/// type, which is never constructed: `DrmCompositor` takes `None` there. The
+/// type mentions GBM only because smithay's signature does.
+type Scanner = DrmCompositor<DumbAllocator, DrmDeviceFd, (), DrmDeviceFd>;
 
 // ── ★ `paint_background` REMOVED, not repaired ───────────────────────────
 // It was M4a's one-shot probe: create a surface, paint Nord once, queue a
