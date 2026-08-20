@@ -1,10 +1,10 @@
 {
   "schema_version": 2,
-  "cargo_lock_sha256": "bdd09d83e2111d0a464bfb6c9ca69bd85c73e8485a600d127dd725e1c2138d88",
+  "cargo_lock_sha256": "37bdf897b97ced73be359d1337e269286bc1874b971805a649667851e711c42a",
   "manifest_sha256": {
-    "Cargo.toml": "8230111a36436d29c297ca62a2a1a0c7c6217c7b0a025b9bcabcf8c8721c3d8a",
+    "Cargo.toml": "67d687252f410aa67f5bf704f2eb787f2d019cb7be22010500a14ebc68563243",
     "crates/omoya-spec/Cargo.toml": "75cd6d31f2ef617df89556610445abab8cf9cddb49d7bbf04c28ac5b7fc89031",
-    "crates/omoya/Cargo.toml": "4124a61a5bf73a737d5c9e7ffa32b77fd79fc5dc09e35484c3d6f7ba135fc503"
+    "crates/omoya/Cargo.toml": "02e8779bc20808ccc4fbdbea95bd137e9dda8b77a5c1febad864fd6b5b7c3531"
   },
   "target_resolves": {
     "base": {
@@ -226,6 +226,57 @@
         "runtime_dependencies": [],
         "build_dependencies": [],
         "features": [
+          "std"
+        ]
+      },
+      "bitvec-1.1.1": {
+        "runtime_dependencies": [
+          {
+            "name": "funty",
+            "package_key": "funty-2.0.0",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": false,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "radium",
+            "package_key": "radium-0.7.0",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "tap",
+            "package_key": "tap-1.0.1",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "wyz",
+            "package_key": "wyz-0.5.1",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": false,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": [
+          "alloc",
+          "atomic",
+          "default",
           "std"
         ]
       },
@@ -776,6 +827,58 @@
           "std"
         ]
       },
+      "evdev-0.13.2": {
+        "runtime_dependencies": [
+          {
+            "name": "bitvec",
+            "package_key": "bitvec-1.1.1",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "cfg_if",
+            "package_key": "cfg-if-1.0.4",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "libc",
+            "package_key": "libc-0.2.189",
+            "kind": "normal",
+            "features": [
+              "extra_traits"
+            ],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "nix",
+            "package_key": "nix-0.29.0",
+            "kind": "normal",
+            "features": [
+              "event",
+              "fs",
+              "ioctl"
+            ],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": []
+      },
       "event-listener-5.4.2": {
         "runtime_dependencies": [
           {
@@ -845,6 +948,11 @@
         ]
       },
       "find-msvc-tools-0.1.11": {
+        "runtime_dependencies": [],
+        "build_dependencies": [],
+        "features": []
+      },
+      "funty-2.0.0": {
         "runtime_dependencies": [],
         "build_dependencies": [],
         "features": []
@@ -1757,6 +1865,60 @@
           "os-poll"
         ]
       },
+      "nix-0.29.0": {
+        "runtime_dependencies": [
+          {
+            "name": "bitflags",
+            "package_key": "bitflags-2.13.1",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "cfg_if",
+            "package_key": "cfg-if-1.0.4",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "libc",
+            "package_key": "libc-0.2.189",
+            "kind": "normal",
+            "features": [
+              "extra_traits"
+            ],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [
+          {
+            "name": "cfg_aliases",
+            "package_key": "cfg_aliases-0.2.2",
+            "kind": "build",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "host"
+          }
+        ],
+        "features": [
+          "default",
+          "event",
+          "fs",
+          "ioctl"
+        ]
+      },
       "nu-ansi-term-0.50.3": {
         "runtime_dependencies": [],
         "build_dependencies": [],
@@ -1789,11 +1951,21 @@
         "build_dependencies": [],
         "features": []
       },
-      "omoya-0.1.9": {
+      "omoya-0.1.10": {
         "runtime_dependencies": [
           {
             "name": "awase",
             "package_key": "awase-0.1.10",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "evdev",
+            "package_key": "evdev-0.13.2",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -1823,7 +1995,7 @@
           },
           {
             "name": "omoya_spec",
-            "package_key": "omoya-spec-0.1.9",
+            "package_key": "omoya-spec-0.1.10",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -1932,7 +2104,7 @@
         "build_dependencies": [],
         "features": []
       },
-      "omoya-spec-0.1.9": {
+      "omoya-spec-0.1.10": {
         "runtime_dependencies": [
           {
             "name": "thiserror",
@@ -2244,6 +2416,11 @@
           "default",
           "proc-macro"
         ]
+      },
+      "radium-0.7.0": {
+        "runtime_dependencies": [],
+        "build_dependencies": [],
+        "features": []
       },
       "rand-0.9.5": {
         "runtime_dependencies": [
@@ -3252,6 +3429,11 @@
           "proc-macro",
           "visit-mut"
         ]
+      },
+      "tap-1.0.1": {
+        "runtime_dependencies": [],
+        "build_dependencies": [],
+        "features": []
       },
       "target-triple-1.0.1": {
         "runtime_dependencies": [],
@@ -4775,6 +4957,22 @@
           "parser",
           "std"
         ]
+      },
+      "wyz-0.5.1": {
+        "runtime_dependencies": [
+          {
+            "name": "tap",
+            "package_key": "tap-1.0.1",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": []
       },
       "xcursor-0.3.11": {
         "runtime_dependencies": [],
@@ -12711,6 +12909,9 @@
     "bitflags-2.13.1": {
       "edition": "2021"
     },
+    "bitvec-1.1.1": {
+      "edition": "2021"
+    },
     "block-buffer-0.10.4": {
       "edition": "2018"
     },
@@ -12815,6 +13016,9 @@
     "errno-0.3.14": {
       "edition": "2018"
     },
+    "evdev-0.13.2": {
+      "edition": "2021"
+    },
     "event-listener-5.4.2": {
       "edition": "2021"
     },
@@ -12835,6 +13039,9 @@
       "proc_macro": true
     },
     "foreign-types-shared-0.3.1": {
+      "edition": "2018"
+    },
+    "funty-2.0.0": {
       "edition": "2018"
     },
     "futures-core-0.3.34": {
@@ -12965,6 +13172,10 @@
     "mio-1.2.2": {
       "edition": "2021"
     },
+    "nix-0.29.0": {
+      "edition": "2021",
+      "build_script": "build.rs"
+    },
     "nu-ansi-term-0.50.3": {
       "edition": "2021"
     },
@@ -13004,7 +13215,7 @@
     "okiba-0.2.1": {
       "edition": "2024"
     },
-    "omoya-0.1.9": {
+    "omoya-0.1.10": {
       "edition": "2024",
       "binaries": [
         {
@@ -13013,7 +13224,7 @@
         }
       ]
     },
-    "omoya-spec-0.1.9": {
+    "omoya-spec-0.1.10": {
       "edition": "2024",
       "lib_target": {
         "name": "omoya_spec",
@@ -13075,6 +13286,10 @@
     },
     "quote-1.0.47": {
       "edition": "2021",
+      "build_script": "build.rs"
+    },
+    "radium-0.7.0": {
+      "edition": "2018",
       "build_script": "build.rs"
     },
     "rand-0.9.5": {
@@ -13166,6 +13381,9 @@
     },
     "syn-3.0.3": {
       "edition": "2021"
+    },
+    "tap-1.0.1": {
+      "edition": "2015"
     },
     "target-triple-1.0.1": {
       "edition": "2021",
@@ -13298,6 +13516,9 @@
     },
     "winnow-1.0.4": {
       "edition": "2021"
+    },
+    "wyz-0.5.1": {
+      "edition": "2018"
     },
     "x11-dl-2.21.0": {
       "edition": "2021",
