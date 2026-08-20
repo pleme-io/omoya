@@ -14,6 +14,7 @@
 //! question worth answering first — *can omoya composite at all?*
 
 mod evdev_backend;
+mod uevent;
 mod logind;
 mod nuri_renderer;
 mod scanout;
@@ -482,8 +483,12 @@ fn attach_session<S, N>(
     // `process_input_event<I: InputBackend>` (input.rs:36) is already generic,
     // so neither transport required a change to the handling code — the seam
     // existed before either backend did.
+    // ★ THE TOKEN IS KEPT. It is the only handle by which the session
+    // notifier can make the input source re-register its fds after a VT
+    // switch — see the ActivateSession arm below.
+    let mut input_token: Option<smithay::reexports::calloop::RegistrationToken> = None;
     let attached = match kind {
-        InputBackendKind::Evdev => crate::evdev_backend::EvdevBackend::new(&mut session.clone())
+        InputBackendKind::Evdev => crate::evdev_backend::EvdevBackend::new(session.clone())
             .map_err(|e| format!("{e}"))
             .and_then(|backend| {
                 event_loop
@@ -491,7 +496,7 @@ fn attach_session<S, N>(
                     .insert_source(backend, move |event, (), data| {
                         data.state.process_input_event(event);
                     })
-                    .map(|_| ())
+                    .map(|token| input_token = Some(token))
                     .map_err(|e| format!("{e}"))
             }),
     };
@@ -504,11 +509,37 @@ fn attach_session<S, N>(
     }
 
     let intro = introspect.clone();
+    // Cloned into the callback below. This is an `Rc` into the loop's own
+    // internals held by a source the loop owns, i.e. a cycle — accepted
+    // because the loop is process-lifetime, and named rather than left to be
+    // rediscovered.
+    let handle = event_loop.handle();
     match event_loop.handle().insert_source(notifier, move |event, (), _data| {
         use smithay::backend::session::Event as SessionEvent;
         match event {
             SessionEvent::ActivateSession => {
                 intro.session_active.store(1, Ordering::Relaxed);
+                // ★ RE-ARM INPUT. logind resumes a device by `dup2`ing a NEW
+                // file description onto the fd NUMBER the evdev backend
+                // already holds (`logind.rs:320-322`), and the kernel drops
+                // every epoll entry for a file as that file is freed —
+                // `fs/file_table.c:422` calls `eventpoll_release`,
+                // `fs/eventpoll.c:1083` implements it. So returning from
+                // another VT leaves the seat visually correct and completely
+                // untypeable until something re-registers those fds.
+                // `LoopHandle::update` is the only public way to make a source
+                // re-register from outside itself (calloop
+                // `loop_logic.rs:199-228`); the backend re-arms on the
+                // inactive → active TRANSITION it observes inside its own
+                // `reregister`.
+                if let Some(tok) = &input_token {
+                    if let Err(e) = handle.update(tok) {
+                        tracing::error!(
+                            error = %e,
+                            "input re-arm failed — the seat is back but not typeable"
+                        );
+                    }
+                }
                 tracing::info!("session ACTIVATED — the seat is ours again");
             }
             SessionEvent::PauseSession => {

@@ -281,15 +281,28 @@ fn handle_pause(inner: &Arc<Inner>, msg: &zbus::Message, _tx: &SyncSender<Sessio
     // switch. A client that only listens looks correct and hangs the switch.
     // "gone" means the device is already removed — acking it is meaningless
     // and logind does not wait for it.
-    if kind != "gone" {
-        if let Err(e) = inner.call(
-            SESSION_IFACE,
-            &inner.session_path,
-            "PauseDeviceComplete",
-            &(major, minor),
-        ) {
-            tracing::error!(error = %e, major, minor, "PauseDeviceComplete failed — a VT switch may hang");
+    if kind == "gone" {
+        // ★ THE DEVICE IS GONE FOR GOOD, AND THIS IS WHERE THE MAP IS SWEPT.
+        // logind has already freed its own SessionDevice — measured in systemd
+        // v257: `logind-core.c:263-276` frees the Device on a remove uevent,
+        // `logind-device.c:45` frees each SessionDevice hanging off it, and
+        // `logind-session-device.c:415-434` revokes the fd and sends exactly
+        // this signal. So there is nothing left to `ReleaseDevice`.
+        //
+        // What IS left is our own row, and the header above names it as the
+        // hazard: leave it and a later `open` can be handed the same fd
+        // NUMBER, at which point a stale resume would `dup2` over an unrelated
+        // device.
+        if let Ok(mut d) = inner.devices.lock() {
+            d.remove(&(major, minor));
         }
+    } else if let Err(e) = inner.call(
+        SESSION_IFACE,
+        &inner.session_path,
+        "PauseDeviceComplete",
+        &(major, minor),
+    ) {
+        tracing::error!(error = %e, major, minor, "PauseDeviceComplete failed — a VT switch may hang");
     }
 }
 

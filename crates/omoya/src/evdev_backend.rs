@@ -34,7 +34,7 @@
 //! `pending-omoya-input-policy: acceleration, tap-to-click, gestures`
 
 use std::collections::HashMap;
-use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 
 use smithay::backend::input::{
@@ -50,6 +50,14 @@ const XKB_KEYCODE_OFFSET: u32 = 8;
 /// through udev: the directory IS the device list, and `libudev` adds a C
 /// dependency to read it.
 const INPUT_DIR: &str = "/dev/input";
+
+
+/// `EAGAIN` — the normal "nothing to read" answer on a non-blocking fd.
+const AGAIN: i32 = smithay::reexports::rustix::io::Errno::AGAIN.raw_os_error();
+/// `ENODEV` — what `evdev_read` returns for a device that is gone OR revoked
+/// (`drivers/input/evdev.c:569`, Linux v6.12). The kernel does not tell the two
+/// apart, and neither can this file: only a `remove` uevent means gone.
+const NODEV: i32 = smithay::reexports::rustix::io::Errno::NODEV.raw_os_error();
 
 // ── DEVICE ────────────────────────────────────────────────────────────────
 
@@ -108,7 +116,7 @@ pub struct Base {
 
 macro_rules! impl_event {
     ($t:ty) => {
-        impl Event<EvdevBackend> for $t {
+        impl<S: Session> Event<EvdevBackend<S>> for $t {
             fn time(&self) -> u64 {
                 self.base.time
             }
@@ -129,7 +137,7 @@ pub struct KeyEvent {
 }
 impl_event!(KeyEvent);
 
-impl si::KeyboardKeyEvent<EvdevBackend> for KeyEvent {
+impl<S: Session> si::KeyboardKeyEvent<EvdevBackend<S>> for KeyEvent {
     fn key_code(&self) -> Keycode {
         // ★ THE +8. See the header — without it every key is wrong.
         (self.code + XKB_KEYCODE_OFFSET).into()
@@ -151,7 +159,7 @@ pub struct MotionEvent {
 }
 impl_event!(MotionEvent);
 
-impl si::PointerMotionEvent<EvdevBackend> for MotionEvent {
+impl<S: Session> si::PointerMotionEvent<EvdevBackend<S>> for MotionEvent {
     fn delta_x(&self) -> f64 {
         self.dx
     }
@@ -178,7 +186,7 @@ pub struct ButtonEvent {
 }
 impl_event!(ButtonEvent);
 
-impl si::PointerButtonEvent<EvdevBackend> for ButtonEvent {
+impl<S: Session> si::PointerButtonEvent<EvdevBackend<S>> for ButtonEvent {
     fn button_code(&self) -> u32 {
         self.code
     }
@@ -196,7 +204,7 @@ pub struct AxisEvent {
 }
 impl_event!(AxisEvent);
 
-impl si::PointerAxisEvent<EvdevBackend> for AxisEvent {
+impl<S: Session> si::PointerAxisEvent<EvdevBackend<S>> for AxisEvent {
     fn amount(&self, axis: Axis) -> Option<f64> {
         Some(match axis {
             Axis::Vertical => self.vertical,
@@ -208,7 +216,14 @@ impl si::PointerAxisEvent<EvdevBackend> for AxisEvent {
         // ★ A wheel DETENT is 120 in the v120 convention, and the kernel's
         // REL_WHEEL reports 1 per detent. Multiplying is the translation, not
         // a scale factor someone picked.
-        self.amount(axis).map(|v| v * 120.0)
+        //
+        // ★ THE QUALIFIED CALL IS NOT DECORATION. Now that the event traits
+        // are generic over the session, `AxisEvent` implements
+        // `PointerAxisEvent<B>` for EVERY `B = EvdevBackend<S>`, so a bare
+        // `self.amount(axis)` has no single `B` to infer and fails with
+        // E0283 — measured, not guessed. Naming the backend picks the same
+        // impl this method is inside.
+        <Self as si::PointerAxisEvent<EvdevBackend<S>>>::amount(self, axis).map(|v| v * 120.0)
     }
 
     fn source(&self) -> AxisSource {
@@ -224,12 +239,62 @@ impl si::PointerAxisEvent<EvdevBackend> for AxisEvent {
 
 // ── THE BACKEND ───────────────────────────────────────────────────────────
 
+/// One opened device plus the two bits of poll bookkeeping calloop makes us
+/// keep ourselves.
+///
+/// ★ `polled` and `armed` are NOT the same thing and collapsing them is the
+/// bug this struct exists to prevent. `polled` is a fact about the epoll set —
+/// `Poll::register` fails on an fd already in it and `Poll::reregister` fails
+/// on one that is not (calloop `sys.rs:286-289`, `:339-343`). `armed` is a
+/// belief about the DEVICE — cleared the moment a read returns `ENODEV`.
+struct Entry {
+    meta: EvdevDevice,
+    dev: evdev::Device,
+    /// This fd is in the poll set right now.
+    polled: bool,
+    /// We believe this fd can still produce events.
+    ///
+    /// Cleared on `ENODEV`, which the kernel returns for BOTH an unplugged
+    /// device and one logind revoked on a VT switch — `drivers/input/evdev.c:569`
+    /// tests `!evdev->exist || client->revoked` and cannot tell you which.
+    armed: bool,
+    /// A `remove` uevent named this node. Terminal: a gone device is never
+    /// re-armed, and this is the only thing that distinguishes an unplug from
+    /// a revoke.
+    gone: bool,
+}
+
 /// Input devices, read straight from the kernel.
-pub struct EvdevBackend {
-    devices: Vec<(EvdevDevice, evdev::Device)>,
+pub struct EvdevBackend<S: Session> {
+    /// ★ THE SESSION, HELD — not borrowed for the constructor and dropped.
+    /// Hotplug means opening a device long after start-up, and `Session::open`
+    /// (logind `TakeDevice`) is the only sanctioned way to do that. Opening a
+    /// hotplugged node with `File::open` would produce an fd logind has never
+    /// heard of: not paused on a VT switch, not repaired by `ResumeDevice`,
+    /// and dependent on `input` group membership the session exists to avoid
+    /// needing.
+    session: S,
+    devices: Vec<Entry>,
     /// Deltas accumulating until `SYN_REPORT`. See the header.
     pending: HashMap<PathBuf, Accum>,
+    /// udev's monitor. `None` when the socket could not be bound — a seat with
+    /// no hotplug, degraded and SAID SO, rather than a backend that refuses to
+    /// start and leaves the machine with no input at all.
+    monitor: Option<crate::uevent::UeventMonitor>,
     token: Option<smithay::reexports::calloop::Token>,
+    monitor_token: Option<smithay::reexports::calloop::Token>,
+    /// Devices whose node is gone, waiting to leave the poll set before their
+    /// fd is closed. An fd must be unregistered BEFORE it is closed or
+    /// calloop's level-triggered emulation keeps a stale `(key, raw fd)` pair
+    /// (`sys.rs:329-333`) aimed at a number the kernel is free to hand to the
+    /// next `open`.
+    graveyard: Vec<(evdev::Device, bool)>,
+    /// The last `Session::is_active()` this source saw, so a VT RESUME
+    /// (false → true) can be told from a session that has simply been active
+    /// all along.
+    last_active: bool,
+    /// The fd set changed; `process_events` must return `Reregister`.
+    dirty: bool,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -250,22 +315,35 @@ impl Accum {
     }
 }
 
-impl EvdevBackend {
-    /// Enumerate `/dev/input` and open each device THROUGH the session.
+impl<S: Session> EvdevBackend<S> {
+    /// Subscribe to hotplug, then enumerate `/dev/input`, opening each device
+    /// THROUGH the session.
     ///
-    /// ── ★ WHY THE SESSION AND NOT `File::open` ────────────────────────────
-    /// Same reason the DRM device goes through it: a directly-opened fd is
-    /// invisible to whatever arbitrates the seat, so it is never paused on a
-    /// VT switch — and it needs `input` group membership the session would
-    /// otherwise grant.
+    /// ── ★ THE ORDER IS THE POINT ──────────────────────────────────────────
+    /// The monitor is bound BEFORE the directory is read. A device that
+    /// appears between the two is then delivered as a `add` uevent and picked
+    /// up; the other order drops it into the gap, and the symptom is a
+    /// keyboard that is invisible until it is unplugged and plugged back in.
     ///
     /// # Errors
     /// If `/dev/input` cannot be read. An individual device that fails to open
     /// is SKIPPED with a warning rather than fatal: one unreadable node must
-    /// not cost the seat its keyboard.
-    pub fn new<S: Session>(session: &mut S) -> Result<Self, Box<dyn std::error::Error>> {
-        let mut devices = Vec::new();
+    /// not cost the seat its keyboard. A monitor that fails to bind is also
+    /// not fatal — see `monitor`.
+    pub fn new(mut session: S) -> Result<Self, Box<dyn std::error::Error>> {
+        let monitor = match crate::uevent::UeventMonitor::new() {
+            Ok(m) => Some(m),
+            Err(e) => {
+                tracing::error!(
+                    error = ?e,
+                    "udev monitor not bound — hotplug is OFF for this run; a device \
+                     plugged in later will be invisible until restart"
+                );
+                None
+            }
+        };
 
+        let mut devices = Vec::new();
         for entry in std::fs::read_dir(INPUT_DIR)? {
             let Ok(entry) = entry else { continue };
             let path = entry.path();
@@ -277,8 +355,14 @@ impl EvdevBackend {
                 continue;
             }
 
-            match Self::open_one(session, &path) {
-                Ok(Some(d)) => devices.push(d),
+            match Self::open_one(&mut session, &path) {
+                Ok(Some((meta, dev))) => devices.push(Entry {
+                    meta,
+                    dev,
+                    polled: false,
+                    armed: true,
+                    gone: false,
+                }),
                 // Not an input device we can use — no keyboard and no pointer.
                 Ok(None) => {}
                 Err(e) => {
@@ -287,15 +371,25 @@ impl EvdevBackend {
             }
         }
 
-        tracing::info!(count = devices.len(), "evdev devices opened through the session");
+        tracing::info!(
+            count = devices.len(),
+            hotplug = monitor.is_some(),
+            "evdev devices opened through the session"
+        );
         Ok(Self {
+            session,
             devices,
             pending: HashMap::new(),
+            monitor,
             token: None,
+            monitor_token: None,
+            graveyard: Vec::new(),
+            last_active: false,
+            dirty: false,
         })
     }
 
-    fn open_one<S: Session>(
+    fn open_one(
         session: &mut S,
         path: &Path,
     ) -> Result<Option<(EvdevDevice, evdev::Device)>, Box<dyn std::error::Error>> {
@@ -337,7 +431,7 @@ impl EvdevBackend {
     }
 }
 
-impl InputBackend for EvdevBackend {
+impl<S: Session> InputBackend for EvdevBackend<S> {
     type Device = EvdevDevice;
     type KeyboardKeyEvent = KeyEvent;
     type PointerAxisEvent = AxisEvent;
@@ -372,9 +466,133 @@ impl InputBackend for EvdevBackend {
     type SpecialEvent = UnusedEvent;
 }
 
+// ── HOTPLUG ───────────────────────────────────────────────────────────────
+
+impl<S: Session> EvdevBackend<S> {
+    /// Take everything udev has to say and act on it.
+    ///
+    /// ── ★ WHY THE OPEN GOES THROUGH THE SESSION, IDENTICALLY ──────────────
+    /// This is the same `Self::open_one` the constructor uses, so a keyboard
+    /// plugged in an hour after start-up is `TakeDevice`'d exactly like one
+    /// present at boot: logind records its `(major, minor) → fd` in
+    /// `logind.rs`'s `Inner::devices`, which is what makes `ResumeDevice`'s
+    /// `dup2` cover it on the next VT switch. A hotplugged device opened any
+    /// other way would work until the first Ctrl+Alt+F2 and then be dead with
+    /// no diagnostic.
+    fn absorb_hotplug<F>(&mut self, callback: &mut F)
+    where
+        F: FnMut(InputEvent<Self>, &mut ()),
+    {
+        // Collected first: `drain` borrows `self.monitor`, and opening borrows
+        // `self.session` mutably. Two disjoint fields, but not across one
+        // closure.
+        let mut hot = Vec::new();
+        if let Some(m) = &self.monitor {
+            m.drain(|h| hot.push(h));
+        }
+
+        for h in hot {
+            match h {
+                crate::uevent::Hotplug::Added(path) => {
+                    // ★ The monitor is bound before the enumeration, so the
+                    // two can legitimately report the same device. Opening it
+                    // twice would take two fds for one node and double every
+                    // keystroke.
+                    if self.devices.iter().any(|e| e.meta.path == path) {
+                        continue;
+                    }
+                    match Self::open_one(&mut self.session, &path) {
+                        Ok(Some((meta, dev))) => {
+                            tracing::info!(device = %meta.name, path = %path.display(), "input device HOTPLUGGED");
+                            callback(
+                                InputEvent::DeviceAdded {
+                                    device: meta.clone(),
+                                },
+                                &mut (),
+                            );
+                            self.devices.push(Entry {
+                                meta,
+                                dev,
+                                polled: false,
+                                armed: true,
+                                gone: false,
+                            });
+                            self.dirty = true;
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            tracing::warn!(path = %path.display(), error = %e, "hotplugged device not opened");
+                        }
+                    }
+                }
+                crate::uevent::Hotplug::Removed(path) => {
+                    let Some(i) = self.devices.iter().position(|e| e.meta.path == path) else {
+                        continue;
+                    };
+                    let mut e = self.devices.remove(i);
+                    e.gone = true;
+                    self.pending.remove(&path);
+                    tracing::info!(device = %e.meta.name, path = %path.display(), "input device UNPLUGGED");
+                    callback(InputEvent::DeviceRemoved { device: e.meta }, &mut ());
+                    // ★ NOT dropped here. The fd is still in the poll set, and
+                    // dropping it now closes it while calloop still believes
+                    // in it. `reregister` unregisters, then drops.
+                    self.graveyard.push((e.dev, e.polled));
+                    self.dirty = true;
+                }
+            }
+        }
+    }
+}
+
+
+/// Decide what a failed `fetch_events` means, and disarm the device if the fd
+/// is dead. Returns whether the poll set now needs updating.
+///
+/// ── ★ THE SPIN THIS CLOSES ────────────────────────────────────────────────
+/// `evdev_poll` answers `EPOLLHUP | EPOLLERR` for a device that is gone or
+/// revoked (Linux v6.12 `drivers/input/evdev.c:616-619`). polling 3.11.0 folds
+/// HUP and ERR into `readable` (`epoll.rs:311`, `:342`), and calloop 0.14.4
+/// hardcodes `Readiness::error` to `false` (`sys.rs:259`) — so at the
+/// `EventSource` boundary that wake is INDISTINGUISHABLE from real data. In
+/// `Mode::Level` the fd is then permanently ready, and the source is woken as
+/// fast as the loop can turn: 100% of one core, forever.
+///
+/// The old code could not see it. `let Ok(events) = dev.fetch_events() else
+/// { continue }` discarded the `ENODEV` that is the only evidence.
+///
+/// ★ Disarming is NOT removal. `ENODEV` covers a revoke as well as an unplug
+/// (`evdev.c:569` tests `!evdev->exist || client->revoked`), and a revoke is
+/// repaired by `ResumeDevice`'s `dup2`. Only a `remove` uevent means gone.
+///
+/// ★ Takes `meta` and `armed` SEPARATELY rather than `&mut Entry`. The caller
+/// is inside `dev.fetch_events()`'s borrow of the same `Entry`, so a second
+/// whole-struct borrow is E0499 — measured. Splitting the struct at the call
+/// site is what makes the three borrows disjoint.
+fn disarm_on_fault(meta: &EvdevDevice, armed: &mut bool, e: &std::io::Error) -> bool {
+    match e.raw_os_error() {
+        // The normal "nothing to read" answer on a non-blocking fd — not a
+        // failure worth logging every tick.
+        Some(AGAIN) => false,
+        Some(NODEV) => {
+            *armed = false;
+            tracing::info!(
+                device = %meta.name,
+                path = %meta.path.display(),
+                "device fd went ENODEV — disarmed (revoked on a VT switch, or unplugged)"
+            );
+            true
+        }
+        _ => {
+            tracing::warn!(device = %meta.name, error = %e, "evdev read failed");
+            false
+        }
+    }
+}
+
 // ── THE PUMP ──────────────────────────────────────────────────────────────
 
-impl EvdevBackend {
+impl<S: Session> EvdevBackend<S> {
     /// Drain every device and emit smithay events.
     ///
     /// ── ★ THE FRAME RULE ──────────────────────────────────────────────────
@@ -391,11 +609,31 @@ impl EvdevBackend {
     where
         F: FnMut(InputEvent<Self>),
     {
-        for (meta, dev) in &mut self.devices {
-            let Ok(events) = dev.fetch_events() else {
-                // EAGAIN on a non-blocking fd is the normal "nothing to read"
-                // answer, not a failure worth logging every tick.
+        // Disjoint field borrows: `devices`, `pending` and `dirty` are three
+        // separate fields of `self`, so the loop may hold all three.
+        for entry in &mut self.devices {
+            // ★ DESTRUCTURED, not used through `entry`. `fetch_events()` holds
+            // a mutable borrow of `dev` for as long as its iterator lives, so
+            // touching `entry.armed` through the struct in the error arm is
+            // E0499. Splitting here gives three disjoint borrows.
+            let Entry {
+                meta,
+                dev,
+                armed,
+                polled: _,
+                gone: _,
+            } = entry;
+            if !*armed {
                 continue;
+            }
+            let events = match dev.fetch_events() {
+                Ok(e) => e,
+                Err(e) => {
+                    if disarm_on_fault(meta, armed, &e) {
+                        self.dirty = true;
+                    }
+                    continue;
+                }
             };
 
             let acc = self.pending.entry(meta.path.clone()).or_default();
@@ -413,23 +651,16 @@ impl EvdevBackend {
                 };
 
                 // ★ `destructure()` — evdev 0.13's typed view of an event.
-                // `InputEventKind` no longer exists; `EventSummary` carries the
-                // code and value together, which removes the 0.12 shape where
-                // you matched a kind and then read `.value()` separately and
-                // could read the wrong one.
                 match ev.destructure() {
                     evdev::EventSummary::Key(_, key, value) => {
                         let code = u32::from(key.0);
                         let state = match value {
                             0 => KeyState::Released,
-                            // ★ value 2 is AUTOREPEAT. Treated as a press,
-                            // because that is what it is — and `count` carries
-                            // the distinction for anything that cares.
+                            // ★ value 2 is AUTOREPEAT.
                             _ => KeyState::Pressed,
                         };
                         // BTN_MISC (0x100) is where buttons begin; below it is
                         // the keyboard. The split is the kernel's, not ours.
-                        #[allow(clippy::items_after_statements)]
                         if code >= 0x100 {
                             callback(InputEvent::PointerButton {
                                 event: ButtonEvent {
@@ -480,12 +711,7 @@ impl EvdevBackend {
                             callback(InputEvent::PointerAxis {
                                 event: AxisEvent {
                                     base,
-                                    // ★ NEGATED. The kernel's REL_WHEEL is
-                                    // POSITIVE for scrolling AWAY from the
-                                    // user, while Wayland's axis is positive
-                                    // DOWNWARD. Passing it through unchanged
-                                    // inverts scrolling everywhere, and the
-                                    // symptom reads as a broken mouse.
+                                    // ★ NEGATED — see the original note.
                                     vertical: -a.wheel,
                                     horizontal: a.hwheel,
                                 },
@@ -500,8 +726,8 @@ impl EvdevBackend {
     }
 }
 
-impl smithay::reexports::calloop::EventSource for EvdevBackend {
-    type Event = InputEvent<EvdevBackend>;
+impl<S: Session> smithay::reexports::calloop::EventSource for EvdevBackend<S> {
+    type Event = InputEvent<EvdevBackend<S>>;
     type Metadata = ();
     type Ret = ();
     type Error = std::io::Error;
@@ -509,14 +735,28 @@ impl smithay::reexports::calloop::EventSource for EvdevBackend {
     fn process_events<F>(
         &mut self,
         _: smithay::reexports::calloop::Readiness,
-        _: smithay::reexports::calloop::Token,
+        token: smithay::reexports::calloop::Token,
         mut callback: F,
     ) -> std::io::Result<smithay::reexports::calloop::PostAction>
     where
         F: FnMut(Self::Event, &mut ()),
     {
-        self.pump(|e| callback(e, &mut ()));
-        Ok(smithay::reexports::calloop::PostAction::Continue)
+        if Some(token) == self.monitor_token {
+            self.absorb_hotplug(&mut callback);
+        } else {
+            self.pump(|e| callback(e, &mut ()));
+        }
+
+        // ★ THE ONLY WAY TO REACH `Poll` FROM HERE. `process_events` is not
+        // given the poll instance; `PostAction::Reregister` is what makes
+        // calloop call `reregister` with it (`loop_logic.rs:539-549`). Every
+        // add and every removal therefore lands one tick later, inside
+        // `reregister`, which is the correct place and the only place.
+        Ok(if std::mem::take(&mut self.dirty) {
+            smithay::reexports::calloop::PostAction::Reregister
+        } else {
+            smithay::reexports::calloop::PostAction::Continue
+        })
     }
 
     fn register(
@@ -524,23 +764,48 @@ impl smithay::reexports::calloop::EventSource for EvdevBackend {
         poll: &mut smithay::reexports::calloop::Poll,
         factory: &mut smithay::reexports::calloop::TokenFactory,
     ) -> smithay::reexports::calloop::Result<()> {
-        // ★ ONE TOKEN, EVERY FD. calloop wakes on any of them and `pump`
-        // drains all — a per-device token would demand a device lookup by
-        // token on every wake, and the drain is cheap because each read
-        // returns EAGAIN immediately when there is nothing there.
+        // ★ TOKEN ORDER IS A CONTRACT. `reregister` is handed a FRESH
+        // `TokenFactory` rooted at the same registration token
+        // (`loop_logic.rs:545-549`), so it must ask for its tokens in the same
+        // order to get the same sub-ids back. Swap these two lines and every
+        // device wake is delivered as a monitor wake.
         let token = factory.token();
         self.token = Some(token);
-        for (_, dev) in &self.devices {
+        let monitor_token = factory.token();
+        self.monitor_token = Some(monitor_token);
+
+        // ★ ONE TOKEN, EVERY DEVICE FD. calloop wakes on any of them and
+        // `pump` drains all — a per-device token would demand a device lookup
+        // by token on every wake, and the drain is cheap because each read
+        // returns EAGAIN immediately when there is nothing there. The MONITOR
+        // gets its own token, because its wake means something entirely
+        // different.
+        for e in &mut self.devices {
             // SAFETY: the fds live as long as this source, which calloop owns.
             unsafe {
                 poll.register(
-                    std::os::fd::BorrowedFd::borrow_raw(dev.as_raw_fd()),
+                    std::os::fd::BorrowedFd::borrow_raw(e.dev.as_raw_fd()),
                     smithay::reexports::calloop::Interest::READ,
                     smithay::reexports::calloop::Mode::Level,
                     token,
                 )?;
             }
+            e.polled = true;
         }
+
+        if let Some(m) = &self.monitor {
+            // SAFETY: as above.
+            unsafe {
+                poll.register(
+                    m.as_fd(),
+                    smithay::reexports::calloop::Interest::READ,
+                    smithay::reexports::calloop::Mode::Level,
+                    monitor_token,
+                )?;
+            }
+        }
+
+        self.last_active = self.session.is_active();
         Ok(())
     }
 
@@ -549,18 +814,75 @@ impl smithay::reexports::calloop::EventSource for EvdevBackend {
         poll: &mut smithay::reexports::calloop::Poll,
         factory: &mut smithay::reexports::calloop::TokenFactory,
     ) -> smithay::reexports::calloop::Result<()> {
+        use smithay::reexports::calloop::{Interest, Mode};
+
         let token = factory.token();
         self.token = Some(token);
-        for (_, dev) in &self.devices {
-            // SAFETY: as above.
-            unsafe {
-                poll.reregister(
-                    std::os::fd::BorrowedFd::borrow_raw(dev.as_raw_fd()),
-                    smithay::reexports::calloop::Interest::READ,
-                    smithay::reexports::calloop::Mode::Level,
-                    token,
-                )?;
+        let monitor_token = factory.token();
+        self.monitor_token = Some(monitor_token);
+
+        // ★ RE-ARM ON THE TRANSITION, NEVER ON THE STATE. A VT resume is
+        // inactive → active. An unplug leaves the session active throughout,
+        // so re-arming on `is_active()` alone would put a dead fd straight
+        // back into the poll set and restart the spin the pump just stopped.
+        let active = self.session.is_active();
+        if active && !self.last_active {
+            for e in &mut self.devices {
+                if !e.gone {
+                    e.armed = true;
+                }
             }
+        }
+        self.last_active = active;
+
+        // The dead leave the poll set BEFORE their fd is closed. Reversing
+        // this leaves calloop's level-triggered emulation holding a raw fd
+        // number the kernel is free to reuse (`sys.rs:329-333`).
+        for (dev, polled) in std::mem::take(&mut self.graveyard) {
+            if polled {
+                // SAFETY: the fd is still open — `dev` has not been dropped.
+                unsafe {
+                    let _ = poll.unregister(std::os::fd::BorrowedFd::borrow_raw(dev.as_raw_fd()));
+                }
+            }
+            drop(dev);
+        }
+
+        for e in &mut self.devices {
+            let want = e.armed && !e.gone;
+            // SAFETY: as above.
+            let fd = unsafe { std::os::fd::BorrowedFd::borrow_raw(e.dev.as_raw_fd()) };
+            match (e.polled, want) {
+                (false, true) => {
+                    // SAFETY: as above.
+                    unsafe { poll.register(fd, Interest::READ, Mode::Level, token)? };
+                    e.polled = true;
+                }
+                (true, true) => {
+                    // ★ A MOD THAT FAILS IS NOT AN ERROR HERE. When logind
+                    // resumes a device it `dup2`s a NEW file description onto
+                    // the fd number we already hold (`logind.rs:320-322`).
+                    // That closes the old description, and the kernel drops
+                    // every epoll entry for a file as it is freed —
+                    // `fs/file_table.c:422` calls `eventpoll_release`, which
+                    // `fs/eventpoll.c:1083` implements. So after a VT switch
+                    // `epoll_ctl(MOD)` answers ENOENT for an fd we believe is
+                    // registered. Re-ADD; do not fail the loop.
+                    if poll.reregister(fd, Interest::READ, Mode::Level, token).is_err() {
+                        // SAFETY: as above.
+                        unsafe { poll.register(fd, Interest::READ, Mode::Level, token)? };
+                    }
+                }
+                (true, false) => {
+                    let _ = poll.unregister(fd);
+                    e.polled = false;
+                }
+                (false, false) => {}
+            }
+        }
+
+        if let Some(m) = &self.monitor {
+            poll.reregister(m.as_fd(), Interest::READ, Mode::Level, monitor_token)?;
         }
         Ok(())
     }
@@ -569,20 +891,77 @@ impl smithay::reexports::calloop::EventSource for EvdevBackend {
         &mut self,
         poll: &mut smithay::reexports::calloop::Poll,
     ) -> smithay::reexports::calloop::Result<()> {
-        for (_, dev) in &self.devices {
-            // SAFETY: as above.
-            unsafe {
-                poll.unregister(std::os::fd::BorrowedFd::borrow_raw(dev.as_raw_fd()))?;
+        for e in &mut self.devices {
+            if e.polled {
+                // SAFETY: as above.
+                unsafe {
+                    let _ = poll.unregister(std::os::fd::BorrowedFd::borrow_raw(e.dev.as_raw_fd()));
+                }
+                e.polled = false;
             }
         }
+        for (dev, polled) in std::mem::take(&mut self.graveyard) {
+            if polled {
+                // SAFETY: as above.
+                unsafe {
+                    let _ = poll.unregister(std::os::fd::BorrowedFd::borrow_raw(dev.as_raw_fd()));
+                }
+            }
+        }
+        if let Some(m) = &self.monitor {
+            let _ = poll.unregister(m.as_fd());
+        }
         self.token = None;
+        self.monitor_token = None;
         Ok(())
     }
 }
 
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A `Session` that refuses everything.
+    ///
+    /// ★ Present because the event traits are now generic over the session,
+    /// so `k.key_code()` has no single `B` to infer. A named stand-in is
+    /// clearer than a turbofish, and it also pins the shape of what the
+    /// backend actually needs from a session: one `open`, one `is_active`.
+    #[derive(Debug, Clone, Copy)]
+    struct NoSession;
+
+    impl smithay::backend::session::AsErrno for NoSessionError {
+        fn as_errno(&self) -> Option<i32> {
+            None
+        }
+    }
+
+    #[derive(Debug)]
+    struct NoSessionError;
+
+    impl Session for NoSession {
+        type Error = NoSessionError;
+        fn open(
+            &mut self,
+            _: &Path,
+            _: smithay::reexports::rustix::fs::OFlags,
+        ) -> Result<OwnedFd, Self::Error> {
+            Err(NoSessionError)
+        }
+        fn close(&mut self, _: OwnedFd) -> Result<(), Self::Error> {
+            Err(NoSessionError)
+        }
+        fn change_vt(&mut self, _: i32) -> Result<(), Self::Error> {
+            Err(NoSessionError)
+        }
+        fn is_active(&self) -> bool {
+            false
+        }
+        fn seat(&self) -> String {
+            "test".into()
+        }
+    }
 
     #[test]
     fn the_xkb_offset_is_eight_and_is_applied() {
@@ -603,8 +982,10 @@ mod tests {
             state: KeyState::Pressed,
             count: 1,
         };
-        use smithay::backend::input::KeyboardKeyEvent;
-        assert_eq!(u32::from(k.key_code()), 38);
+        assert_eq!(
+            u32::from(si::KeyboardKeyEvent::<EvdevBackend<NoSession>>::key_code(&k)),
+            38
+        );
     }
 
     #[test]
@@ -625,5 +1006,30 @@ mod tests {
         // it is the keyboard; at or above, a pointer button.
         assert!(u32::from(evdev::KeyCode::KEY_A.0) < 0x100);
         assert!(u32::from(evdev::KeyCode::BTN_LEFT.0) >= 0x100);
+    }
+
+    #[test]
+    fn enodev_is_the_removal_errno_and_eagain_is_not() {
+        // ★ These two must not be confused: EAGAIN is silence, ENODEV is a
+        // dead fd that will wake the loop forever. Pinning both here means a
+        // future edit that folds them together fails the build rather than
+        // the machine.
+        assert_eq!(NODEV, 19);
+        assert_ne!(AGAIN, NODEV);
+    }
+
+    /// The state machine that decides what goes in the poll set, without a
+    /// poll instance.
+    ///
+    /// ★ This is the test the spin bug would have failed. A disarmed entry
+    /// must be OUT of the poll set, and it must NOT come back merely because
+    /// the session happens to be active.
+    #[test]
+    fn a_disarmed_device_leaves_the_poll_set_and_a_gone_one_never_returns() {
+        let want = |armed: bool, gone: bool| armed && !gone;
+        assert!(want(true, false), "a live device is polled");
+        assert!(!want(false, false), "a revoked device is not polled");
+        assert!(!want(true, true), "a removed device is not polled");
+        assert!(!want(false, true), "a removed, revoked device is not polled");
     }
 }
