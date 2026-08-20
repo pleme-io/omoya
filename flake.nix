@@ -174,6 +174,18 @@
             libgbm # buffer allocation for the scanout path
             udev # device discovery + hotplug
             seatd # libseat — session/VT arbitration (talks to logind here)
+            # ★ BOTH OF THESE WERE MISSING, and `cargo check` could not show
+            # it: checking does not link. `cargo test` and `cargo build` do,
+            # and failed with `cannot find -linput` / `cannot find -lpixman-1`.
+            #
+            # The crate has enabled `backend_libinput` and `renderer_pixman`
+            # since M4, so the shell has been unable to produce a binary that
+            # whole time. It went unnoticed because the PACKAGE build is a
+            # different derivation with its own inputs — so `nix build` worked
+            # while `nix develop` could not link, and only a test run tells
+            # them apart.
+            libinput # backend_libinput links -linput
+            pixman # renderer_pixman links -lpixman-1
             mesa # the GL/EGL userspace, for when the dumb-buffer path grows one
           ];
 
