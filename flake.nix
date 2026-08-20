@@ -702,13 +702,24 @@
               # much more fragile thing to build, and what is under test here
               # is the LAYOUT, not the keymap. The keymap has its own unit
               # tests.
+              # ★ setsid + nohup, AND KEEP ITS STDERR. `su seat -c 'cmd &'`
+              # backgrounds the client inside a shell that then exits, and the
+              # child can take the SIGHUP with it — so a client that never
+              # drew and a client that was killed look identical from outside.
+              # Its log is printed below, because the first version of this
+              # discarded stderr and left "the second window is not drawing"
+              # with no way to ask why.
               machine.succeed(
                   "su seat -c 'WAYLAND_DISPLAY=wayland-1 "
-                  "XDG_RUNTIME_DIR=/run/user/1000 "
-                  "${pkgs.weston}/bin/weston-presentation-shm >/dev/null 2>&1 &' "
-                  "|| true"
+                  "XDG_RUNTIME_DIR=/run/user/1000 setsid nohup "
+                  "${pkgs.weston}/bin/weston-presentation-shm "
+                  ">/tmp/client2.log 2>&1 &'"
               )
               machine.sleep(4)
+              print("client2:", machine.succeed("cat /tmp/client2.log || true"))
+              print("client2 alive:", machine.succeed(
+                  "pgrep -c -f 'weston-presentation-sh[m]' || true"
+              ).strip())
               machine.succeed("kanshou-capture /tmp/two.ppm")
               windows = int(machine.succeed("kanshou-get windows").strip())
               print(f"windows after the second client: {windows}")

@@ -55,9 +55,21 @@ impl Tiling {
     /// whatever holds focus, alternating orientation with depth so a run of
     /// new windows produces a usable grid rather than a column of slivers.
     pub fn map(&mut self, window: Window) -> WindowId {
+        let id = self.map_id();
+        self.windows.insert(id, window);
+        id
+    }
+
+    /// The tree half of [`Self::map`], with no `Window` in sight.
+    ///
+    /// ★ SPLIT OUT SO THE LAYOUT CAN BE TESTED AT ALL. `Window` needs a live
+    /// `ToplevelSurface`, which needs a client, which needs a display — so a
+    /// unit test of the tree was impossible while the only entry point took
+    /// one. That is why the first tiling defect had to be chased through a VM
+    /// screenshot: there was no cheaper place to ask the question.
+    pub fn map_id(&mut self) -> WindowId {
         let id = WindowId(self.next);
         self.next += 1;
-        self.windows.insert(id, window);
 
         self.tree = Some(match self.tree.take() {
             None => LayoutNode::leaf(id),
@@ -98,6 +110,17 @@ impl Tiling {
         id
     }
 
+    /// The rectangles the tree assigns, by id — [`Self::arrange`] without the
+    /// `Window` lookup. The half that is pure geometry, and therefore the
+    /// half worth testing.
+    #[must_use]
+    pub fn arrange_ids(&self, bounds: Rect) -> Vec<(WindowId, Rect)> {
+        self.tree
+            .as_ref()
+            .map(|t| t.compute_rects(bounds))
+            .unwrap_or_default()
+    }
+
     /// Remove a window and collapse its split.
     ///
     /// Returns `true` if the tree still holds anything. `LeafRemoval::WasRoot`
@@ -134,9 +157,6 @@ impl Tiling {
     /// lives at the call site, here, and nowhere inside the tree.
     #[must_use]
     pub fn arrange(&self, bounds: Rectangle<i32, Logical>) -> Vec<(Window, Rectangle<i32, Logical>)> {
-        let Some(tree) = self.tree.as_ref() else {
-            return Vec::new();
-        };
         // Saturating rather than `as`: a negative or oversized logical rect is
         // a bug elsewhere, and `as u16` would wrap it into a plausible-looking
         // small rectangle instead of clamping to something visible.
@@ -147,7 +167,7 @@ impl Tiling {
             to_u16(bounds.size.w),
             to_u16(bounds.size.h),
         );
-        tree.compute_rects(b)
+        self.arrange_ids(b)
             .into_iter()
             .filter_map(|(id, r)| {
                 let w = self.windows.get(&id)?.clone();
@@ -290,5 +310,91 @@ impl crate::state::Omoya {
             }
             self.space.map_element(window, rect.loc, false);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The screen the vkms gate runs at.
+    const SCREEN: Rect = Rect { x: 0, y: 0, w: 1024, h: 768 };
+
+    #[test]
+    fn one_window_fills_the_screen() {
+        let mut t = Tiling::default();
+        let a = t.map_id();
+        assert_eq!(t.arrange_ids(SCREEN), vec![(a, SCREEN)]);
+    }
+
+    /// ★ THE ONE THE VKMS GATE COULD NOT ASK CHEAPLY.
+    ///
+    /// When two windows appeared stacked on screen, this question — "does the
+    /// TREE separate them?" — cost a five-minute VM run to answer, because
+    /// the only way in took a `Window` and a `Window` needs a live client.
+    /// It is the same assertion, in milliseconds.
+    #[test]
+    fn two_windows_get_disjoint_halves() {
+        let mut t = Tiling::default();
+        let a = t.map_id();
+        let b = t.map_id();
+        let rects = t.arrange_ids(SCREEN);
+        assert_eq!(rects.len(), 2);
+        let ra = rects.iter().find(|(i, _)| *i == a).expect("a is laid out").1;
+        let rb = rects.iter().find(|(i, _)| *i == b).expect("b is laid out").1;
+        assert_ne!(ra.x, rb.x, "both windows at the same x — that is stacking");
+        assert_eq!(ra.w + rb.w, SCREEN.w, "the halves must tile the screen exactly");
+        assert_eq!(ra.h, SCREEN.h);
+        assert_eq!(rb.h, SCREEN.h);
+    }
+
+    /// A third window splits the FOCUSED one, and focus follows the newest.
+    /// Orientation alternates with depth, so a run of windows makes a grid
+    /// rather than a column of slivers.
+    #[test]
+    fn a_third_window_splits_the_focused_one_the_other_way() {
+        let mut t = Tiling::default();
+        let _a = t.map_id();
+        let b = t.map_id();
+        let c = t.map_id();
+        let rects = t.arrange_ids(SCREEN);
+        assert_eq!(rects.len(), 3);
+        let rb = rects.iter().find(|(i, _)| *i == b).expect("b").1;
+        let rc = rects.iter().find(|(i, _)| *i == c).expect("c").1;
+        // b was focused, so c split IT — and one level deeper, so the divider
+        // turns: same column, stacked vertically.
+        assert_eq!(rb.x, rc.x, "the third window should share the second's column");
+        assert_ne!(rb.y, rc.y, "and sit above or below it, not on top of it");
+    }
+
+    /// Every rectangle is disjoint, at every size the fleet actually uses.
+    /// A tiling that overlaps is not a tiling, and an overlap of one pixel
+    /// looks exactly like a correct layout in a screenshot.
+    #[test]
+    fn rectangles_never_overlap() {
+        for (w, h) in [(1024u16, 768u16), (1920, 1080), (3840, 2160), (640, 480)] {
+            let screen = Rect { x: 0, y: 0, w, h };
+            let mut t = Tiling::default();
+            for _ in 0..6 {
+                t.map_id();
+            }
+            let rects = t.arrange_ids(screen);
+            assert_eq!(rects.len(), 6, "{w}x{h}");
+            for (i, (_, a)) in rects.iter().enumerate() {
+                for (_, b) in rects.iter().skip(i + 1) {
+                    let disjoint = a.x + a.w <= b.x
+                        || b.x + b.w <= a.x
+                        || a.y + a.h <= b.y
+                        || b.y + b.h <= a.y;
+                    assert!(disjoint, "{w}x{h}: {a:?} overlaps {b:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn an_empty_tiling_arranges_nothing() {
+        assert!(Tiling::default().arrange_ids(SCREEN).is_empty());
+        assert!(Tiling::default().is_empty());
     }
 }
