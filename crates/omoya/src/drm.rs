@@ -52,7 +52,7 @@ use smithay::{
         allocator::{Fourcc as DrmFourcc, dumb::DumbAllocator},
         drm::{DrmDevice, DrmDeviceFd, DrmSurface, compositor::{DrmCompositor, FrameFlags}},
         renderer::{
-            ImportDma, damage::OutputDamageTracker,
+            damage::OutputDamageTracker,
         },
     },
     output::OutputModeSource,

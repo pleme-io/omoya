@@ -40,14 +40,19 @@ use smithay::backend::drm::exporter::ExportFramebuffer;
 use smithay::utils::{Physical, Rectangle, Transform};
 
 /// One side of the flip chain.
+///
+/// ★ HOLDS THE FRAMEBUFFER OBJECT, NOT JUST ITS HANDLE. `add_framebuffer`
+/// returns a `DumbFramebuffer` that OWNS the DRM framebuffer and removes it on
+/// drop. Extracting the handle and letting the wrapper go would leave a handle
+/// pointing at a framebuffer the kernel has already destroyed — and the flip
+/// fails with an errno that says nothing about lifetimes.
 struct Slot {
     buffer: DumbBuffer,
-    framebuffer: framebuffer_handle::Handle,
-}
-
-/// Re-export so the type name is spelled once.
-mod framebuffer_handle {
-    pub use smithay::reexports::drm::control::framebuffer::Handle;
+    // ★ Named by the ASSOCIATED TYPE, not by a module path. `DumbFramebuffer`
+    // lives in `drm::dumb` and is reached through the exporter impl; spelling
+    // the path invites guessing at a re-export that may not exist, while the
+    // associated type is exactly what `add_framebuffer` returns by definition.
+    framebuffer: <DrmDeviceFd as ExportFramebuffer<DumbBuffer>>::Framebuffer,
 }
 
 /// A double-buffered scanout over one CRTC.
@@ -153,7 +158,9 @@ impl DirectScanout {
                 // from this frame's damage alone would leave stale pixels in
                 // the other buffer.
                 damage_clips: None,
-                fb: slot.framebuffer,
+                // `AsRef<framebuffer::Handle>` — the handle is borrowed from
+                // the owning wrapper, which stays in `slot`.
+                fb: *smithay::backend::drm::Framebuffer::as_ref(&slot.framebuffer),
                 fence: None,
             }),
         };
