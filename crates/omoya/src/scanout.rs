@@ -160,7 +160,14 @@ impl DirectScanout {
                 damage_clips: None,
                 // `AsRef<framebuffer::Handle>` — the handle is borrowed from
                 // the owning wrapper, which stays in `slot`.
-                fb: *smithay::backend::drm::Framebuffer::as_ref(&slot.framebuffer),
+                // ★ Through `AsRef`, with the target named. `Framebuffer` is a
+                // TRAIT (`Framebuffer: AsRef<framebuffer::Handle>`), so calling
+                // `Framebuffer::as_ref` asks for a trait object; the borrow we
+                // want comes from the AsRef impl, and naming `Handle` keeps
+                // inference from having to pick among several.
+                fb: *AsRef::<smithay::reexports::drm::control::framebuffer::Handle>::as_ref(
+                    &slot.framebuffer,
+                ),
                 fence: None,
             }),
         };
