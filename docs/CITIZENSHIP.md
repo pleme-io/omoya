@@ -290,6 +290,19 @@ was the first — and both were written `let (x, _notifier) = …` and compiled
 without a warning. A smithay `*Notifier` is not a handle you may discard; it is
 the half of the device that does the work.
 
+## The plan that acts on this ledger
+
+The pending rows above are the *delta*; [`SEAT-PLAN.md`](./SEAT-PLAN.md) is the
+plan that closes them — measured against source, adversarially reviewed, and
+ordered by leverage rather than by ease.
+
+**Read §0 before touching plo.** It corrects three things this ledger implied:
+k3s and FluxCD are OFF (plo is the LAN's **DNS server** and the tailnet's only
+route into `192.168.50.0/24`), the RTX 3070 is `boot_vga` on a CPU with no
+iGPU (a failed DRM handoff leaves **no console at all**), and the seat cannot
+yet draw a cursor, launch a program, or place a second window — so frame-rate
+work measures a screen nobody can use.
+
 ## What this ledger says plainly
 
 **Six C libraries are gone from the shipped compositor, measured on the
