@@ -642,6 +642,51 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let display_handle = display.handle();
     let state = Omoya::new(&mut event_loop, display, args.mode, introspect.clone());
 
+    // ── ★ THE MUTATE PATH: A PING, NOT A POLL ────────────────────────────
+    //
+    // `Introspect::query` runs on the kanshou sidecar's thread and may not
+    // touch `Omoya`, which lives in this single-threaded loop. So the socket
+    // thread pushes a `Deed` onto `introspect.pending_deeds` and pings; this
+    // source drains it here, where `&mut Omoya` is legal.
+    //
+    // The ping is what makes it work on a QUIET desktop. mado's equivalent
+    // drains once per GUI frame, which is fine for something that renders
+    // continuously — but since damage tracking landed, an idle omoya renders
+    // nothing at all (measured: 183 ticks, 0 presentations). A queued deed
+    // would sit until something else woke the loop, i.e. exactly when a
+    // remote caller most needs it, it would look broken.
+    match smithay::reexports::calloop::ping::make_ping() {
+        Ok((ping, source)) => {
+            let sink = introspect.clone();
+            if let Err(e) = event_loop.handle().insert_source(source, move |(), (), data| {
+                // Drain under the lock, perform outside it: `perform` can
+                // spawn a process and send configures, and holding the
+                // socket thread's lock across that would stall every read.
+                let deeds: Vec<_> = sink
+                    .pending_deeds
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .drain(..)
+                    .collect();
+                for deed in deeds {
+                    tracing::info!(?deed, "performing a deed requested over kanshou");
+                    data.state.perform(deed);
+                }
+            }) {
+                tracing::error!(error = %e, "no deed source — the seat is read-only");
+            } else {
+                // Published only on success, so `wake.get()` being None is an
+                // honest "nothing will drain this" rather than a promise the
+                // loop cannot keep.
+                let _ = introspect.wake.set(ping);
+            }
+        }
+        // Non-fatal: the seat still runs, it just cannot be driven remotely.
+        // Same posture as the kanshou socket itself — degrade to less
+        // introspection, never to no compositor.
+        Err(e) => tracing::error!(error = %e, "no ping — the seat is read-only"),
+    }
+
     let mut data = CalloopData {
         state,
         display_handle,

@@ -62,6 +62,54 @@ pub enum Deed {
     SpawnTerminal,
 }
 
+impl Deed {
+    /// Parse a remotely-requested verb.
+    ///
+    /// ★ THE LEGALITY GATE, AND IT IS A PARSE — NOT A CHECK AFTER THE FACT.
+    /// A remote caller names a verb by string; anything this function does not
+    /// recognise has no `Deed` and therefore no path to `perform`. The set of
+    /// remotely-invocable actions is exactly the set of arms below, which is
+    /// the whole point: there is no "and also run this command" case, because
+    /// `SpawnTerminal` launches the seat's OWN configured command and takes no
+    /// argument. A verb surface that accepted a command string would be a
+    /// remote shell wearing a compositor's clothes.
+    ///
+    /// Returns `None` rather than a default, so an unknown verb is REFUSED and
+    /// says so (kotae) instead of silently doing something adjacent.
+    #[must_use]
+    pub fn parse(verb: &str) -> Option<Self> {
+        Some(match verb {
+            "focus-left" => Self::Focus(Direction::Left),
+            "focus-right" => Self::Focus(Direction::Right),
+            "focus-up" => Self::Focus(Direction::Above),
+            "focus-down" => Self::Focus(Direction::Below),
+            "resize-left" => Self::Resize(Direction::Left),
+            "resize-right" => Self::Resize(Direction::Right),
+            "resize-up" => Self::Resize(Direction::Above),
+            "resize-down" => Self::Resize(Direction::Below),
+            "close" => Self::Close,
+            "spawn-terminal" => Self::SpawnTerminal,
+            _ => return None,
+        })
+    }
+
+    /// Every verb `parse` accepts, for an agent that wants to enumerate rather
+    /// than guess. Kept beside `parse` so the two cannot drift — a catalog
+    /// listing a verb the parser refuses is worse than no catalog.
+    pub const VERBS: &'static [&'static str] = &[
+        "focus-left",
+        "focus-right",
+        "focus-up",
+        "focus-down",
+        "resize-left",
+        "resize-right",
+        "resize-up",
+        "resize-down",
+        "close",
+        "spawn-terminal",
+    ];
+}
+
 /// The default binding map, and every chord that collided while building it.
 ///
 /// ★ `try_bind`, NOT `add_binding`, BECAUSE awase ASKED. `add_binding` is
@@ -179,6 +227,19 @@ mod tests {
     fn no_chord_is_bound_twice() {
         let (_, clashes) = default_bindings();
         assert!(clashes.is_empty(), "duplicate bindings: {clashes:?}");
+    }
+
+    /// ★ THE CATALOG AND THE PARSER MUST NOT DRIFT. A `VERBS` entry the
+    /// parser refuses tells an agent to try something that cannot work, which
+    /// is worse than publishing no catalog at all.
+    #[test]
+    fn every_advertised_verb_parses() {
+        for v in Deed::VERBS {
+            assert!(Deed::parse(v).is_some(), "advertised but unparseable: {v}");
+        }
+        assert_eq!(Deed::parse("rm -rf /"), None);
+        assert_eq!(Deed::parse(""), None);
+        assert_eq!(Deed::parse("focus"), None, "a prefix is not a verb");
     }
 
     #[test]

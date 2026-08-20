@@ -111,6 +111,29 @@ pub struct OmoyaIntrospect {
     /// compositor's model" and "what the frame was told to draw", which is a
     /// seam no screenshot exposes.
     pub geometry: Mutex<Vec<String>>,
+    /// Deeds requested over the socket, waiting for the compositor thread.
+    ///
+    /// ★ A QUEUE AND NOT A CALL, BECAUSE THE THREADS ARE DIFFERENT.
+    /// `Introspect::query` takes `&self` and runs on the sidecar's thread,
+    /// while omoya's state lives in a single-threaded calloop loop. Nothing
+    /// here may touch `Omoya`; the socket thread enqueues, the compositor
+    /// thread drains.
+    pub pending_deeds: Mutex<Vec<crate::deed::Deed>>,
+    /// Wakes the compositor's event loop after an enqueue.
+    ///
+    /// ★ THE PING IS LOAD-BEARING, AND MORE SO SINCE DAMAGE TRACKING LANDED.
+    /// mado's `InjectedActions` queue is the right shape but not copyable
+    /// verbatim: mado drains once per GUI frame, whereas an idle compositor
+    /// is not rendering at all. Measured on vkms — an idle seat now produces
+    /// **0 presentations across 183 render ticks** — so a queued deed would
+    /// sit unnoticed until something else happened to wake the loop. Which is
+    /// to say: on a quiet desktop, exactly when a remote caller most needs it
+    /// to work, it would appear to do nothing.
+    ///
+    /// `OnceLock` because the ping is created with the event loop, after this
+    /// struct. A deed enqueued before then is still queued, just not woken —
+    /// it lands on the first frame either way.
+    pub wake: std::sync::OnceLock<smithay::reexports::calloop::ping::Ping>,
     /// Windows currently mapped in the space.
     pub windows: AtomicU64,
     /// Reserved chords recognised but not acted on — the M4 debt counter.
@@ -190,6 +213,43 @@ impl Introspect for OmoyaIntrospect {
             )),
             "frames" => Ok(n(&self.frames)),
             "presented" => Ok(n(&self.presented)),
+            // ── ★ THE ONE MUTATING LEAF ──────────────────────────────
+            //
+            // `["do", "<verb>"]`. Every other leaf on this socket is a read;
+            // this is the write surface, and it is deliberately ONE leaf with
+            // a closed vocabulary rather than a family of them. `Deed::parse`
+            // is the legality gate — an unknown verb has no Deed and
+            // therefore no path to `perform`.
+            //
+            // The answer distinguishes the four kotae cases: a queued verb is
+            // `found`, an unknown verb is `refused` BY NAME, and a missing
+            // argument is refused as such rather than defaulting.
+            "do" => {
+                let Some(verb) = q.path.get(1) else {
+                    return Err(QueryError::NotFound(
+                        "do: needs a verb, e.g. do/focus-right; \
+                         list them with `verbs`"
+                            .into(),
+                    ));
+                };
+                let Some(deed) = crate::deed::Deed::parse(verb) else {
+                    return Err(QueryError::NotFound(format!(
+                        "do: {verb:?} is not a verb this seat accepts; \
+                         the accepted set is `verbs`"
+                    )));
+                };
+                self.pending_deeds
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(deed);
+                // Wake the loop. Without this the deed sits until something
+                // else renders, which on an idle seat is never.
+                if let Some(p) = self.wake.get() {
+                    p.ping();
+                }
+                Ok(serde_json::json!(format!("queued: {verb}")))
+            }
+            "verbs" => Ok(serde_json::json!(crate::deed::Deed::VERBS)),
             "elements" => Ok(n(&self.elements)),
             "geometry" => Ok(serde_json::json!(
                 self.geometry
@@ -271,6 +331,7 @@ impl Introspect for OmoyaIntrospect {
             "backend",
             "frames",
             "presented",
+            "verbs",
             "elements",
             "geometry",
             "layout",
