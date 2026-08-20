@@ -522,7 +522,6 @@ where
     let clear = background();
     // Element geometry is expressed in physical pixels, so it needs the
     // output's scale. Read once rather than per element per frame.
-    let scale = output.current_scale().fractional_scale();
     let interval = frame_interval(target);
 
     // A TIMER, not vblank, and that is an honest shortcut rather than a design.
