@@ -410,6 +410,10 @@
                   # length-prefixed JSON over a Unix socket, which needs a real
                   # client. `nc` cannot frame it and /dev/tcp cannot reach a
                   # Unix socket.
+                  # Reads one pixel out of a P6 PPM. Used to prove the
+                  # pointer is drawn AND drawn in the right encoding — a claim
+                  # only the pixels can settle.
+                  (pkgs.writers.writePython3Bin "ppm-probe" { } (builtins.readFile ./nix/ppm-probe.py))
                   (pkgs.writers.writePython3Bin "kanshou-capture" { } ''
                     import glob
                     import json
@@ -579,6 +583,32 @@
               print(f"capture size: {size} bytes")
               assert size > 100_000, (
                   f"capture produced only {size} bytes — that is not a frame"
+              )
+
+              # ★ AND THE POINTER MUST BE IN IT.
+              #
+              # The cursor is drawn at pointer_location, which starts at (0,0),
+              # as a CURSOR_SIZE square in Nord snow_storm[2] (#ECEFF4). So the
+              # top-left pixels must be BRIGHT. Nothing else on this screen is:
+              # the background is polar_night[0] (#2E3440) and there is no
+              # client.
+              #
+              # This asserts two things at once, and the second is the subtle
+              # one. That a pointer is drawn at all — it was not, and keyboard
+              # focus was only reachable by clicking it. And that the colour was
+              # written in the right ENCODING: linear values in a non-sRGB
+              # framebuffer come out far too dark, so a wrong `format_is_srgb`
+              # would leave a pointer that is technically present and visually
+              # absent. Reading the pixel is the only way to tell those apart.
+              px = machine.succeed(
+                  "ppm-probe /tmp/seat.ppm 4 4"
+              ).strip()
+              print(f"pixel(4,4) = {px}")
+              r, g, b = (int(v) for v in px.split())
+              assert min(r, g, b) > 180, (
+                  f"pointer not visible at (4,4): got rgb({r},{g},{b}). "
+                  "Either nothing draws a cursor, or it was written in the "
+                  "wrong encoding and came out too dark to see."
               )
             '';
           };
