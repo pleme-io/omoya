@@ -289,6 +289,34 @@ pub fn cursor() -> [f32; 4] {
 /// `pending-omoya-client-cursor` is the row for honouring the client's surface.
 const CURSOR_SIZE: i32 = 12;
 
+// ── ★ ONE ELEMENT SLICE, BECAUSE PARTIAL REPAINT OWNS THE WHOLE FRAME ────
+//
+// The manual loop this replaced could draw the cursor with `draw_solid` after
+// the elements, because it repainted the entire screen every frame and order
+// was the only thing that mattered. `render_output` does not work that way: it
+// computes damage from the element slice, clears only the damaged region, and
+// draws only the elements that intersect it. A cursor drawn OUTSIDE that slice
+// would be invisible to the damage computation — its old position would never
+// be repainted, so it would smear a trail across the screen and the trail
+// would look like a renderer bug rather than a bookkeeping one.
+//
+// So the cursor becomes an element. `render_elements!` builds the enum that
+// lets two element KINDS share one slice; it generates the `From` impls and
+// forwards every `Element`/`RenderElement` method to the active variant.
+//
+// `Kind::Cursor` is not decoration — smithay's own doc says an element that
+// changes frequently and is NOT marked `Cursor` costs performance, and one
+// that is marked `Cursor` but changes frequently costs more. A pointer that
+// moves and otherwise never changes is exactly what the marking is for.
+smithay::backend::renderer::element::render_elements! {
+    /// Everything the seat composites: client surfaces and our own pointer.
+    pub SeatElements<R, E> where R: smithay::backend::renderer::ImportAll;
+    /// A client surface, as `Space` laid it out.
+    Space = smithay::desktop::space::SpaceRenderElements<R, E>,
+    /// omoya's own pointer — see `CURSOR_SIZE`.
+    Cursor = smithay::backend::renderer::element::solid::SolidColorRenderElement,
+}
+
 /// Everything the render loop needs, assembled.
 pub struct Scanout {
     pub surface: DrmSurface,
@@ -414,6 +442,22 @@ where
     // M4a never needed this because it composited nothing.
     let _global = output.create_global::<crate::state::Omoya>(&data.display_handle);
 
+    // ── ★ THE DAMAGE TRACKER AND THE CURSOR'S IDENTITY, BOTH LONG-LIVED ────
+    //
+    // Both must outlive the frame or partial repaint degenerates into full
+    // repaint while looking like it works. The tracker holds the per-buffer
+    // damage HISTORY that makes buffer age meaningful — a fresh one every
+    // frame knows nothing and damages everything. The `Id` is what lets the
+    // tracker recognise the pointer across frames as the same element that
+    // MOVED, rather than one that vanished and another that appeared; a fresh
+    // id would damage both rectangles every frame.
+    //
+    // An `OutputDamageTracker` was already being constructed in `prepare()`
+    // and had zero callers, which is why the frame stayed full-screen: the
+    // machinery was present, built, and never wired to anything.
+    let mut damage_tracker = OutputDamageTracker::from_output(&output);
+    let cursor_id = smithay::backend::renderer::element::Id::new();
+
     // ── ★ ADVERTISE DMABUF, FROM THE RENDERER'S OWN FORMAT LIST ───────────
     //
     // Created HERE and not in `Omoya::new` because the global is a promise
@@ -498,13 +542,60 @@ where
                 }
                 return smithay::reexports::calloop::timer::TimeoutAction::ToInstant(next);
             }
-            let elements = smithay::desktop::space::space_render_elements(
+            // ── ★ BUILD ONE SLICE: CURSOR FIRST, THEN THE CLIENTS ───────
+            //
+            // Index 0 is TOPMOST. `render_output` iterates the slice with
+            // `.rev()`, painting back-to-front, so the pointer belongs at the
+            // front of the vector to end up on top of the screen. Reading the
+            // slice as "draw order" gets this exactly backwards and puts the
+            // cursor underneath every window, where it is invisible in
+            // precisely the case it matters.
+            let space_elements = smithay::desktop::space::space_render_elements(
                 &mut renderer,
                 [&data.state.space],
                 &output,
                 1.0,
             )
             .unwrap_or_default();
+
+            let mut elements: Vec<SeatElements<R, _>> =
+                Vec::with_capacity(space_elements.len() + 1);
+            {
+                use smithay::backend::renderer::element::{CommitCounter, Kind};
+                use smithay::backend::renderer::element::solid::SolidColorRenderElement;
+                let p = data.state.pointer_location;
+                let (cw, ch) = (CURSOR_SIZE, CURSOR_SIZE);
+                // Clamped so the cursor stays wholly on-screen: a rect
+                // extending past the framebuffer is a partial write at best
+                // and an out-of-bounds one at worst, and nuri gates every
+                // write on an intersect precisely because that class is easy
+                // to reach.
+                let x = (p.x.round() as i32).clamp(0, mode.size.w - cw);
+                let y = (p.y.round() as i32).clamp(0, mode.size.h - ch);
+                // ★ A STABLE ID AND A CONSTANT COMMIT, BOTH LOAD-BEARING.
+                //
+                // The damage tracker keys an element's history on its `Id`. A
+                // fresh `Id::new()` each frame reads as "the old element
+                // vanished and a new one appeared", which damages both rects
+                // every single frame — a partial repaint that repaints as much
+                // as a full one, and looks like the optimisation simply did
+                // not work. `cursor_id` is minted once, outside the loop.
+                //
+                // The `CommitCounter` is the other half: it means "the
+                // element's CONTENT changed in place". Our pointer is a fixed
+                // colour at a moving rectangle, so the content never changes
+                // and a constant commit is the truthful answer. Movement is
+                // seen through the geometry, which the tracker compares
+                // separately.
+                elements.push(SeatElements::Cursor(SolidColorRenderElement::new(
+                    cursor_id.clone(),
+                    smithay::utils::Rectangle::new((x, y).into(), (cw, ch).into()),
+                    CommitCounter::default(),
+                    smithay::backend::renderer::Color32F::from(cursor()),
+                    Kind::Cursor,
+                )));
+            }
+            elements.extend(space_elements.into_iter().map(SeatElements::Space));
 
             // ── ★ RENDER INTO THE BACK BUFFER, THEN FLIP ────────────────
             // `DrmCompositor` did allocate-bind-render-export-flip in one
@@ -513,103 +604,79 @@ where
             // flip must come after the frame is complete — a flip mid-render
             // shows a half-drawn frame, which reads as a renderer bug.
             let frame_result = (|| -> Result<(), Box<dyn std::error::Error>> {
-                use smithay::backend::renderer::element::{Element, RenderElement};
-                use smithay::utils::{Rectangle, Transform};
                 let dmabuf = {
                     use smithay::backend::allocator::dmabuf::AsDmabuf;
                     scanout.back_buffer().export()?
                 };
                 let mut dmabuf = dmabuf;
-                {
-                    use smithay::backend::renderer::{Bind, Frame as _, Renderer as _};
+
+                // ★ A CAPTURE FORCES A FULL REPAINT, BY PASSING AGE 0.
+                //
+                // Without this, a screenshot of an idle desktop is a trap:
+                // partial repaint would skip the frame entirely (nothing
+                // changed), and the back buffer still holds whatever was
+                // composed two frames ago. The capture would succeed, produce
+                // a file, and show a stale screen — the worst possible
+                // failure for the one tool that exists to answer "what is
+                // actually on the display right now".
+                //
+                // Age 0 is not a special case bolted on: it is the damage
+                // protocol's own way of saying "no usable history", and
+                // `damage_output_internal` answers it by damaging the whole
+                // output. So the request is expressed in the vocabulary the
+                // tracker already has rather than by reaching past it.
+                let requested = introspect
+                    .capture_request
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .take();
+                let age = if requested.is_some() {
+                    0
+                } else {
+                    scanout.back_buffer_age()
+                };
+
+                let presented = {
+                    use smithay::backend::renderer::Bind;
                     let mut fb = renderer.bind(&mut dmabuf)?;
-                    let mut frame = renderer.render(&mut fb, mode.size, Transform::Normal)?;
-                    // Full-surface clear: see scanout's header — damage is not
-                    // tracked across the alternating buffers, so every frame
-                    // repaints wholly rather than leaving stale pixels behind.
-                    // `Color32F`, not a bare [f32; 4] — the wrapper carries
-                    // the premultiplied-alpha contract that `background()`
-                    // already satisfies.
-                    frame.clear(
+
+                    // ★ THE TRACKER OWNS CLEAR AND DRAW BOTH.
+                    //
+                    // This replaced a hand-written `frame.clear(whole screen)`
+                    // followed by `element.draw(.., &[geo], ..)` — a full-screen
+                    // composite every frame, with each element told its own
+                    // entire geometry was damaged. Measured cost of that shape:
+                    // a 536 ms frame on plo, which is what the operator was
+                    // seeing as "the refresh from when I type is all wrong".
+                    //
+                    // `render_output` computes the union of what actually
+                    // changed since this BUFFER was last drawn into (hence the
+                    // age), clears only that, and skips any element that does
+                    // not intersect it.
+                    let result = damage_tracker.render_output(
+                        &mut renderer,
+                        &mut fb,
+                        age,
+                        &elements,
                         smithay::backend::renderer::Color32F::from(clear),
-                        &[Rectangle::from_size(mode.size)],
                     )?;
-                    // ★ `Element` supplies geometry()/src(); `RenderElement`
-                    // supplies draw(). Both must be in scope — the compiler
-                    // named the first and would have named the second next,
-                    // which is the tell that the element model splits
-                    // "where is it" from "how does it paint".
-                    for element in &elements {
-                        let geo = element.geometry(scale.into());
-                        element.draw(&mut frame, element.src(), geo, &[geo], &[])?;
-                    }
-
-                    // ── ★ THE POINTER, DRAWN LAST SO IT IS ON TOP ─────────
-                    //
-                    // Nothing drew a cursor at all. `cursor_image` in
-                    // `handlers.rs` discards the client's requested surface,
-                    // and there are no overlay planes, so the pointer was
-                    // invisible — on a seat where keyboard focus was only
-                    // reachable by CLICKING, which is to say by aiming
-                    // something you cannot see.
-                    //
-                    // This is deliberately OUR cursor, not the client's. A
-                    // client's cursor arrives as a wl_surface with its own
-                    // buffer and hotspot, which is a texture-import path and a
-                    // protocol dance; a compositor that cannot show where the
-                    // mouse is has a worse problem than a compositor whose
-                    // arrow is the wrong shape. `pending-omoya-client-cursor`
-                    // is the row for honouring the client's request.
-                    //
-                    // Drawn with `draw_solid` rather than assembled as a
-                    // render element: mixing element kinds needs smithay's
-                    // `render_elements!` macro to build a combined enum, and
-                    // the frame is right here with a method that takes a rect
-                    // and a colour. nuri implements it directly.
-                    {
-                        let p = data.state.pointer_location;
-                        let (cw, ch) = (CURSOR_SIZE, CURSOR_SIZE);
-                        // Clamped so the cursor stays wholly on-screen: a rect
-                        // extending past the framebuffer is a partial write at
-                        // best and an out-of-bounds one at worst, and nuri
-                        // gates every write on an intersect precisely because
-                        // that class is easy to reach.
-                        let x = (p.x.round() as i32).clamp(0, mode.size.w - cw);
-                        let y = (p.y.round() as i32).clamp(0, mode.size.h - ch);
-                        let dst = Rectangle::new((x, y).into(), (cw, ch).into());
-                        frame.draw_solid(
-                            dst,
-                            &[dst],
-                            smithay::backend::renderer::Color32F::from(cursor()),
-                        )?;
-                    }
-
-                    let _sync = frame.finish()?;
 
                     // ★ CAPTURE HERE, WHERE THE FRAMEBUFFER IS STILL BOUND.
                     //
-                    // This used to live after the frame, outside this block,
-                    // where it logged "capture requested" and called nothing —
-                    // a stub that reported success while producing no file.
-                    // It could not have worked there: `fb` is dropped at the
-                    // closing brace, and `capture` needs it.
+                    // This used to live outside this block, where it logged
+                    // "capture requested" and called nothing — a stub that
+                    // reported success while producing no file. It could not
+                    // have worked there: `fb` is dropped at the closing brace,
+                    // and `capture` needs it.
                     //
-                    // Placed after `finish()` so what is read back is the frame
+                    // Placed after the render so what is read back is the frame
                     // that was actually composed, and before `flip()` so it
                     // reflects the buffer being handed to the display rather
                     // than whatever the previous flip left in the other slot.
                     //
-                    // `frame` is consumed by `finish()`, so `renderer` is free
-                    // again here; `Framebuffer<'buffer>` borrows the dmabuf,
-                    // not the renderer, which is what makes this legal at all.
-                    // Taking the request CLEARS it, so this is one-shot by
-                    // construction: a capture every frame would fill the disk
-                    // and change the timing it exists to observe.
-                    let requested = introspect
-                        .capture_request
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .take();
+                    // Taking the request CLEARS it (above), so this is one-shot
+                    // by construction: a capture every frame would fill the
+                    // disk and change the timing it exists to observe.
                     if let Some(path) = requested {
                         let size = (mode.size.w, mode.size.h);
                         let outcome =
@@ -633,10 +700,22 @@ where
                             .lock()
                             .unwrap_or_else(|e| e.into_inner()) = Some(outcome);
                     }
+
+                    result.damage.is_some()
+                };
+
+                // ★ NOTHING CHANGED ⇒ NO FLIP. This is the second half of the
+                // saving and the larger one on an idle seat: a page flip costs
+                // a vblank wait and a buffer swap whether or not the contents
+                // differ, and swapping presents the OTHER buffer — which, on a
+                // skipped frame, holds an older image than the one on screen.
+                // So flipping a skipped frame is not merely wasteful, it moves
+                // the display backwards.
+                if presented {
+                    scanout.flip()?;
+                    // Accepted, not retired — the VBlank event clears this.
+                    flip_pending.store(true, std::sync::atomic::Ordering::Release);
                 }
-                scanout.flip()?;
-                // Accepted, not retired — the VBlank event clears this.
-                flip_pending.store(true, std::sync::atomic::Ordering::Release);
                 Ok(())
             })();
             if let Err(e) = frame_result {

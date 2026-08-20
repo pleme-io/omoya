@@ -66,6 +66,23 @@ pub struct DirectScanout {
     slots: [Slot; 2],
     /// Which slot is safe to draw into.
     back: usize,
+    /// Frames presented so far. Only ever used to derive buffer AGE.
+    presented: u64,
+    /// The value of `presented` when each slot was last drawn into.
+    ///
+    /// ★ BUFFER AGE IS WHAT MAKES PARTIAL REPAINT CORRECT. With two
+    /// alternating buffers, the region that must be redrawn is not this
+    /// frame's damage — it is everything that changed since THIS buffer was
+    /// last the one on screen. Repainting only the current frame's damage
+    /// leaves the other buffer's stale pixels visible on alternate frames,
+    /// which does not look like a damage bug: it looks like tearing or a
+    /// flickering ghost, and sends the reader to the wrong subsystem.
+    ///
+    /// `0` means "never drawn into", which smithay's damage tracker reads as
+    /// "no history — repaint everything". That is the correct answer for a
+    /// fresh buffer and the reason age is an Option-shaped 0 rather than a
+    /// guess.
+    last_drawn: [Option<u64>; 2],
     /// ★ HAS THE CRTC EVER BEEN MODESET?
     ///
     /// `page_flip` documents itself as *"This will not cause the crtc to
@@ -138,11 +155,27 @@ impl DirectScanout {
             surface,
             slots,
             back: 0,
+            presented: 0,
+            last_drawn: [None; 2],
             modeset: false,
         })
     }
 
     /// The buffer to render into this frame.
+    /// How many frames ago the back buffer was last drawn into.
+    ///
+    /// This is the `age` smithay's `OutputDamageTracker` takes: 0 means "no
+    /// usable history, repaint everything", N means "this buffer's contents
+    /// are N frames stale". Returning 0 when a slot has never been used is not
+    /// a fallback — it is the protocol's own way of saying so.
+    #[must_use]
+    pub fn back_buffer_age(&self) -> usize {
+        match self.last_drawn[self.back] {
+            None => 0,
+            Some(when) => usize::try_from(self.presented.saturating_sub(when) + 1).unwrap_or(0),
+        }
+    }
+
     pub fn back_buffer(&mut self) -> &mut DumbBuffer {
         &mut self.slots[self.back].buffer
     }
@@ -199,6 +232,10 @@ impl DirectScanout {
         // ★ Swap AFTER the flip is accepted, not before. Swapping first and
         // then failing would leave the next frame drawing into the buffer the
         // display is actively scanning out.
+        // Record that this slot now holds a presented frame, THEN swap. The
+        // order matters: `back` still names the slot we just drew into.
+        self.presented += 1;
+        self.last_drawn[self.back] = Some(self.presented);
         self.back = 1 - self.back;
         Ok(())
     }
