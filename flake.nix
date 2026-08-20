@@ -372,25 +372,17 @@
                 users.users.seat = {
                   isNormalUser = true;
                   password = "seat";
-                  # ★ THESE GROUPS ARE A SYMPTOM, NOT A FIX, and the test is
-                  # what exposed it. `drm::open_device` opens /dev/dri/card0
-                  # with a DIRECT `OpenOptions::open`, bypassing
-                  # `Session::open` entirely — so the compositor needs
-                  # filesystem permission instead of session-granted access.
+                  # ★ NO video/input GROUPS, DELIBERATELY — this is the
+                  # assertion. The DRM device is opened through
+                  # `Session::open` -> logind's `TakeDevice`, which grants
+                  # access to the session rather than to a group. If this test
+                  # passes without them, the device genuinely came from the
+                  # session; if someone re-adds them "to fix a failure", the
+                  # only thing being fixed is the evidence.
                   #
-                  # Two things follow, and the second is the real defect:
-                  #   * an unprivileged compositor cannot start without them
-                  #   * logind cannot PAUSE OR RESUME that fd on a VT switch,
-                  #     because it only manages devices taken via TakeDevice —
-                  #     so the DRM master is never released on switch-away.
-                  #
-                  # Routing the open through the session removes the need for
-                  # these. Until then they are here so the rest of the path can
-                  # be tested, and named so nobody reads them as correct.
-                  extraGroups = [
-                    "video"
-                    "input"
-                  ];
+                  # They were here briefly, while the direct-open path was
+                  # still in place, and their removal is the proof that it is
+                  # gone.
                 };
                 environment.systemPackages = [
                   wrapped
