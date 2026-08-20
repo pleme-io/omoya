@@ -24,18 +24,18 @@ def read_ppm(path):
     fields = []
     i = 0
     while len(fields) < 4:
-        while i < len(data) and data[i : i + 1].isspace():
+        while i < len(data) and data[i:i + 1].isspace():
             i += 1
-        if data[i : i + 1] == b"#":
-            while i < len(data) and data[i : i + 1] != b"\n":
+        if data[i:i + 1] == b"#":
+            while i < len(data) and data[i:i + 1] != b"\n":
                 i += 1
             continue
         start = i
-        while i < len(data) and not data[i : i + 1].isspace():
+        while i < len(data) and not data[i:i + 1].isspace():
             i += 1
         fields.append(data[start:i])
     i += 1
-    magic, w, h, _maxval = fields[0], int(fields[1]), int(fields[2]), fields[3]
+    magic, w, h = fields[0], int(fields[1]), int(fields[2])
     if magic != b"P6":
         raise SystemExit(f"not a P6 ppm: {magic!r}")
     return w, h, data[i:]
