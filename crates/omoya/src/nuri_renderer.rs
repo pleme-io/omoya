@@ -77,13 +77,29 @@ impl Texture for NuriTexture {
 }
 
 /// The scanout target, mapped for writing.
-#[derive(Debug)]
+///
+/// ★ HOLDS THE MAPPING ALIVE. `data` points into `_mapping`, so the two must
+/// travel together — a framebuffer that kept only the slice would be pointing
+/// at an unmapped page the moment the mapping dropped, and the write would go
+/// to whatever the kernel put there next.
 pub struct NuriFramebuffer<'a> {
     data: &'a mut [u8],
     width: i32,
     height: i32,
     stride: usize,
     format: Fourcc,
+    /// Dropped last, after `data` is gone. Never read.
+    _mapping: smithay::backend::allocator::dmabuf::DmabufMapping,
+}
+
+impl std::fmt::Debug for NuriFramebuffer<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NuriFramebuffer")
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("stride", &self.stride)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Texture for NuriFramebuffer<'_> {
@@ -474,18 +490,62 @@ impl ImportDmaWl for NuriRenderer {}
 
 impl Bind<Dmabuf> for NuriRenderer {
     fn bind<'a>(&mut self, target: &'a mut Dmabuf) -> Result<Self::Framebuffer<'a>, Self::Error> {
+        use smithay::backend::allocator::dmabuf::DmabufMappingMode;
+
         // ★ THE SAME MAP pixman DOES, AND THE SAME REFUSALS. A CPU renderer
         // needs the pixels addressable, so plane 0 is mapped and anything it
         // cannot address is rejected up front rather than rendered wrongly.
         if target.num_planes() != 1 {
             return Err(Error::Unsupported("multi-plane dmabuf"));
         }
-        if target.format().modifier != smithay::backend::allocator::Modifier::Linear {
+        let format = target.format();
+        if format.modifier != smithay::backend::allocator::Modifier::Linear {
             return Err(Error::Unsupported("non-linear modifier"));
         }
-        Err(Error::Map(
-            "dmabuf mapping is not yet wired — see pending-nuri-bind".into(),
-        ))
+        if !matches!(format.code, Fourcc::Argb8888 | Fourcc::Xrgb8888) {
+            return Err(Error::Unsupported("pixel format nuri cannot address"));
+        }
+
+        let size = target.size();
+        let stride = target
+            .strides()
+            .next()
+            .ok_or(Error::Unsupported("dmabuf with no stride"))? as usize;
+
+        // READ | WRITE: the compositor blends INTO this buffer, so it reads
+        // the existing pixels wherever alpha is not 1. A write-only mapping
+        // would fault on the first translucent surface.
+        let mapping = target
+            .map_plane(0, DmabufMappingMode::READ | DmabufMappingMode::WRITE)
+            .map_err(|e| Error::Map(format!("{e:?}")))?;
+
+        #[allow(clippy::cast_sign_loss)]
+        let expected = stride
+            .checked_mul(size.h as usize)
+            .ok_or(Error::Unsupported("stride * height overflows"))?;
+        // ★ CHECKED AGAINST THE MAPPING'S OWN LENGTH, exactly as pixman does
+        // (`renderer/pixman/mod.rs:756`). The stride comes from the buffer's
+        // metadata and the length from the kernel; trusting the first without
+        // the second is how a rasterizer writes past the end of a mapping.
+        if mapping.length() < expected {
+            return Err(Error::Unsupported("dmabuf shorter than stride * height"));
+        }
+
+        // SAFETY: the mapping is valid for `length()` bytes and is moved into
+        // the returned framebuffer, so it outlives the slice. The range is
+        // bounds-checked above.
+        let data = unsafe {
+            std::slice::from_raw_parts_mut(mapping.ptr().cast::<u8>(), mapping.length())
+        };
+
+        Ok(NuriFramebuffer {
+            data,
+            width: size.w,
+            height: size.h,
+            stride,
+            format: format.code,
+            _mapping: mapping,
+        })
     }
 }
 
