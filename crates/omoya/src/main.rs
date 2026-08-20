@@ -324,7 +324,30 @@ where
     let fd = session
         .open(path, OFlags::RDWR | OFlags::NONBLOCK)
         .map_err(|e| format!("session refused {}: {e:?}", path.display()))?;
-    let (device, drm_fd) = crate::drm::device_from_fd(fd)?;
+    let (device, drm_fd, drm_notifier) = crate::drm::device_from_fd(fd)?;
+
+    // ★ DRAIN THE DRM EVENT QUEUE, OR SCANOUT DIES AFTER ~135 FRAMES.
+    //
+    // Every flip is issued with `event: true`, so the kernel queues a
+    // page-flip event per frame. If nothing reads them the queue grows until
+    // allocation fails and flips start returning ENOMEM — about 2.4 seconds
+    // in. Inserting the notifier is what reads them.
+    //
+    // This is the same shape as the session notifier a few lines up, and the
+    // repeat is the lesson: a smithay `*Notifier` is not a handle you may
+    // discard, it is the half of the device that does the work. Both were
+    // written as `let (x, _notifier) = …` and both compiled without a warning.
+    //
+    // Pacing still comes from a timer (`pending-omoya-vblank`); this only
+    // consumes the events. Doing both from here is the eventual fix.
+    event_loop
+        .handle()
+        .insert_source(drm_notifier, |event, (), _data| {
+            if let smithay::backend::drm::DrmEvent::Error(err) = event {
+                tracing::warn!(?err, "DRM device reported an error");
+            }
+        })
+        .map_err(|e| format!("inserting the DRM notifier: {e}"))?;
 
     let target = crate::drm::probe(&device)?;
     tracing::info!(

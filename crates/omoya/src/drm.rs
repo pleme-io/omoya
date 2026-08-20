@@ -50,7 +50,7 @@ use std::{
 use smithay::{
     backend::{
         allocator::{Fourcc as DrmFourcc, dumb::DumbAllocator},
-        drm::{DrmDevice, DrmDeviceFd, DrmSurface},
+        drm::{DrmDevice, DrmDeviceFd, DrmDeviceNotifier, DrmSurface},
         renderer::{
             damage::OutputDamageTracker,
         },
@@ -100,13 +100,30 @@ pub struct ScanoutTarget {
 ///
 /// # Errors
 /// If the device cannot be initialised or master cannot be acquired.
-pub fn device_from_fd(fd: OwnedFd) -> Result<(DrmDevice, DrmDeviceFd), Box<dyn std::error::Error>> {
+pub fn device_from_fd(
+    fd: OwnedFd,
+) -> Result<(DrmDevice, DrmDeviceFd, DrmDeviceNotifier), Box<dyn std::error::Error>> {
     let fd = DrmDeviceFd::new(DeviceFd::from(fd));
     // Same `disable_connectors = true` reasoning as `open_device`: start from a
     // known state rather than inheriting whatever the previous owner left
     // programmed.
-    let (device, _notifier) = DrmDevice::new(fd.clone(), true)?;
-    Ok((device, fd))
+    //
+    // ★ THE NOTIFIER IS RETURNED, NOT DROPPED — and this is the SECOND time
+    // that mistake has been made in this compositor. Dropping the session
+    // notifier made every later `Session::open` fail; dropping this one is
+    // worse, because it fails LATER and looks like something else entirely:
+    //
+    //   every flip is issued with `event: true`, so the kernel queues a
+    //   page-flip event per frame. Nothing reads them. The queue grows until
+    //   the kernel cannot allocate another, and the flip that trips that
+    //   returns ENOMEM.
+    //
+    // Measured on vkms: 2.37 seconds of correct frames — roughly 135 of them —
+    // and then `Cannot allocate memory (os error 12)` on every frame after.
+    // A leak that presents as a working compositor for two seconds is exactly
+    // the shape a person watching a screen would misread as a driver problem.
+    let (device, notifier) = DrmDevice::new(fd.clone(), true)?;
+    Ok((device, fd, notifier))
 }
 
 /// Open a DRM device directly and take master.
@@ -119,7 +136,9 @@ pub fn device_from_fd(fd: OwnedFd) -> Result<(DrmDevice, DrmDeviceFd), Box<dyn s
 /// Returns an error if the device cannot be opened or master cannot be
 /// acquired — the latter being the normal outcome when something else already
 /// owns the display, which is a *diagnosis* rather than a surprise.
-pub fn open_device(path: &Path) -> Result<(DrmDevice, DrmDeviceFd), Box<dyn std::error::Error>> {
+pub fn open_device(
+    path: &Path,
+) -> Result<(DrmDevice, DrmDeviceFd, DrmDeviceNotifier), Box<dyn std::error::Error>> {
     // O_RDWR + O_NONBLOCK: the event loop reads vblank events off this fd, and
     // a blocking read there would stall the whole compositor on a missed flip.
     let file = std::fs::OpenOptions::new()
@@ -133,8 +152,14 @@ pub fn open_device(path: &Path) -> Result<(DrmDevice, DrmDeviceFd), Box<dyn std:
     // inheriting whatever the previous owner (fbcon, or a dead compositor) left
     // programmed. Inheriting is how a compositor comes up on a mode nobody
     // chose.
-    let (device, _notifier) = DrmDevice::new(fd.clone(), true)?;
-    Ok((device, fd))
+    // Returned rather than dropped, for the reason spelled out in
+    // `device_from_fd`: an unread page-flip event queue exhausts the kernel's
+    // allocator and scanout starts failing with ENOMEM a couple of seconds in.
+    // This path has no caller today, but it is the obvious one to reach for
+    // when diagnosing, which is precisely when a two-second-delayed failure
+    // would send someone the wrong way.
+    let (device, notifier) = DrmDevice::new(fd.clone(), true)?;
+    Ok((device, fd, notifier))
 }
 
 #[allow(clippy::cast_possible_wrap)]
