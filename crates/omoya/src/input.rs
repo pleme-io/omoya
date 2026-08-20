@@ -135,7 +135,7 @@ impl Omoya {
                             if let Some(hk) = hk {
                                 let m = state.bindings.match_key(
                                     hk,
-                                    &awase::mode::MatchContext::default(),
+                                    &awase::MatchContext::default(),
                                 );
                                 if let awase::mode::MatchResult::Matched {
                                     action,

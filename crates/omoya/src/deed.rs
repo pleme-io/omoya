@@ -116,7 +116,11 @@ pub fn default_bindings() -> BindingMap<Deed> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use awase::mode::{MatchContext, MatchResult};
+    // `MatchResult` from `mode`, `MatchContext` from the crate root —
+    // `mode` imports the latter PRIVATELY for its own use, so the obvious
+    // symmetric path compiles to "private struct".
+    use awase::MatchContext;
+    use awase::mode::MatchResult;
 
     fn hit(map: &mut BindingMap<Deed>, hk: Hotkey) -> Option<Deed> {
         match map.match_key(hk, &MatchContext::default()) {
