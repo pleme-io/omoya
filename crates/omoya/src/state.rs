@@ -96,6 +96,10 @@ pub struct Omoya {
     pub owed_vt_switches: u64,
 
     pub space: Space<Window>,
+    /// How the windows are arranged. See `layout.rs` — the algebra is
+    /// `kukaku`'s, and only "a leaf is a Window" and "a rect is pixels" are
+    /// omoya's.
+    pub tiling: crate::layout::Tiling,
     pub loop_signal: LoopSignal,
 
     pub compositor_state: CompositorState,
@@ -193,6 +197,7 @@ impl Omoya {
             reserved,
             owed_vt_switches: 0,
             space,
+            tiling: crate::layout::Tiling::default(),
             loop_signal,
             socket_name,
             compositor_state,

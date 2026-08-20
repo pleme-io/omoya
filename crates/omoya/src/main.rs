@@ -24,6 +24,7 @@ mod drm;
 mod handlers;
 mod introspect;
 mod input;
+mod layout;
 mod state;
 mod theme;
 /// The nested development backend. Off by default — it drags in winit, which

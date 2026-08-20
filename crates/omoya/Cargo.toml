@@ -45,6 +45,21 @@ awase = "0.1.10"
 # once reported frame_perf 0 over MCP while its GUI rendered at 120fps
 # because the server had no wire into the live process.
 kanshou = "0.1"
+# kukaku (区画) — the split-tree layout algebra. Extracted from tear-types
+# when omoya became its third consumer (tear's panes, mado's planned rebase,
+# and this): the algebra used only "an id copies and two compare", so the id
+# became a type parameter and the crate stopped belonging to a multiplexer.
+# Its 49 tests are tear's own cases run against a leaf id it invented, which
+# is the evidence the extraction was sound rather than a rename.
+#
+# ★ A GIT DEP, NOT A VERSION, AND THAT IS A KNOWN INTERIM. `kukaku` is not on
+# crates.io because tear's GitHub Actions are DECLARED off in
+# pangea-architectures' org.yaml (`actions_enabled: false`, a deliberate
+# CI-cost posture on 14 of ~860 records), so ★★ AUTO-RELEASE cannot publish
+# it and no automated path can. Pinned by rev rather than branch so this
+# repo's build is reproducible while that holds.
+# `pending-kukaku-publish: crates.io, gated on tear's actions_enabled`
+kukaku = { git = "https://github.com/pleme-io/tear", rev = "8b270155535015531396626022b8d31ddc35455b" }
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 # ── ★ D-Bus, pure Rust ────────────────────────────────────────────────────

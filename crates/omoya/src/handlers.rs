@@ -106,7 +106,16 @@ impl XdgShellHandler for Omoya {
 
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
         let window = Window::new_wayland_window(surface);
+        // ★ THE TREE DECIDES WHERE IT GOES, NOT (0, 0).
+        //
+        // Every toplevel used to be mapped at the origin, full stop — so a
+        // second window landed exactly on top of the first and the seat had
+        // no window management at all, only a stack of one visible thing.
+        // `Tiling::map` splits whatever holds focus; `apply_layout` is what
+        // turns the resulting tree into positions and configures.
+        self.tiling.map(window.clone());
         self.space.map_element(window.clone(), (0, 0), true);
+        self.apply_layout();
 
         // ★ GIVE IT KEYBOARD FOCUS. Focus used to be set in exactly one place —
         // the pointer-button arm in `input.rs` — so a freshly mapped window had
@@ -167,6 +176,48 @@ impl XdgShellHandler for Omoya {
     }
 
     fn grab(&mut self, _surface: PopupSurface, _seat: wl_seat::WlSeat, _serial: Serial) {}
+
+    /// ★ NOTHING IMPLEMENTED THIS, SO A CLOSED WINDOW NEVER LEFT.
+    ///
+    /// `Space` does not unmap on its own — it holds the `Window` handle until
+    /// told otherwise. Without this arm a client that exited stayed in the
+    /// element list forever: it kept its slot in the layout, kept being asked
+    /// to render (drawing nothing, since its buffers were gone), and kept
+    /// keyboard focus if it had it. The visible symptom is a dead rectangle
+    /// that swallows every keystroke, which reads as the compositor hanging.
+    fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
+        let Some(window) = self
+            .space
+            .elements()
+            .find(|w| w.toplevel().is_some_and(|t| t == &surface))
+            .cloned()
+        else {
+            return;
+        };
+        self.space.unmap_element(&window);
+        self.tiling.unmap(&window);
+        self.apply_layout();
+
+        // Hand focus to whatever survives, or the seat becomes untypeable —
+        // the same failure `new_toplevel`'s focus-on-map exists to prevent,
+        // reached from the other direction.
+        let next = self.tiling.focused();
+        if let Some(kb) = self.seat.get_keyboard() {
+            let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+            if let Some(w) = next.as_ref() {
+                if let Some(t) = w.toplevel() {
+                    t.with_pending_state(|state| {
+                        state.states.set(xdg_toplevel::State::Activated);
+                    });
+                    t.send_pending_configure();
+                }
+            }
+            let focus = next
+                .as_ref()
+                .and_then(|w| w.toplevel().map(|t| t.wl_surface().clone()));
+            kb.set_focus(self, focus, serial);
+        }
+    }
 }
 
 delegate_xdg_shell!(Omoya);

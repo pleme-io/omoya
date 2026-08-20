@@ -833,6 +833,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
+name = "kukaku"
+version = "0.1.19"
+source = "git+https://github.com/pleme-io/tear?rev=8b270155535015531396626022b8d31ddc35455b#8b270155535015531396626022b8d31ddc35455b"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1240,6 +1248,7 @@ dependencies = [
  "evdev",
  "irodori",
  "kanshou",
+ "kukaku",
  "nuri",
  "omoya-spec",
  "serde",

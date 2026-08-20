@@ -1,12 +1,12 @@
 {
   "schema_version": 2,
-  "cargo_lock_sha256": "b2ce38eab538bd1f59a24ef40463d6e02a52738bd1c30f4b318e1453597e2bf1",
+  "cargo_lock_sha256": "56d4673c8f8b228c4a70d8120749eb326469c02aecc1453962c1f1edde9fd274",
   "manifest_sha256": {
-    "Cargo.toml": "cc6e2d8bd52d5dbf1bc558185a6c3f7f773c50cd26573062155dc1bcb6afc559",
+    "Cargo.toml": "9cf250528682e09ddcfe9a137461614a17e631216ac69c770be0cd580a5a6a34",
     "crates/hairetsu/Cargo.toml": "67a784b3f0dc716e74f9257bed09bef7c637618269586ecf20b1ff223114b0da",
     "crates/nuri/Cargo.toml": "c5c860abe8b16241d437c1bc3c202378eb59ea1da2a485154fdd6099e1452d41",
     "crates/omoya-spec/Cargo.toml": "75cd6d31f2ef617df89556610445abab8cf9cddb49d7bbf04c28ac5b7fc89031",
-    "crates/omoya/Cargo.toml": "0801942a1f3223d5d758425507e1ef20df10a76133fe89fee6d83734ecb2fc22",
+    "crates/omoya/Cargo.toml": "7236faa1034c265e9d6d411c631a4ceef9ce3f54becba85d7cb666fac6dc8be1",
     "crates/xkbcommon-hairetsu/Cargo.toml": "b4b77d51ae78f642dfaad99896a1bc6202e897ca25311d1296610e0d4435e8fd"
   },
   "target_resolves": {
@@ -1439,6 +1439,24 @@
         "build_dependencies": [],
         "features": []
       },
+      "kukaku-0.1.19-8b270155535015531396626022b8d31ddc35455b": {
+        "runtime_dependencies": [
+          {
+            "name": "serde",
+            "package_key": "serde-1.0.229",
+            "kind": "normal",
+            "features": [
+              "derive"
+            ],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": []
+      },
       "lazy_static-1.5.0": {
         "runtime_dependencies": [],
         "build_dependencies": [],
@@ -1590,7 +1608,7 @@
           "std"
         ]
       },
-      "nuri-0.1.23": {
+      "nuri-0.1.22": {
         "runtime_dependencies": [
           {
             "name": "thiserror",
@@ -1611,7 +1629,7 @@
         "build_dependencies": [],
         "features": []
       },
-      "omoya-0.1.23": {
+      "omoya-0.1.22": {
         "runtime_dependencies": [
           {
             "name": "awase",
@@ -1654,8 +1672,18 @@
             "tree": "target"
           },
           {
+            "name": "kukaku",
+            "package_key": "kukaku-0.1.19-8b270155535015531396626022b8d31ddc35455b",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
             "name": "nuri",
-            "package_key": "nuri-0.1.23",
+            "package_key": "nuri-0.1.22",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -1665,7 +1693,7 @@
           },
           {
             "name": "omoya_spec",
-            "package_key": "omoya-spec-0.1.23",
+            "package_key": "omoya-spec-0.1.22",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -1771,7 +1799,7 @@
           "default"
         ]
       },
-      "omoya-spec-0.1.23": {
+      "omoya-spec-0.1.22": {
         "runtime_dependencies": [
           {
             "name": "thiserror",
@@ -6534,6 +6562,9 @@
       "edition": "2024",
       "proc_macro": true
     },
+    "kukaku-0.1.19-8b270155535015531396626022b8d31ddc35455b": {
+      "edition": "2024"
+    },
     "lazy_static-1.5.0": {
       "edition": "2015"
     },
@@ -6573,7 +6604,7 @@
       "edition": "2021",
       "build_script": "build.rs"
     },
-    "nuri-0.1.23": {
+    "nuri-0.1.22": {
       "edition": "2024",
       "lib_target": {
         "name": "nuri",
@@ -6583,7 +6614,7 @@
     "okiba-0.2.1": {
       "edition": "2024"
     },
-    "omoya-0.1.23": {
+    "omoya-0.1.22": {
       "edition": "2024",
       "binaries": [
         {
@@ -6592,7 +6623,7 @@
         }
       ]
     },
-    "omoya-spec-0.1.23": {
+    "omoya-spec-0.1.22": {
       "edition": "2024",
       "lib_target": {
         "name": "omoya_spec",
@@ -6871,6 +6902,8 @@
       "edition": "2024"
     }
   },
-  "git_nar_sha256": {},
+  "git_nar_sha256": {
+    "kukaku-0.1.19-8b270155535015531396626022b8d31ddc35455b": "sha256-M5JZXEZVRKXDDKUgnu/vhe2MR49/2KpyveMX6Qam/zA="
+  },
   "flake_metadata": {}
 }
