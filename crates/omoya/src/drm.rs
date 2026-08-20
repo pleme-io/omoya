@@ -478,19 +478,36 @@ where
                     // `frame` is consumed by `finish()`, so `renderer` is free
                     // again here; `Framebuffer<'buffer>` borrows the dmabuf,
                     // not the renderer, which is what makes this legal at all.
-                    if let Ok(path) = std::env::var("OMOYA_CAPTURE")
-                        && !path.is_empty()
-                    {
+                    // Taking the request CLEARS it, so this is one-shot by
+                    // construction: a capture every frame would fill the disk
+                    // and change the timing it exists to observe.
+                    let requested = introspect
+                        .capture_request
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .take();
+                    if let Some(path) = requested {
                         let size = (mode.size.w, mode.size.h);
-                        match capture(&mut renderer, &fb, size, std::path::Path::new(&path)) {
-                            Ok(()) => tracing::info!(path = %path, w = size.0, h = size.1, "captured"),
-                            // Reported, never fatal: a failed screenshot must
-                            // not take down the seat it was meant to diagnose.
-                            Err(e) => tracing::error!(error = %e, path = %path, "capture failed"),
-                        }
-                        // One-shot: a capture every frame would fill the disk
-                        // and change the timing it exists to observe.
-                        unsafe { std::env::remove_var("OMOYA_CAPTURE") };
+                        let outcome =
+                            match capture(&mut renderer, &fb, size, std::path::Path::new(&path)) {
+                                Ok(()) => {
+                                    tracing::info!(path = %path, w = size.0, h = size.1, "captured");
+                                    format!("ok: {path} ({}x{})", size.0, size.1)
+                                }
+                                // Reported, never fatal: a failed screenshot
+                                // must not take down the seat it was meant to
+                                // diagnose. The caller reads the reason back
+                                // rather than being told only that it did not
+                                // appear.
+                                Err(e) => {
+                                    tracing::error!(error = %e, path = %path, "capture failed");
+                                    format!("error: {e}")
+                                }
+                            };
+                        *introspect
+                            .capture_result
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner()) = Some(outcome);
                     }
                 }
                 scanout.flip()?;
@@ -512,11 +529,11 @@ where
                 );
             });
             // ★ Capture is handled INSIDE the frame closure above, where the
-            // framebuffer is still bound. It was here, and here it could only
-            // ever log — `fb` is out of scope by this point. Env-gated rather
-            // than a flag because the useful moment is "the seat is already
-            // running and something looks wrong", and restarting it to pass a
-            // flag destroys the state being investigated.
+            // framebuffer is still bound, and is triggered by a kanshou
+            // request rather than an env var. It sat here originally and could
+            // only ever log — `fb` is out of scope by this point — and the env
+            // gate could never serve the moment it named, since a running
+            // process's environment cannot be changed from outside.
 
             // ★ Publish the frame counter HERE, in the loop that actually
             // renders. The first cut incremented it nowhere, so a live query

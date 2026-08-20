@@ -70,6 +70,22 @@ pub struct OmoyaIntrospect {
     pub windows: AtomicU64,
     /// Reserved chords recognised but not acted on — the M4 debt counter.
     pub owed_vt_switches: AtomicU64,
+    /// A capture the socket thread has ASKED for, that the render loop has not
+    /// yet taken. `Some(path)` means "next frame, write the framebuffer here".
+    ///
+    /// ★ WHY A REQUEST FIELD AND NOT AN ENV VAR. Capture was env-gated
+    /// (`OMOYA_CAPTURE`) while its own comment said the useful moment is "the
+    /// seat is already running and something looks wrong". Those contradict:
+    /// a process's environment cannot be changed from outside, so the env gate
+    /// could only ever be set BEFORE start — precisely not the moment it was
+    /// written for. A running seat could never be screenshotted.
+    ///
+    /// The render loop owns the framebuffer, so it must do the work; the socket
+    /// thread only leaves a note. Same direction as every other field here —
+    /// the loop pushes, the sidecar never reaches in.
+    pub capture_request: std::sync::Mutex<Option<String>>,
+    /// What became of the last capture: the path written, or the error.
+    pub capture_result: std::sync::Mutex<Option<String>>,
     /// Scanout width/height, 0 when nested or not yet known.
     pub output_w: AtomicU64,
     pub output_h: AtomicU64,
@@ -130,6 +146,28 @@ impl Introspect for OmoyaIntrospect {
             "frames" => Ok(n(&self.frames)),
             "windows" => Ok(n(&self.windows)),
             "owed_vt_switches" => Ok(n(&self.owed_vt_switches)),
+            // Ask for a screenshot. `capture` with a path argument leaves the
+            // request; the render loop takes it on its next frame. Returns
+            // immediately with "requested" — the caller then reads
+            // `capture_result`, which is how an async job stays honest about
+            // not having finished yet.
+            "capture" => {
+                let Some(path) = q.args.first().and_then(|v| v.as_str()) else {
+                    return Err(QueryError::UnknownField {
+                        field: "capture needs a path argument".to_string(),
+                    });
+                };
+                *self.capture_request.lock().unwrap_or_else(|e| e.into_inner()) =
+                    Some(path.to_string());
+                *self.capture_result.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                Ok(serde_json::json!({ "requested": path }))
+            }
+            "capture_result" => Ok(serde_json::json!(
+                self.capture_result
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone()
+            )),
             "input_attached" => Ok(serde_json::json!(
                 self.input_attached.load(Ordering::Relaxed) == 1
             )),
@@ -171,6 +209,7 @@ impl Introspect for OmoyaIntrospect {
             "frames",
             "windows",
             "owed_vt_switches",
+            "capture_result",
             "input_attached",
             "session_active",
             "session_events",
