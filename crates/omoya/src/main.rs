@@ -408,11 +408,35 @@ where
     //
     // Pacing still comes from a timer (`pending-omoya-vblank`); this only
     // consumes the events. Doing both from here is the eventual fix.
+    // ★ ONE FLIP IN FLIGHT AT A TIME. The kernel refuses a page flip issued
+    // while the previous is still pending, with EBUSY. `DirectScanout` swaps
+    // its back buffer when a flip is ACCEPTED rather than when it RETIRES, and
+    // the render timer had no idea either way — the frame period simply used
+    // to be long enough to hide it.
+    //
+    // Measured: removing the render time from the period (pacing from the
+    // deadline instead of from now) surfaced it immediately as 29 frame
+    // failures on vkms, all `Device or resource busy (os error 16)`. The
+    // pacing change did not break scanout; it removed the slack that was
+    // concealing this.
+    //
+    // So the vblank event — which the notifier below already had to drain — is
+    // now also the signal that the display is ready for another frame. That is
+    // a step toward `pending-omoya-vblank` (render FROM vblank) without the
+    // restructure: for now the timer proposes and this flag disposes.
+    let flip_pending = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flip_pending_ev = flip_pending.clone();
     event_loop
         .handle()
-        .insert_source(drm_notifier, |event, _meta, _data| {
-            if let smithay::backend::drm::DrmEvent::Error(err) = event {
-                tracing::warn!(?err, "DRM device reported an error");
+        .insert_source(drm_notifier, move |event, _meta, _data| {
+            match event {
+                smithay::backend::drm::DrmEvent::VBlank(_) => {
+                    // The flip retired; the back buffer is free again.
+                    flip_pending_ev.store(false, std::sync::atomic::Ordering::Release);
+                }
+                smithay::backend::drm::DrmEvent::Error(err) => {
+                    tracing::warn!(?err, "DRM device reported an error");
+                }
             }
         })
         .map_err(|e| format!("inserting the DRM notifier: {e}"))?;
@@ -440,6 +464,7 @@ where
     // telling us a renderer is a compile-time choice.
     match renderer {
         RendererKind::Nuri => crate::drm::run(
+            flip_pending.clone(),
             event_loop,
             data,
             &mut device,

@@ -368,6 +368,11 @@ pub fn frame_interval(target: &ScanoutTarget) -> Duration {
 /// `ImportAll` is a blanket impl satisfied by `ImportMemWl + ImportDmaWl`,
 /// which is why `nuri` implements those two rather than `ImportAll` directly.
 pub fn run<R>(
+    /// Set when a page flip is issued, cleared by the VBlank event. See the
+    /// comment at its creation in `main.rs`: the kernel refuses a flip issued
+    /// while the previous is still pending, and the frame period used to be
+    /// long enough to hide that.
+    flip_pending: std::sync::Arc<std::sync::atomic::AtomicBool>,
     event_loop: &mut smithay::reexports::calloop::EventLoop<'static, crate::CalloopData>,
     data: &mut crate::CalloopData,
     device: &mut DrmDevice,
@@ -479,6 +484,19 @@ where
     event_loop.handle().insert_source(
         smithay::reexports::calloop::timer::Timer::from_duration(interval),
         move |deadline, _, data| {
+            // ★ DO NOT COMPOSE A FRAME THE DISPLAY CANNOT TAKE. A flip issued
+            // while the previous is pending returns EBUSY, and the whole frame
+            // — a full-screen CPU composite — is wasted producing an error.
+            // Skipping costs one interval; issuing costs the composite AND
+            // still does not present.
+            if flip_pending.load(std::sync::atomic::Ordering::Acquire) {
+                let mut next = deadline + interval;
+                let now = std::time::Instant::now();
+                if next <= now {
+                    next = now + interval;
+                }
+                return smithay::reexports::calloop::timer::TimeoutAction::ToInstant(next);
+            }
             let elements = smithay::desktop::space::space_render_elements(
                 &mut renderer,
                 [&data.state.space],
@@ -616,6 +634,8 @@ where
                     }
                 }
                 scanout.flip()?;
+                // Accepted, not retired — the VBlank event clears this.
+                flip_pending.store(true, std::sync::atomic::Ordering::Release);
                 Ok(())
             })();
             if let Err(e) = frame_result {
