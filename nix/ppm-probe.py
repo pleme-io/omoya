@@ -12,10 +12,10 @@ def main():
     parts = []
     i = 2
     while len(parts) < 3:
-        while i < len(data) and data[i : i + 1].isspace():
+        while i < len(data) and data[i:i + 1].isspace():
             i += 1
         j = i
-        while j < len(data) and not data[j : j + 1].isspace():
+        while j < len(data) and not data[j:j + 1].isspace():
             j += 1
         parts.append(int(data[i:j]))
         i = j
