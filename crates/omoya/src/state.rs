@@ -205,7 +205,17 @@ impl Omoya {
             owed_vt_switches: 0,
             space,
             tiling: crate::layout::Tiling::default(),
-            bindings: crate::deed::default_bindings(),
+            bindings: {
+                let (map, clashes) = crate::deed::default_bindings();
+                // Reported, never fatal. A keymap typo must not take down the
+                // seat during login — but it must not be invisible either,
+                // because a chord bound twice runs whichever line came last
+                // and the source stops describing the behaviour.
+                if !clashes.is_empty() {
+                    tracing::error!(?clashes, "duplicate key bindings — later ones were refused");
+                }
+                map
+            },
             session_command: None,
             loop_signal,
             socket_name,

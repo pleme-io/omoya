@@ -62,18 +62,31 @@ pub enum Deed {
     SpawnTerminal,
 }
 
-/// The default binding map.
+/// The default binding map, and every chord that collided while building it.
+///
+/// ★ `try_bind`, NOT `add_binding`, BECAUSE awase ASKED. `add_binding` is
+/// `#[must_use]` and its note says exactly why: *"the returned Some(prev) is a
+/// DUPLICATE binding being silently discarded — handle it, or use `try_bind`
+/// to make it an error."* Silencing that with `let _ =` would mean a chord
+/// bound twice keeps whichever line came last, which is the worst kind of
+/// keymap bug — the binding you read in the source is not the one that runs.
+///
+/// Collisions are RETURNED rather than panicked on. A panic here fires during
+/// the operator's login and takes the whole seat down over a keymap typo; the
+/// test below is what makes the list collision-free, and the caller logs
+/// anything that somehow survives it.
 ///
 /// Returns `awase`'s type rather than a wrapper so a future config surface
 /// can add to it without this module growing an API of its own.
 #[must_use]
-pub fn default_bindings() -> BindingMap<Deed> {
+pub fn default_bindings() -> (BindingMap<Deed>, Vec<Hotkey>) {
     let mut map = BindingMap::<Deed>::typed();
+    let mut clashes = Vec::new();
     let Some(mode) = map.mode_mut("default") else {
         // `typed()` inserts "default" itself, so this is unreachable — but
         // returning the empty map beats an unwrap that turns a future rename
         // upstream into a panic on the operator's login.
-        return map;
+        return (map, clashes);
     };
 
     let logo = LOGO;
@@ -91,26 +104,29 @@ pub fn default_bindings() -> BindingMap<Deed> {
         (Key::Up, Direction::Above),
         (Key::Right, Direction::Right),
     ] {
-        // `add_binding` returns the binding it displaced. Ignored here
-        // because this map is built once from a literal list — but NOT
-        // silently: `detect_duplicate_bindings` is awase's surface for
-        // catching a real collision, and the test below is what proves this
-        // list has none worth reporting.
-        mode.add_binding(Binding::new(Hotkey::new(logo, key), Deed::Focus(dir)));
-        mode.add_binding(Binding::new(
+        if let Err(prev) = mode.try_bind(Binding::new(Hotkey::new(logo, key), Deed::Focus(dir))) {
+            clashes.push(prev.hotkey);
+        }
+        if let Err(prev) = mode.try_bind(Binding::new(
             Hotkey::new(logo_shift, key),
             Deed::Resize(dir),
-        ));
+        )) {
+            clashes.push(prev.hotkey);
+        }
     }
 
-    mode.add_binding(Binding::new(Hotkey::new(logo, Key::Q), Deed::Close));
+    if let Err(prev) = mode.try_bind(Binding::new(Hotkey::new(logo, Key::Q), Deed::Close)) {
+        clashes.push(prev.hotkey);
+    }
     // `Return`, not `Enter` — awase names the main key `Return` and reserves
     // `NumpadEnter` for the other one.
-    mode.add_binding(Binding::new(
+    if let Err(prev) = mode.try_bind(Binding::new(
         Hotkey::new(logo, Key::Return),
         Deed::SpawnTerminal,
-    ));
-    map
+    )) {
+        clashes.push(prev.hotkey);
+    }
+    (map, clashes)
 }
 
 #[cfg(test)]
@@ -131,7 +147,7 @@ mod tests {
 
     #[test]
     fn arrows_and_hjkl_agree() {
-        let mut m = default_bindings();
+        let (mut m, _) = default_bindings();
         assert_eq!(
             hit(&mut m, Hotkey::new(LOGO, Key::H)),
             hit(&mut m, Hotkey::new(LOGO, Key::Left)),
@@ -144,7 +160,7 @@ mod tests {
     /// never points at the compositor.
     #[test]
     fn ctrl_and_alt_are_left_to_the_applications() {
-        let mut m = default_bindings();
+        let (mut m, _) = default_bindings();
         for mods in [Modifiers::CTRL, Modifiers::ALT, Modifiers::CTRL | Modifiers::ALT] {
             for key in [Key::H, Key::J, Key::K, Key::L, Key::Q, Key::Return] {
                 assert_eq!(
@@ -156,9 +172,18 @@ mod tests {
         }
     }
 
+    /// ★ THE LIST ITSELF HAS NO COLLISION. `try_bind` makes one a returned
+    /// error rather than a silent last-wins overwrite, and this is what turns
+    /// that from a runtime report into a build-time fact.
+    #[test]
+    fn no_chord_is_bound_twice() {
+        let (_, clashes) = default_bindings();
+        assert!(clashes.is_empty(), "duplicate bindings: {clashes:?}");
+    }
+
     #[test]
     fn a_bare_key_is_never_a_deed() {
-        let mut m = default_bindings();
+        let (mut m, _) = default_bindings();
         assert_eq!(hit(&mut m, Hotkey::new(Modifiers::NONE, Key::Q)), None);
     }
 }
