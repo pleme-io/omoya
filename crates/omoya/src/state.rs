@@ -98,6 +98,13 @@ pub struct Omoya {
     pub space: Space<Window>,
     /// The keymap. `awase::BindingMap`, not a bespoke table — the fleet rule
     /// is that awase owns keys and a hand-rolled `Keymap` is the violation.
+    /// The introspection sidecar, so the compositor can PUBLISH what it did.
+    ///
+    /// Held by the state rather than only by the render loop because the
+    /// layout is decided in `apply_layout`, which the render loop never sees.
+    /// A fact that only the renderer can publish is a fact nobody can ask
+    /// about until it has already turned into pixels.
+    pub introspect: std::sync::Arc<crate::introspect::OmoyaIntrospect>,
     pub bindings: awase::BindingMap<crate::deed::Deed>,
     /// What `Logo+Return` launches — the same command omoya was given after
     /// `--`, so the chord opens another of whatever the seat opened first
@@ -160,7 +167,12 @@ pub struct Omoya {
 }
 
 impl Omoya {
-    pub fn new(event_loop: &mut EventLoop<CalloopData>, display: Display<Self>, mode: SeatMode) -> Self {
+    pub fn new(
+        event_loop: &mut EventLoop<CalloopData>,
+        display: Display<Self>,
+        mode: SeatMode,
+        introspect: std::sync::Arc<crate::introspect::OmoyaIntrospect>,
+    ) -> Self {
         let start_time = std::time::Instant::now();
         let dh = display.handle();
 
@@ -204,6 +216,7 @@ impl Omoya {
             reserved,
             owed_vt_switches: 0,
             space,
+            introspect,
             tiling: crate::layout::Tiling::default(),
             bindings: {
                 let (map, clashes) = crate::deed::default_bindings();

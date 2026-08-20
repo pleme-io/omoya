@@ -640,7 +640,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut event_loop: EventLoop<CalloopData> = EventLoop::try_new()?;
     let display: Display<Omoya> = Display::new()?;
     let display_handle = display.handle();
-    let state = Omoya::new(&mut event_loop, display, args.mode);
+    let state = Omoya::new(&mut event_loop, display, args.mode, introspect.clone());
 
     let mut data = CalloopData {
         state,

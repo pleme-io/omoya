@@ -80,6 +80,16 @@ pub struct OmoyaIntrospect {
     /// `presented < frames` on an idle seat is the measurement that says it is
     /// working. Equal counts say it is not.
     pub presented: AtomicU64,
+    /// The rectangles the layout last assigned, as `"x,y,wxh"` per window.
+    ///
+    /// ★ PUBLISHED BECAUSE GUESSING AT A LAYOUT FROM PIXELS IS BACKWARDS.
+    /// A screenshot says where windows ENDED UP; it cannot say what the tree
+    /// asked for. When those disagree — the tree splits correctly and the
+    /// windows still stack — a pixel probe reports "stacked" and gives no way
+    /// to tell a broken split from a broken placement from an early return in
+    /// `apply_layout`. This is the tree's own answer, read from the same
+    /// socket, so the two can be compared instead of one being inferred.
+    pub layout: Mutex<Vec<String>>,
     /// Windows currently mapped in the space.
     pub windows: AtomicU64,
     /// Reserved chords recognised but not acted on — the M4 debt counter.
@@ -159,6 +169,12 @@ impl Introspect for OmoyaIntrospect {
             )),
             "frames" => Ok(n(&self.frames)),
             "presented" => Ok(n(&self.presented)),
+            "layout" => Ok(kanshou::Value::from(
+                self.layout
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .join(" | "),
+            )),
             "windows" => Ok(n(&self.windows)),
             "owed_vt_switches" => Ok(n(&self.owed_vt_switches)),
             // Ask for a screenshot. `capture` with a path argument leaves the
@@ -205,6 +221,7 @@ impl Introspect for OmoyaIntrospect {
                 "socket": self.socket.get().cloned().unwrap_or_default(),
                 "frames": self.frames.load(Ordering::Relaxed),
                 "presented": self.presented.load(Ordering::Relaxed),
+                "layout": self.layout.lock().unwrap_or_else(|e| e.into_inner()).clone(),
                 "windows": self.windows.load(Ordering::Relaxed),
                 "input_attached": self.input_attached.load(Ordering::Relaxed) == 1,
                 "output": {
@@ -224,6 +241,7 @@ impl Introspect for OmoyaIntrospect {
             "backend",
             "frames",
             "presented",
+            "layout",
             "windows",
             "owed_vt_switches",
             "capture_result",

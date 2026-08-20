@@ -259,7 +259,22 @@ impl crate::state::Omoya {
             return;
         };
 
-        for (window, rect) in self.tiling.arrange(geo) {
+        let arranged = self.tiling.arrange(geo);
+        // Publish what the TREE asked for, before anything is applied. See
+        // `OmoyaIntrospect::layout` — a screenshot says where windows ended
+        // up and cannot say what was requested, so when the two disagree
+        // there is otherwise no way to tell a broken split from a broken
+        // placement from an early return above.
+        *self
+            .introspect
+            .layout
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = arranged
+            .iter()
+            .map(|(_, r)| format!("{},{} {}x{}", r.loc.x, r.loc.y, r.size.w, r.size.h))
+            .collect();
+
+        for (window, rect) in arranged {
             if let Some(t) = window.toplevel() {
                 t.with_pending_state(|state| {
                     state.size = Some(rect.size);

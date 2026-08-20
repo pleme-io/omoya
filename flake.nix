@@ -745,6 +745,13 @@
                   ).split()
               )
               print(f"content: left {lc}/{lt} px, right {rc}/{rt} px")
+              # ★ ASK THE TREE, DO NOT INFER IT FROM PIXELS. The rectangles
+              # `apply_layout` assigned, printed beside the pixel counts, so a
+              # disagreement between them is readable at a glance: matching
+              # rects with an empty half means placement failed, while
+              # identical rects mean the SPLIT failed. Inferring either from
+              # a screenshot alone is guesswork.
+              print("layout:", machine.succeed("kanshou-get layout").strip())
               # The totals are the denominator: 0 non-background out of 0
               # scanned would mean the rectangle fell off the image, which is
               # a different bug from an empty half and must not read as one.
