@@ -162,3 +162,57 @@ rio, 6.12.93: `drivers/gpu/drm/vkms/vkms.ko.xz`). A `nixosTest` can boot with
 it, run `omoya --backend drm` against a virtual card, drive a scripted client
 and assert a golden hash — the whole scanout path, in CI, with no hardware and
 no risk to plo. That is the gate for this phase.
+
+
+---
+
+# The naturalize ledger — "no C involved", measured
+
+> Operator directive, 2026-08-20: *"literally the only thing that should have C
+> left is the kernel"*, then *"so we have no C involved"*.
+
+## ★ The floor, named before the plan rather than discovered at its end
+
+**Rust's `std` on Linux is implemented over libc.** The only libc-free target,
+`x86_64-unknown-linux-none`, ships **no `std`** — measured on rio, not assumed:
+
+```
+$ cargo build --target x86_64-unknown-linux-none
+error[E0463]: can't find crate for `std`
+```
+
+A Wayland compositor needs threads, files, sockets and an allocator; smithay,
+calloop and wayland-server all require `std`. So "zero C" for this program means
+`#![no_std]` plus a reimplementation of std's Linux layer over raw syscalls —
+for us **and** for every crate we consume.
+
+This is a **world fact**, not one of our abstractions, which is the test the
+fleet's own doctrine sets for whether a limit is ours to dissolve. It gets
+typed as a ceiling rather than argued with.
+
+**So the honest destination is: kernel + libc, and nothing else.** Every C
+library and every C daemon above that line goes.
+
+<!-- tier-ledger -->
+
+| X capability | pleme-io realization | tier |
+|---|---|---|
+| software rasterization (`libpixman`) | NET-NEW: `nuri`, 485 lines, **zero dependencies**, 11 green tests + a smithay `Renderer`/`Frame` adapter. The one true naturalize — it wraps no kernel interface, it is arithmetic. | only-mitigated (C2) |
+| input transport (`libinput`, `libudev`) | NET-NEW: `evdev_backend`, kernel ioctls via the pure-Rust `evdev` crate (bitvec/cfg-if/libc/nix, **no `-sys`**). Wired as `--input evdev`. | only-mitigated (C2) |
+| input **policy** (accel, tap, gestures) | **ABSENT.** libinput's real value, and not reimplemented. Named so the swap is not mistaken for parity. | only-mitigated (C6) |
+| seat/device arbitration (`libseat`) | SHIPPED-composition: `logind.rs` over zbus, proven on vkms with a real seat session — **but logind is a C daemon**, so this trades a linked library for an out-of-process one. | only-mitigated (C2) |
+| session **without any C daemon** | NET-NEW: `DirectSession` over `VT_SETMODE`/`VT_PROCESS` + `DRM_IOCTL_SET_MASTER`/`DROP_MASTER`. **NOT BUILT.** This is what actually removes logind. | only-mitigated (C6) |
+| buffer allocation (`libgbm`) | dumb buffers are already the runtime path; the `.so` is a smithay compile-time gate on `DrmCompositor`. Removing it means replacing 4426 lines of damage tracking and plane assignment. **NOT BUILT.** | only-mitigated (C6) |
+| keymap translation (`libxkbcommon`) | **BLOCKED.** smithay re-exports it in its public API with no `optional = true` and no feature gating it. Requires an upstream PR genericising `KbdInternal`, or a fork. | only-mitigated (C6) |
+| the Rust runtime (`libc`) | **THE FLOOR.** No `std` without it; `linux-none` is `no_std`. Measured above. | only-mitigated (C6) |
+
+## What this ledger says plainly
+
+Four of the eight rows are **NOT BUILT or BLOCKED**, and one is the floor. The
+honest count today is: **one C library genuinely replaced end-to-end and running
+(`libseat` → logind), two replaced-but-not-default (`libpixman`, `libinput`+
+`libudev`), and the C daemon still there.**
+
+"We removed C from the compositor" would be a round-up. What is true is that the
+*replacements exist and are selectable*, and that the remaining work is named
+with its ceiling rather than implied to be nearly done.
