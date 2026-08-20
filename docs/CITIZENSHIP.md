@@ -214,7 +214,7 @@ library and every C daemon above that line goes.
 | client **GPU** buffers (`zwp_linux_dmabuf_v1`) | **NOT ADVERTISED.** `state.rs` builds `ShmState` but no `DmabufState`, so clients get `wl_shm` only — CPU-backed. A Vulkan swapchain on a real GPU **cannot present to such a surface**, so every client renders on the CPU no matter what hardware is in the box. Measured on plo: mado fell back to `llvmpipe` with an RTX 3070 idle, and garasu's adapter check correctly reported "no hardware GPU adapter" because none was *surface-compatible*. `nuri_renderer` already implements `dmabuf_formats()`, so this is a missing global rather than a missing capability. `pending-omoya-dmabuf` | only-mitigated (C6) |
 | seat/device arbitration (`libseat`) | SHIPPED-composition: `logind.rs` over zbus, proven on vkms with a real seat session — **but logind is a C daemon**, so this trades a linked library for an out-of-process one. | only-mitigated (C2) |
 | session **without any C daemon** | NET-NEW: `DirectSession` over `VT_SETMODE`/`VT_PROCESS` + `DRM_IOCTL_SET_MASTER`/`DROP_MASTER`. **NOT BUILT.** This is what actually removes logind. | only-mitigated (C6) |
-| buffer allocation (`libgbm`) | NET-NEW: `DirectScanout` — two dumb buffers and `DrmSurface` commit/flip directly, so `DrmCompositor` (and its `backend_gbm` gate) is not in the build at all. **The 4426 lines were sidestepped, not rewritten**, and the price is named: full repaint, no overlay planes (`pending-omoya-damage`, `pending-omoya-planes`). | only-mitigated (C2) |
+| buffer allocation (`libgbm`) | NET-NEW: `DirectScanout` — two dumb buffers and `DrmSurface` commit/flip directly, so `DrmCompositor` (and its `backend_gbm` gate) is not in the build at all. **The 4426 lines were sidestepped, not rewritten.** Damage tracking is now **re-derived, not skipped**: `DirectScanout` reports buffer age, the cursor is a render element, and `OutputDamageTracker::render_output` owns clear+draw — measured on vkms at **184 idle render ticks → 0 presentations**. Overlay planes remain out (`pending-omoya-planes`). | only-mitigated (C2) |
 | keymap translation (`libxkbcommon`) | NET-NEW: `hairetsu` (配列) + a `[patch.crates-io]` replacement of the `xkbcommon` crate. **smithay is unmodified** — cargo patches by package name, so the dependency is swapped underneath it. 43 green tests. **Serves `us` only, and REFUSES any other layout** rather than substituting. | only-mitigated (C2) |
 | the launcher (`makeWrapper` bash) | **RETIRED — deleted, not rewritten.** It existed to put five C libraries on `LD_LIBRARY_PATH`; nothing links them now, so there is no search path to set and no script to generate. `bin/omoya` is the ELF binary. | truly-unrep |
 | the Rust runtime (`libc`) | **THE FLOOR.** No `std` without it; `linux-none` is `no_std`. Measured above. | only-mitigated (C6) |
@@ -316,6 +316,40 @@ document before the work started, not discovered at its end.
   the seat is still arbitrated by a C process over D-Bus. That trades a linked
   library for an out-of-process one; it does not remove C from the *system*.
   `pending-omoya-direct-session` is the row that would.
+
+### `pending-omoya-test-gate` — the unit suite is run by hand, not by a gate
+
+**Measured 2026-08-20:** `cargo test -p omoya` did not COMPILE
+(`nuri_renderer.rs` called `FormatSet::is_empty`, which smithay does not
+have). A crate whose test target does not build has **no tests**, and an
+absent suite reports exactly what a clean one does — nothing. So every unit
+test here had been written, committed and cited without ever running, and one
+of them was **pinning a bug**: the background test asserted the LINEAR
+encoding under the name `..._is_the_srgb_encoding`, preserving in writing the
+exact shade the operator called a blank black screen. Both are fixed; the
+suite is now 39 green.
+
+**Why no gate catches it yet, and why omoya must NOT grow its own.** substrate
+already decided this, correctly, at `lib/build/rust/test-check.nix`: on the
+**gen lockfile build path** — which omoya is on — `Cargo.build-spec.json`
+carries `runtime_dependencies` + `build_dependencies` and **no dev-dependency
+graph at all** (`spec-invariants.nix` actively rejects a dev-dep appearing in
+either). nixpkgs' bare `buildRustCrate` has no `runTests`. omoya has a real
+dev-dep (`trybuild`, for omoya-spec's compile-fail seals), so the objection
+applies here exactly rather than by analogy.
+
+substrate's response is to emit **no `checks.tests` at all** rather than a
+green-and-empty one, which is the right call — *"a green guard over an empty
+subject set is the worst round-up available"*. Hand-rolling a check in this
+flake would re-derive what substrate deliberately declined, and the first
+version of it I wrote did exactly that: it compiled nothing and wrote a file.
+
+**The fix is upstream and already tracked:** gen-cargo emitting
+`dev_dependencies` edges into the spec, per the ★★ GEN TYPED-SPEC CONTRACT —
+substrate's own `pending-rust-test-check: lockfile-dev-deps`. Until that
+lands, `cargo test -p omoya` inside `nix develop` is the only thing that runs
+this suite, and "omoya's tests pass" is a claim about a run someone performed,
+not about a gate.
 - **`hairetsu` is not XKB.** One layout, no keymap parsing, no compose, no
   layout switching. It refuses what it cannot serve, which makes the gap loud
   rather than silent — but a refusal is still a gap.
