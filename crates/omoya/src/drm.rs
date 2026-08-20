@@ -541,7 +541,15 @@ pub fn attach_input<S>(
     session: S,
 ) -> Result<(), Box<dyn std::error::Error>>
 where
-    S: smithay::backend::session::Session + Clone + Send + 'static,
+    // ★ NO `Send` BOUND. `LibSeatSession` holds an `Rc` and is deliberately
+    // NOT Send — smithay keeps the session on the compositor thread, and
+    // libinput does too. Requiring Send here was speculative and rejected
+    // exactly the backend that has been running.
+    //
+    // `LogindSession` is internally `Arc` because its D-Bus SIGNAL LISTENER is
+    // a separate thread; the handle itself never crosses one. Those are
+    // different claims, and only the first needed the sync primitive.
+    S: smithay::backend::session::Session + Clone + 'static,
 {
     let mut context = Libinput::new_with_udev::<LibinputSessionInterface<S>>(session.into());
     // The seat NAME, not a device path: libinput resolves the set of devices

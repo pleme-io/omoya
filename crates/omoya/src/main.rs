@@ -165,7 +165,7 @@ fn attach_session<S, N>(
     notifier: N,
     introspect: &std::sync::Arc<crate::introspect::OmoyaIntrospect>,
 ) where
-    S: smithay::backend::session::Session + Clone + Send + 'static,
+    S: smithay::backend::session::Session + Clone + 'static,
     N: smithay::reexports::calloop::EventSource<
             Event = smithay::backend::session::Event,
             Metadata = (),
