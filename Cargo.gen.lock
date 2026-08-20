@@ -1,11 +1,11 @@
 {
   "schema_version": 2,
-  "cargo_lock_sha256": "25789e40fbc901c8da6b9dff2c46911748075613c2d199b3bba782e4a0ea96a8",
+  "cargo_lock_sha256": "be206bfb4d6ee34f7a7e29fa5d69be4d0455f4c5a3394555d733a5d89ddf43dd",
   "manifest_sha256": {
     "Cargo.toml": "600be426c5e0fbfeb5169664b4e4df3ed0719e70e7ecf0b6ee7ad991ae32cc0d",
     "crates/nuri/Cargo.toml": "c5c860abe8b16241d437c1bc3c202378eb59ea1da2a485154fdd6099e1452d41",
     "crates/omoya-spec/Cargo.toml": "75cd6d31f2ef617df89556610445abab8cf9cddb49d7bbf04c28ac5b7fc89031",
-    "crates/omoya/Cargo.toml": "89215275b155a2e4ebc51de1d7b39f9ace31efef2f072968bd6aff221abb7e4b"
+    "crates/omoya/Cargo.toml": "587853d63cd39bce2e8676534c481fbb2205582cb3780c2057075b54ffc4931a"
   },
   "target_resolves": {
     "base": {
@@ -2064,7 +2064,6 @@
               "backend_udev",
               "backend_winit",
               "desktop",
-              "renderer_pixman",
               "wayland_frontend"
             ],
             "uses_default_features": false,
@@ -2198,67 +2197,7 @@
         "build_dependencies": [],
         "features": []
       },
-      "paste-1.0.15": {
-        "runtime_dependencies": [],
-        "build_dependencies": [],
-        "features": []
-      },
       "pin-project-lite-0.2.17": {
-        "runtime_dependencies": [],
-        "build_dependencies": [],
-        "features": []
-      },
-      "pixman-0.2.1": {
-        "runtime_dependencies": [
-          {
-            "name": "drm_fourcc",
-            "package_key": "drm-fourcc-2.2.0",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": true,
-            "optional": true,
-            "target": null,
-            "tree": "target"
-          },
-          {
-            "name": "paste",
-            "package_key": "paste-1.0.15",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": true,
-            "optional": false,
-            "target": null,
-            "tree": "host"
-          },
-          {
-            "name": "pixman_sys",
-            "package_key": "pixman-sys-0.1.0",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": true,
-            "optional": false,
-            "target": null,
-            "tree": "target"
-          },
-          {
-            "name": "thiserror",
-            "package_key": "thiserror-1.0.69",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": true,
-            "optional": false,
-            "target": null,
-            "tree": "target"
-          }
-        ],
-        "build_dependencies": [],
-        "features": [
-          "default",
-          "drm-fourcc",
-          "sync"
-        ]
-      },
-      "pixman-sys-0.1.0": {
         "runtime_dependencies": [],
         "build_dependencies": [],
         "features": []
@@ -3053,19 +2992,6 @@
             "tree": "target"
           },
           {
-            "name": "pixman",
-            "package_key": "pixman-0.2.1",
-            "kind": "normal",
-            "features": [
-              "drm-fourcc",
-              "sync"
-            ],
-            "uses_default_features": true,
-            "optional": true,
-            "target": null,
-            "tree": "target"
-          },
-          {
             "name": "profiling",
             "package_key": "profiling-1.0.18",
             "kind": "normal",
@@ -3320,10 +3246,8 @@
           "input",
           "libloading",
           "libseat",
-          "pixman",
           "pkg-config",
           "renderer_gl",
-          "renderer_pixman",
           "tempfile",
           "udev",
           "wayland-client",
@@ -3525,22 +3449,6 @@
         "build_dependencies": [],
         "features": []
       },
-      "thiserror-1.0.69": {
-        "runtime_dependencies": [
-          {
-            "name": "thiserror_impl",
-            "package_key": "thiserror-impl-1.0.69",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": true,
-            "optional": false,
-            "target": null,
-            "tree": "host"
-          }
-        ],
-        "build_dependencies": [],
-        "features": []
-      },
       "thiserror-2.0.20": {
         "runtime_dependencies": [
           {
@@ -3559,42 +3467,6 @@
           "default",
           "std"
         ]
-      },
-      "thiserror-impl-1.0.69": {
-        "runtime_dependencies": [
-          {
-            "name": "proc_macro2",
-            "package_key": "proc-macro2-1.0.107",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": true,
-            "optional": false,
-            "target": null,
-            "tree": "target"
-          },
-          {
-            "name": "quote",
-            "package_key": "quote-1.0.47",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": true,
-            "optional": false,
-            "target": null,
-            "tree": "target"
-          },
-          {
-            "name": "syn",
-            "package_key": "syn-2.0.119",
-            "kind": "normal",
-            "features": [],
-            "uses_default_features": true,
-            "optional": false,
-            "target": null,
-            "tree": "target"
-          }
-        ],
-        "build_dependencies": [],
-        "features": []
       },
       "thiserror-impl-2.0.20": {
         "runtime_dependencies": [
@@ -7461,6 +7333,58 @@
               "calloop-wayland-source"
             ]
           },
+          "thiserror-1.0.69": {
+            "runtime_dependencies": [
+              {
+                "name": "thiserror_impl",
+                "package_key": "thiserror-impl-1.0.69",
+                "kind": "normal",
+                "features": [],
+                "uses_default_features": true,
+                "optional": false,
+                "target": null,
+                "tree": "host"
+              }
+            ],
+            "build_dependencies": [],
+            "features": []
+          },
+          "thiserror-impl-1.0.69": {
+            "runtime_dependencies": [
+              {
+                "name": "proc_macro2",
+                "package_key": "proc-macro2-1.0.107",
+                "kind": "normal",
+                "features": [],
+                "uses_default_features": true,
+                "optional": false,
+                "target": null,
+                "tree": "target"
+              },
+              {
+                "name": "quote",
+                "package_key": "quote-1.0.47",
+                "kind": "normal",
+                "features": [],
+                "uses_default_features": true,
+                "optional": false,
+                "target": null,
+                "tree": "target"
+              },
+              {
+                "name": "syn",
+                "package_key": "syn-2.0.119",
+                "kind": "normal",
+                "features": [],
+                "uses_default_features": true,
+                "optional": false,
+                "target": null,
+                "tree": "target"
+              }
+            ],
+            "build_dependencies": [],
+            "features": []
+          },
           "wayland-csd-frame-0.3.0": {
             "runtime_dependencies": [
               {
@@ -8769,6 +8693,58 @@
               "calloop",
               "calloop-wayland-source"
             ]
+          },
+          "thiserror-1.0.69": {
+            "runtime_dependencies": [
+              {
+                "name": "thiserror_impl",
+                "package_key": "thiserror-impl-1.0.69",
+                "kind": "normal",
+                "features": [],
+                "uses_default_features": true,
+                "optional": false,
+                "target": null,
+                "tree": "host"
+              }
+            ],
+            "build_dependencies": [],
+            "features": []
+          },
+          "thiserror-impl-1.0.69": {
+            "runtime_dependencies": [
+              {
+                "name": "proc_macro2",
+                "package_key": "proc-macro2-1.0.107",
+                "kind": "normal",
+                "features": [],
+                "uses_default_features": true,
+                "optional": false,
+                "target": null,
+                "tree": "target"
+              },
+              {
+                "name": "quote",
+                "package_key": "quote-1.0.47",
+                "kind": "normal",
+                "features": [],
+                "uses_default_features": true,
+                "optional": false,
+                "target": null,
+                "tree": "target"
+              },
+              {
+                "name": "syn",
+                "package_key": "syn-2.0.119",
+                "kind": "normal",
+                "features": [],
+                "uses_default_features": true,
+                "optional": false,
+                "target": null,
+                "tree": "target"
+              }
+            ],
+            "build_dependencies": [],
+            "features": []
           },
           "wayland-csd-frame-0.3.0": {
             "runtime_dependencies": [
@@ -11052,6 +11028,58 @@
               "calloop-wayland-source"
             ]
           },
+          "thiserror-1.0.69": {
+            "runtime_dependencies": [
+              {
+                "name": "thiserror_impl",
+                "package_key": "thiserror-impl-1.0.69",
+                "kind": "normal",
+                "features": [],
+                "uses_default_features": true,
+                "optional": false,
+                "target": null,
+                "tree": "host"
+              }
+            ],
+            "build_dependencies": [],
+            "features": []
+          },
+          "thiserror-impl-1.0.69": {
+            "runtime_dependencies": [
+              {
+                "name": "proc_macro2",
+                "package_key": "proc-macro2-1.0.107",
+                "kind": "normal",
+                "features": [],
+                "uses_default_features": true,
+                "optional": false,
+                "target": null,
+                "tree": "target"
+              },
+              {
+                "name": "quote",
+                "package_key": "quote-1.0.47",
+                "kind": "normal",
+                "features": [],
+                "uses_default_features": true,
+                "optional": false,
+                "target": null,
+                "tree": "target"
+              },
+              {
+                "name": "syn",
+                "package_key": "syn-2.0.119",
+                "kind": "normal",
+                "features": [],
+                "uses_default_features": true,
+                "optional": false,
+                "target": null,
+                "tree": "target"
+              }
+            ],
+            "build_dependencies": [],
+            "features": []
+          },
           "wayland-csd-frame-0.3.0": {
             "runtime_dependencies": [
               {
@@ -12320,6 +12348,58 @@
               "calloop-wayland-source"
             ]
           },
+          "thiserror-1.0.69": {
+            "runtime_dependencies": [
+              {
+                "name": "thiserror_impl",
+                "package_key": "thiserror-impl-1.0.69",
+                "kind": "normal",
+                "features": [],
+                "uses_default_features": true,
+                "optional": false,
+                "target": null,
+                "tree": "host"
+              }
+            ],
+            "build_dependencies": [],
+            "features": []
+          },
+          "thiserror-impl-1.0.69": {
+            "runtime_dependencies": [
+              {
+                "name": "proc_macro2",
+                "package_key": "proc-macro2-1.0.107",
+                "kind": "normal",
+                "features": [],
+                "uses_default_features": true,
+                "optional": false,
+                "target": null,
+                "tree": "target"
+              },
+              {
+                "name": "quote",
+                "package_key": "quote-1.0.47",
+                "kind": "normal",
+                "features": [],
+                "uses_default_features": true,
+                "optional": false,
+                "target": null,
+                "tree": "target"
+              },
+              {
+                "name": "syn",
+                "package_key": "syn-2.0.119",
+                "kind": "normal",
+                "features": [],
+                "uses_default_features": true,
+                "optional": false,
+                "target": null,
+                "tree": "target"
+              }
+            ],
+            "build_dependencies": [],
+            "features": []
+          },
           "wayland-csd-frame-0.3.0": {
             "runtime_dependencies": [
               {
@@ -13274,23 +13354,11 @@
     "parking-2.2.1": {
       "edition": "2018"
     },
-    "paste-1.0.15": {
-      "edition": "2018",
-      "proc_macro": true,
-      "build_script": "build.rs"
-    },
     "percent-encoding-2.3.2": {
       "edition": "2018"
     },
     "pin-project-lite-0.2.17": {
       "edition": "2018"
-    },
-    "pixman-0.2.1": {
-      "edition": "2021"
-    },
-    "pixman-sys-0.1.0": {
-      "edition": "2021",
-      "build_script": "build.rs"
     },
     "pkg-config-0.3.34": {
       "edition": "2021"
