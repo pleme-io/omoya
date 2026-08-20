@@ -23,34 +23,65 @@ The draft called plo "a live desktop". That is a three-way understatement and on
 
 So the blast radius of a wedged seat is **DNS for the LAN and the tailnet route into the home subnet** — not the cluster. And the recursion is real: the route you would use to reach plo is advertised by plo.
 
-**★ ADDED 2026-08-20, THE HARD WAY. plo has NO memory guard and NO watchdog.**
-Measured after wedging it: `grep -riE 'watchdog|kernel\.panic|oomd|MemoryMax|MemoryHigh'`
-over `nodes/plo/*.nix` and both profiles returns **nothing**. So on this node:
+**★ ADDED 2026-08-20, THE HARD WAY — AND THEN CORRECTED. plo wedged under CPU
+load, not memory, and the seat could not be reached to fix it.**
 
-- nothing bounds any process's memory,
-- nothing kills a runaway before the box starves,
-- and nothing reboots it afterwards.
+*This entry was first written with a confident wrong diagnosis. It is kept with
+the correction visible, because the way it was wrong is the lesson.*
 
-The failure mode is not theoretical — it happened. Two `mado` processes at
-~1.4 GB each were left running alongside the session; within the hour plo
-stopped scheduling userspace. The kernel stayed alive throughout (ICMP answered,
-latency degrading 3 ms → 26–192 ms erratic; TCP/53 still completed its handshake
-while dnsmasq never serviced it) — which is precisely what makes it
-unrecoverable remotely: **the machine looks up and is unreachable.** Port 22 is
-filtered on the LAN by design, tailscale was the only door, and tailscaled was
-one of the starved processes. It needed the power button.
+**What happened.** After a seat session had been running for some hours, plo
+stopped scheduling userspace. The kernel stayed alive the whole time — ICMP kept
+answering (latency degrading 3 ms → 26–192 ms, erratic), and TCP/53 still
+completed its handshake while dnsmasq never serviced it. That combination is
+what makes it unrecoverable remotely: **the machine looks up and is
+unreachable.** Port 22 is filtered on the LAN by design, tailscale was the only
+door, and tailscaled was among the starved processes. It took ~19 minutes to
+accept ssh again.
 
-This belongs above every rendering item in §3. A seat that can starve its own
-node has a reliability bug that no frame-rate work addresses:
+**Measured at the moment it recovered, before the reboot:**
 
-- **`systemd-oomd`, or `MemoryMax=` on the session slice** — bound what a seat
-  session may consume, so a leaking client cannot take DNS and the tailnet route
-  with it.
-- **A hardware watchdog** (`boot.kernelModules` + `systemd.watchdog.runtimeTime`)
-  — on a node whose console is a single point of failure, self-recovery is worth
-  more than on any other machine in the fleet.
+```
+load average: 55.45  67.92  61.34     ← on 16 cores, ~4x oversubscribed
+Mem:  64139 total   2238 used   61165 free      ← memory was NOT the problem
+top RSS: .mado-wrapped 157 MB, tailscaled 66 MB, kubectl 55 MB, wadachi 54 MB
+```
 
-Both are config, not code, and neither needs the compositor to change.
+**The first diagnosis — memory exhaustion from two ~1.4 GB mado processes — was
+wrong, and wrong twice over:**
+
+- **61 of 64 GB were free.** The box was CPU-starved, not memory-starved.
+- **mado's RSS was 157 MB, not 1.4 GB.** The 1.4 GB figure came from systemd's
+  `MemoryCurrent`, which counts page cache. Reading a cgroup counter as
+  process footprint is how a 157 MB process gets reported as ten times its size.
+
+**And the claimed absences were not absences.** Measured on the machine rather
+than grepped out of `nodes/plo/*.nix`:
+
+| claim | reality |
+|---|---|
+| "no `systemd-oomd`" | **active and enabled** |
+| "no watchdog" | `/dev/watchdog0` exists, `kernel.watchdog=1` — but `RuntimeWatchdogUSec=0`, so **nothing pets it** |
+| "nothing bounds memory" | true — `MemoryMax=infinity` on both `user.slice` and `system.slice` |
+
+Grepping the Nix config answers *what is declared*, never *what is running*. The
+same mistake in a different costume as `nixos-eval`: read the machine.
+
+**What is actually missing, then:**
+
+- **The runtime watchdog is present but unarmed** (`RuntimeWatchdogUSec=0`). On a
+  node whose console is a single point of failure and which carries the LAN's
+  DNS and the tailnet's route into `192.168.50.0/24`, self-recovery is worth more
+  than on any other machine in the fleet. This is one option.
+- **No CPU or memory bound on the seat slice.** `systemd-oomd` does not help
+  against CPU starvation, which is what this was.
+- **The cause of load 55–68 is UNDETERMINED.** Two `kubectl` processes and
+  `wadachi` in the top-RSS list are a lead worth pulling — k3s is `enable = false`
+  on this node (`configuration.nix:318`), so a kubectl retry loop against a dead
+  API server would spin without ever bounding itself. **Not yet confirmed; do not
+  cite it as the cause.**
+
+The standing rule below is unchanged by the correction — if anything it is
+reinforced, because the failure was not the one that had been anticipated.
 
 **Consequence, adopted as a standing rule:** no seat change lands on plo until it has (a) passed on vkms and (b) a verified ssh path exists at the moment of landing.
 
