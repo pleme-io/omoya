@@ -90,6 +90,52 @@ pub fn background_for_surface(format_is_srgb: bool) -> [f32; 4] {
     }
 }
 
+/// The pointer's colour as LINEAR RGBA. See [`cursor_for_surface`].
+#[must_use]
+pub fn cursor_linear() -> [f32; 4] {
+    let c = NORD.snow_storm[2];
+    [
+        srgb_to_linear(c.r),
+        srgb_to_linear(c.g),
+        srgb_to_linear(c.b),
+        1.0,
+    ]
+}
+
+/// The pointer's colour as raw sRGB bytes. See [`cursor_for_surface`].
+#[must_use]
+pub fn cursor_srgb() -> [f32; 4] {
+    let c = NORD.snow_storm[2];
+    [
+        f32::from(c.r) / 255.0,
+        f32::from(c.g) / 255.0,
+        f32::from(c.b) / 255.0,
+        1.0,
+    ]
+}
+
+/// The pointer's colour, in whichever encoding this framebuffer needs.
+///
+/// ★ `snow_storm[2]` — the palette's BRIGHTEST — against a `polar_night[0]`
+/// background, because the one job a pointer has is to be findable. Picking a
+/// mid-tone from the same family would be prettier and would reproduce the
+/// problem this exists to solve.
+///
+/// It takes the same `format_is_srgb` flag as [`background_for_surface`] and
+/// for the same measured reason: writing linear values into a non-sRGB
+/// framebuffer renders them far too dark. On a cursor that failure is worse
+/// than on a background — a background that is slightly too dark still looks
+/// like a background, while a pointer that is too dark looks like no pointer at
+/// all, which is indistinguishable from the bug this replaces.
+#[must_use]
+pub fn cursor_for_surface(format_is_srgb: bool) -> [f32; 4] {
+    if format_is_srgb {
+        cursor_linear()
+    } else {
+        cursor_srgb()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

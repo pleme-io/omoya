@@ -106,7 +106,32 @@ impl XdgShellHandler for Omoya {
 
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
         let window = Window::new_wayland_window(surface);
-        self.space.map_element(window, (0, 0), true);
+        self.space.map_element(window.clone(), (0, 0), true);
+
+        // ★ GIVE IT KEYBOARD FOCUS. Focus used to be set in exactly one place —
+        // the pointer-button arm in `input.rs` — so a freshly mapped window had
+        // none until it was clicked. On a seat that also draws no cursor, that
+        // meant the only way to type into the only window was to click an
+        // invisible pointer onto it, and a login therefore produced a terminal
+        // that ignored the keyboard.
+        //
+        // Focus-follows-map is the right default for a seat that has no window
+        // management yet: with one window it is unambiguous, and when a second
+        // arrives the newest is the one the operator just asked for.
+        //
+        // `send_pending_configure` is what actually tells the client, because
+        // `Activated` is xdg-shell STATE rather than a method — the same
+        // pending-state seam the click path uses a few lines down in `input.rs`.
+        if let Some(kb) = self.seat.get_keyboard() {
+            let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+            if let Some(t) = window.toplevel() {
+                t.with_pending_state(|state| {
+                    state.states.set(xdg_toplevel::State::Activated);
+                });
+                t.send_pending_configure();
+            }
+            kb.set_focus(self, window.toplevel().map(|t| t.wl_surface().clone()), serial);
+        }
     }
 
     fn new_popup(&mut self, surface: PopupSurface, _positioner: PositionerState) {

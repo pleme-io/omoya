@@ -258,6 +258,22 @@ pub fn background() -> [f32; 4] {
     theme::background_for_surface(true)
 }
 
+/// The pointer's colour for this backend. Same sRGB reasoning as
+/// [`background`] — see theme.rs.
+#[must_use]
+pub fn cursor() -> [f32; 4] {
+    theme::cursor_for_surface(true)
+}
+
+/// The pointer's size in physical pixels.
+///
+/// A square, not an arrow, and that is the honest shape of what this is: omoya
+/// draws its OWN pointer because `cursor_image` discards the client's, so this
+/// is a position indicator rather than a themed cursor. Big enough to find on a
+/// 1080p panel, small enough not to hide what it is pointing at.
+/// `pending-omoya-client-cursor` is the row for honouring the client's surface.
+const CURSOR_SIZE: i32 = 12;
+
 /// Everything the render loop needs, assembled.
 pub struct Scanout {
     pub surface: DrmSurface,
@@ -460,6 +476,47 @@ where
                         let geo = element.geometry(scale.into());
                         element.draw(&mut frame, element.src(), geo, &[geo], &[])?;
                     }
+
+                    // ── ★ THE POINTER, DRAWN LAST SO IT IS ON TOP ─────────
+                    //
+                    // Nothing drew a cursor at all. `cursor_image` in
+                    // `handlers.rs` discards the client's requested surface,
+                    // and there are no overlay planes, so the pointer was
+                    // invisible — on a seat where keyboard focus was only
+                    // reachable by CLICKING, which is to say by aiming
+                    // something you cannot see.
+                    //
+                    // This is deliberately OUR cursor, not the client's. A
+                    // client's cursor arrives as a wl_surface with its own
+                    // buffer and hotspot, which is a texture-import path and a
+                    // protocol dance; a compositor that cannot show where the
+                    // mouse is has a worse problem than a compositor whose
+                    // arrow is the wrong shape. `pending-omoya-client-cursor`
+                    // is the row for honouring the client's request.
+                    //
+                    // Drawn with `draw_solid` rather than assembled as a
+                    // render element: mixing element kinds needs smithay's
+                    // `render_elements!` macro to build a combined enum, and
+                    // the frame is right here with a method that takes a rect
+                    // and a colour. nuri implements it directly.
+                    {
+                        let p = data.state.pointer_location;
+                        let (cw, ch) = (CURSOR_SIZE, CURSOR_SIZE);
+                        // Clamped so the cursor stays wholly on-screen: a rect
+                        // extending past the framebuffer is a partial write at
+                        // best and an out-of-bounds one at worst, and nuri
+                        // gates every write on an intersect precisely because
+                        // that class is easy to reach.
+                        let x = (p.x.round() as i32).clamp(0, mode.size.w - cw);
+                        let y = (p.y.round() as i32).clamp(0, mode.size.h - ch);
+                        let dst = Rectangle::new((x, y).into(), (cw, ch).into());
+                        frame.draw_solid(
+                            dst,
+                            &[dst],
+                            smithay::backend::renderer::Color32F::from(cursor()),
+                        )?;
+                    }
+
                     let _sync = frame.finish()?;
 
                     // ★ CAPTURE HERE, WHERE THE FRAMEBUFFER IS STILL BOUND.
