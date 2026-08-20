@@ -707,10 +707,19 @@
               # handled — and handling it is right anyway: a missing pid means
               # the client never spawned, which is a different failure from
               # the one this block is measuring and should say so.
-              m = re.search(
-                  r"spawned into the seat pid=(\d+)",
-                  machine.succeed("cat /tmp/omoya.log"),
+              # ★ STRIP ANSI FIRST. tracing-subscriber's fmt layer colours
+              # FIELD NAMES, and it does so even when its output is a file —
+              # the ansi feature is on, and it does not check for a tty. So
+              # the bytes on disk are `seat \x1b[3mpid\x1b[0m=1324`, and a
+              # literal "seat pid=" never matches. The earlier
+              # `"holding the display" in journal` check works only because
+              # that substring lies wholly inside one message with no field
+              # boundary to colour, which is exactly why this failed in a way
+              # that looked like the client had never spawned.
+              plain = re.sub(
+                  r"\x1b\[[0-9;]*m", "", machine.succeed("cat /tmp/omoya.log")
               )
+              m = re.search(r"spawned into the seat.*?pid=(\d+)", plain)
               assert m, "omoya never logged a spawned pid — no client to pause"
               spawned = int(m.group(1))
               machine.succeed(f"kill -STOP {spawned}")
