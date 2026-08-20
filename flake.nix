@@ -687,6 +687,49 @@
                   "normalisation."
               )
 
+              # ── ★ DO TWO WINDOWS TILE, OR JUST STACK? ───────────────────
+              #
+              # Every assertion above is satisfied by a compositor that maps
+              # every window at (0, 0) — which is exactly what omoya did until
+              # the layout landed. One client looks identical either way, so a
+              # single-window gate can never tell "tiled" from "stacked" and
+              # the whole feature could regress invisibly.
+              #
+              # A second client is spawned directly with WAYLAND_DISPLAY
+              # rather than through the Logo+Return chord: driving a real
+              # keystroke into a VT from the test driver is a different and
+              # much more fragile thing to build, and what is under test here
+              # is the LAYOUT, not the keymap. The keymap has its own unit
+              # tests.
+              machine.succeed(
+                  "su seat -c 'WAYLAND_DISPLAY=wayland-1 "
+                  "XDG_RUNTIME_DIR=/run/user/1000 "
+                  "${pkgs.weston}/bin/weston-presentation-shm >/dev/null 2>&1 &' "
+                  "|| true"
+              )
+              machine.sleep(4)
+              machine.succeed("kanshou-capture /tmp/two.ppm")
+              windows = int(machine.succeed("kanshou-get windows").strip())
+              print(f"windows after the second client: {windows}")
+              assert windows >= 2, (
+                  f"only {windows} window(s) — the second client never mapped, "
+                  "so the tiling assertion below would measure nothing."
+              )
+
+              # Sample the middle of each half. A vertical split puts one
+              # window left of centre and one right of it, so BOTH samples
+              # must differ from the background. Stacked windows leave one
+              # half empty and this fails.
+              left = machine.succeed("ppm-probe /tmp/two.ppm 256 384").strip()
+              right = machine.succeed("ppm-probe /tmp/two.ppm 768 384").strip()
+              print(f"left-half(256,384) = {left} | right-half(768,384) = {right}")
+              nord0 = "46 52 64"
+              assert left != nord0 and right != nord0, (
+                  f"left={left} right={right}, background={nord0}. A half that "
+                  "is still background means the two windows are stacked, not "
+                  "tiled — check Tiling::map and apply_layout."
+              )
+
               # ── ★ DOES PARTIAL REPAINT ACTUALLY SKIP ANYTHING? ──────────
               #
               # Every assertion above passes just as happily when the
@@ -740,6 +783,14 @@
               assert m, "omoya never logged a spawned pid — no client to pause"
               spawned = int(m.group(1))
               machine.succeed(f"kill -STOP {spawned}")
+              # ★ BOTH clients, or the seat is not idle. The tiling check
+              # above started a second weston, and one live animating client
+              # is enough to make every frame legitimately damaged — the
+              # measurement would then read as "damage tracking does nothing"
+              # when in fact it is doing exactly the right thing.
+              machine.succeed(
+                  "kill -STOP $(pgrep -f 'weston-presentation-sh[m]') || true"
+              )
               machine.sleep(2)
               f0, p0 = [
                   int(x) for x in

@@ -725,7 +725,16 @@ mod tests {
     fn dmabuf_formats_are_linear_only() {
         let r = NuriRenderer::new();
         let set = r.dmabuf_formats();
-        assert!(!set.is_empty());
+        // ★ `iter().next().is_some()`, because `FormatSet` HAS NO `is_empty`.
+        //
+        // This line said `!set.is_empty()` and therefore did not compile —
+        // which means `cargo test -p omoya` had never run at all. Every unit
+        // test in this crate was ABSENT rather than passing, and absent tests
+        // report exactly the same thing as a clean suite: nothing.
+        assert!(
+            set.iter().next().is_some(),
+            "advertising an EMPTY format list is how DmabufState fails with              NoSupportedRendererFormat — an error that names the renderer              rather than the missing declaration"
+        );
         assert!(
             set.iter()
                 .all(|f| f.modifier == smithay::backend::allocator::Modifier::Linear),
