@@ -197,32 +197,59 @@ mod tests {
 
 /// Which VT a reserved chord asks for, if it is a VT-switch chord.
 ///
-/// ★ Ctrl+Alt+F1..F12 map to VT 1..12. Returned as an `Option` rather than
-/// assumed, because `Reserved::fleet_linux()` also claims chords that are not
-/// VT switches, and acting on one of those as though it were would switch the
-/// seat away for a keystroke that meant something else entirely.
+/// ★ Ctrl+Alt+F1..F12 map to VT 1..12. An `Option`, not an assumption:
+/// `Reserved::fleet_linux()` claims chords that are NOT VT switches, and acting
+/// on one of those as though it were would throw the seat to another VT for a
+/// keystroke that meant something else.
+///
+/// BOTH modifiers are required. A bare F2 in a terminal must never move the
+/// seat, which is the failure this guard exists to prevent rather than a
+/// stylistic check.
 #[must_use]
-pub fn vt_of(hk: &awase::KeyChord) -> Option<i32> {
-    let s = hk.to_string();
-    // The catalog spells these as Ctrl+Alt+F<n>; match on the function key and
-    // require both modifiers, so a bare F2 never moves the seat.
-    if !(s.contains("Ctrl") && s.contains("Alt")) {
+pub fn vt_of(hk: &Hotkey) -> Option<i32> {
+    use awase::Key;
+
+    if !(hk.modifiers.ctrl && hk.modifiers.alt) {
         return None;
     }
-    let idx = s.rfind('F')?;
-    let n: i32 = s[idx + 1..].trim().parse().ok()?;
-    (1..=12).contains(&n).then_some(n)
+    Some(match hk.key {
+        Key::F1 => 1,
+        Key::F2 => 2,
+        Key::F3 => 3,
+        Key::F4 => 4,
+        Key::F5 => 5,
+        Key::F6 => 6,
+        Key::F7 => 7,
+        Key::F8 => 8,
+        Key::F9 => 9,
+        Key::F10 => 10,
+        Key::F11 => 11,
+        Key::F12 => 12,
+        _ => return None,
+    })
 }
 
 #[cfg(test)]
 mod vt_tests {
+    use super::*;
+    use awase::{Key, Modifiers};
+
     #[test]
-    fn only_ctrl_alt_function_keys_move_the_seat() {
-        // A bare function key must never switch VT — that would make F2 in a
-        // terminal throw the operator to a getty.
-        let f2 = awase::KeyChord::parse("F2").ok();
-        if let Some(c) = f2 {
-            assert_eq!(super::vt_of(&c), None, "bare F2 must not switch VT");
-        }
+    fn ctrl_alt_f2_is_vt_2() {
+        let hk = Hotkey::new(Modifiers { ctrl: true, alt: true, ..Default::default() }, Key::F2);
+        assert_eq!(vt_of(&hk), Some(2));
+    }
+
+    #[test]
+    fn a_bare_function_key_never_moves_the_seat() {
+        // The guard that matters: F2 typed into a terminal must not switch VT.
+        let hk = Hotkey::new(Modifiers::default(), Key::F2);
+        assert_eq!(vt_of(&hk), None);
+    }
+
+    #[test]
+    fn ctrl_alt_on_a_non_function_key_is_not_a_vt_switch() {
+        let hk = Hotkey::new(Modifiers { ctrl: true, alt: true, ..Default::default() }, Key::A);
+        assert_eq!(vt_of(&hk), None);
     }
 }
