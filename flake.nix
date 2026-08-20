@@ -406,6 +406,11 @@
                 environment.systemPackages = [
                   wrapped
                   pkgs.libinput
+                  # For the capture assertion below: kanshou speaks
+                  # length-prefixed JSON over a Unix socket, which needs a real
+                  # client. `nc` cannot frame it and /dev/tcp cannot reach a
+                  # Unix socket.
+                  pkgs.python3
                 ];
                 # ★ A REAL LOGIN, NOT A SIMULATED ONE. Three attempts with
                 # `systemd-run --property=PAMName=login` produced a session
@@ -503,6 +508,56 @@
               assert "frame failed" not in journal, (
                   "omoya took the display but could not present to it — "
                   "scanout is failing per-frame; see the log above"
+              )
+
+              # ★ AND IT MUST BE ABLE TO SHOW WHAT IT DREW.
+              #
+              # `capture()` was fully implemented, with `ExportMem` behind it,
+              # and its call site logged "capture requested" and called
+              # nothing — for long enough that a blank screen on plo had to be
+              # diagnosed by inference from counters. Then the first fix wired
+              # it to an env var, which cannot be set on a RUNNING process, so
+              # it still could not serve the moment it exists for.
+              #
+              # This asserts the whole path: a request over kanshou, a frame
+              # taken by the render loop, and a file with real pixels in it.
+              # Nothing short of the file proves it — "the call compiles" and
+              # "the log says captured" were both true while it was broken.
+              sock = machine.succeed(
+                  "ls /run/user/*/kanshou/omoya-*.sock | head -1"
+              ).strip()
+              print(f"kanshou socket: {sock}")
+
+              machine.succeed(
+                  "python3 - " + sock + " <<'EOF'\n"
+                  "import socket,struct,json,sys,time\n"
+                  "p=sys.argv[1]\n"
+                  "def q(path,args):\n"
+                  "    s=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)\n"
+                  "    s.settimeout(10); s.connect(p)\n"
+                  "    r=json.dumps({'path':path,'args':args}).encode()\n"
+                  "    s.sendall(struct.pack('>I',len(r))+r)\n"
+                  "    n=struct.unpack('>I',s.recv(4))[0]; b=b''\n"
+                  "    while len(b)<n: b+=s.recv(n-len(b))\n"
+                  "    s.close(); return json.loads(b)\n"
+                  "print('request:', q(['capture'],['/tmp/seat.ppm']))\n"
+                  "for _ in range(50):\n"
+                  "    time.sleep(0.2)\n"
+                  "    r=q(['capture_result'],[])\n"
+                  "    if r.get('Ok'):\n"
+                  "        print('result:', r['Ok'])\n"
+                  "        sys.exit(0 if str(r['Ok']).startswith('ok:') else 1)\n"
+                  "print('capture never completed'); sys.exit(1)\n"
+                  "EOF"
+              )
+
+              # The file must exist and be big enough to be a real frame. A
+              # 1024x768 ARGB dump is ~2.3MB; anything tiny means a header was
+              # written and the pixels were not.
+              size = int(machine.succeed("stat -c %s /tmp/seat.ppm").strip())
+              print(f"capture size: {size} bytes")
+              assert size > 100_000, (
+                  f"capture produced only {size} bytes — that is not a frame"
               )
             '';
           };
