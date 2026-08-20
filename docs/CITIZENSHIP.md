@@ -101,3 +101,64 @@ table.** Nothing here is retired yet. "We measured what is foreign" is true;
 4. **`libinput`/`libudev`** — a real build, same class as the DRM work that
    already succeeded.
 5. **`libxkbcommon`** — last, and only after reading the spec.
+
+---
+
+## P2 — the exact trait surface a rasterizer must satisfy
+
+Measured 2026-08-19 against smithay 0.7 and omoya's own call sites. Recorded
+here so the next person does not re-derive it.
+
+**★ omoya never calls a raster op directly.** No `Renderer::render()`, no
+`Bind::bind()`, no `Frame` draw method appears anywhere in `crates/omoya/src`.
+Everything is driven inside `DrmCompositor::render_frame`, which dispatches
+through `RenderElement::draw` (`smithay .../renderer/element/surface.rs:383-404`).
+omoya's entire direct use of pixman is **two calls**: `PixmanRenderer::new()`
+(`drm.rs:355`) and `renderer.dmabuf_formats()` (`drm.rs:367`).
+
+**★ The whole per-frame drawing vocabulary is THREE ops** — `clear`,
+`draw_solid`, `render_texture_from_to`. `render_texture_at` is a trait default.
+That is the real size of "replace pixman".
+
+### What must be implemented
+
+| trait | why |
+|---|---|
+| `RendererSuper` | 4 assoc types: `Error`, `TextureId: Texture`, `Framebuffer<'b>: Texture`, `Frame<'f,'b>: Frame` |
+| `Renderer` | `context_id`, `downscale_filter`, `upscale_filter`, `set_debug_flags`, `debug_flags`, `render`, `wait`, `cleanup_texture_cache` |
+| `Frame` | the three raster ops + `context_id`, `transformation`, `wait`, `finish` |
+| `Texture` | on **both** `TextureId` and `Framebuffer` |
+| `ImportMem` + `ImportMemWl` | client SHM buffers |
+| `ImportDma` + `ImportDmaWl` | `ImportDmaWl` is an empty marker |
+| `Bind<Dmabuf>` | **`Dmabuf`, not `DumbBuffer`** — see the chain below |
+
+**`ImportEgl` is NOT needed.** `ImportAll` is a blanket impl and which one
+applies is decided by the `use_system_lib` feature; omoya does not enable it,
+so the applicable blanket is
+`impl<R: Renderer + ImportMemWl + ImportDmaWl> ImportAll for R`
+(`renderer/mod.rs:700-706`). Optional, and only if `drm::capture` is revived:
+`ExportMem` + `TextureMapping`.
+
+### The chain the replacement must fit into
+
+`DumbAllocator` → `DumbBuffer` → **dmabuf** → renderer. `DumbBuffer` implements
+`AsDmabuf` (`allocator/dumb.rs:104`) and `DrmDeviceFd` is its own
+`ExportFramebuffer` (`drm/exporter/dumb.rs:26`), so `DrmCompositor` performs the
+export itself and hands the renderer a `Dmabuf`. Pixman then **mmaps plane 0**
+and rejects multi-plane or non-Linear modifiers
+(`renderer/pixman/mod.rs:736,746-748`).
+
+So the rasterizer's job is narrower than "a 2D graphics library": **blit with a
+source rect, a transform and alpha, into an mmap'd single-plane Linear buffer.**
+
+Formats: the CRTC is offered `[Argb8888, Xrgb8888]` (`drm.rs:366`); pixman
+advertises 13 fourccs, **all at modifier Linear** (`pixman/mod.rs:44-63`,
+`:1184-1191`).
+
+### Verification available, and better than expected
+
+**`vkms` — the virtual KMS driver — is in the running kernel** (confirmed on
+rio, 6.12.93: `drivers/gpu/drm/vkms/vkms.ko.xz`). A `nixosTest` can boot with
+it, run `omoya --backend drm` against a virtual card, drive a scripted client
+and assert a golden hash — the whole scanout path, in CI, with no hardware and
+no risk to plo. That is the gate for this phase.
