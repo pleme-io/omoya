@@ -703,10 +703,16 @@
               # `pkill -x weston-presentation-shm` matches nothing at all —
               # silently, exit 1, no output. omoya logs the pid it spawned,
               # so the pid is read from there rather than searched for.
-              spawned = int(re.search(
+              # The driver type-checks this script, so the None arm has to be
+              # handled — and handling it is right anyway: a missing pid means
+              # the client never spawned, which is a different failure from
+              # the one this block is measuring and should say so.
+              m = re.search(
                   r"spawned into the seat pid=(\d+)",
                   machine.succeed("cat /tmp/omoya.log"),
-              ).group(1))
+              )
+              assert m, "omoya never logged a spawned pid — no client to pause"
+              spawned = int(m.group(1))
               machine.succeed(f"kill -STOP {spawned}")
               machine.sleep(2)
               f0, p0 = [
