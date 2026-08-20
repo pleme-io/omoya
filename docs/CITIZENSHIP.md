@@ -64,7 +64,7 @@ surface and what we ask of it, not omoya's code.
 | buffer allocation (`libgbm`) | dumb buffers are `DRM_IOCTL_MODE_CREATE_DUMB` — already what we use. The `.so` is a smithay feature gate on `DrmCompositor`, not a call we make. | only-mitigated (C2) |
 | seat/device arbitration (`libseat`) | SHIPPED-composition: `mukae-native::logind` speaks `org.freedesktop.login1` over zbus (pure Rust D-Bus). `TakeDevice`/`TakeControl` are methods on the same bus we already reached. | only-mitigated (C2) |
 | input devices (`libinput`, `libudev`) | NET-NEW: evdev ioctls + netlink are kernel wires of the same class as DRM. `awase` already owns the TYPED key layer; this is the transport under it. | only-mitigated (C2) |
-| keymap translation (`libxkbcommon`) | **NOT SCOPED.** XKB is a real format with real complexity and no fleet primitive. Naming it as unscoped is the honest move; a plan that quietly assumed it would fall out is the round-up. | only-mitigated (C6) |
+| keymap translation (`libxkbcommon`) | **NOT SCOPED** *(when this table was written; superseded 2026-08-20 — see the second ledger, where it is built)*. XKB is a real format with real complexity and no fleet primitive. Naming it as unscoped was the honest move; a plan that quietly assumed it would fall out is the round-up. | only-mitigated (C6) |
 | the launcher (`makeWrapper` bash) | omoya's entry point is a generated **bash script** setting `LD_LIBRARY_PATH`. In a repo whose law is NO SHELL, the compositor is launched by shell. Fixed by RPATH (substrate learned this 2026-08-19) rather than a wrapper. | only-mitigated (C2) |
 
 **Every row is `only-mitigated` except DRM, and that is the point of writing the
@@ -101,6 +101,16 @@ table.** Nothing here is retired yet. "We measured what is foreign" is true;
 4. **`libinput`/`libudev`** — a real build, same class as the DRM work that
    already succeeded.
 5. **`libxkbcommon`** — last, and only after reading the spec.
+
+> **Done, 2026-08-20 — and the order above was right for the wrong reason.**
+> This was ranked last because XKB is a large spec. The actual obstacle was
+> never the spec: it was that smithay re-exports `xkbcommon` in its public API
+> with nothing gating it, so no feature choice could drop it. What unblocked it
+> was a packaging seam, not a parser — `[patch.crates-io]` matches on package
+> *name*, so replacing the dependency leaves smithay untouched. And the spec
+> turned out not to need implementing: a keymap is **emitted** for clients, who
+> compile it themselves, so hairetsu writes XKB text and never parses it.
+> **Read the obstacle before ordering the work by apparent size.**
 
 ---
 
@@ -203,16 +213,58 @@ library and every C daemon above that line goes.
 | seat/device arbitration (`libseat`) | SHIPPED-composition: `logind.rs` over zbus, proven on vkms with a real seat session — **but logind is a C daemon**, so this trades a linked library for an out-of-process one. | only-mitigated (C2) |
 | session **without any C daemon** | NET-NEW: `DirectSession` over `VT_SETMODE`/`VT_PROCESS` + `DRM_IOCTL_SET_MASTER`/`DROP_MASTER`. **NOT BUILT.** This is what actually removes logind. | only-mitigated (C6) |
 | buffer allocation (`libgbm`) | dumb buffers are already the runtime path; the `.so` is a smithay compile-time gate on `DrmCompositor`. Removing it means replacing 4426 lines of damage tracking and plane assignment. **NOT BUILT.** | only-mitigated (C6) |
-| keymap translation (`libxkbcommon`) | **BLOCKED.** smithay re-exports it in its public API with no `optional = true` and no feature gating it. Requires an upstream PR genericising `KbdInternal`, or a fork. | only-mitigated (C6) |
+| keymap translation (`libxkbcommon`) | NET-NEW: `hairetsu` (配列) + a `[patch.crates-io]` replacement of the `xkbcommon` crate. **smithay is unmodified** — cargo patches by package name, so the dependency is swapped underneath it. 43 green tests. **Serves `us` only, and REFUSES any other layout** rather than substituting. | only-mitigated (C2) |
+| the launcher (`makeWrapper` bash) | **RETIRED — deleted, not rewritten.** It existed to put five C libraries on `LD_LIBRARY_PATH`; nothing links them now, so there is no search path to set and no script to generate. `bin/omoya` is the ELF binary. | truly-unrep |
 | the Rust runtime (`libc`) | **THE FLOOR.** No `std` without it; `linux-none` is `no_std`. Measured above. | only-mitigated (C6) |
+
+## The measurement, on the artifact (rio, `6a43e07`)
+
+Two censuses, because either one alone can lie. `ldd` misses a `dlopen`; the
+closure catches what `ldd` cannot see.
+
+```
+$ ldd .../rust_omoya-0.1.14/bin/omoya
+    libc.so.6   libgcc_s.so.1   libm.so.6   linux-vdso.so.1   ld-linux-x86-64.so.2
+
+$ strings -a .../bin/omoya | grep -oE 'lib[a-zA-Z0-9_.+-]*\.so[0-9.]*' | sort -u
+    libc.so.6   libgcc_s.so.1   libm.so.6
+
+$ nix path-info -r .../rust_omoya-0.1.14 | grep -icE 'wayland|xkb|libinput|pixman|seatd|gbm|mesa'
+    0                                   # closure is 5 paths, was 107
+```
+
+Before this work the same binary linked nine: `libc libgbm libgcc_s libinput
+libm libpixman-1 libseat libudev libxkbcommon`.
+
+**The closure is why the wrapper had to go.** `ldd` was already clean while
+`nix path-info -r` still listed wayland, pixman, libinput, mesa-libgbm and
+libxkbcommon, because the wrapper kept naming them. A library nothing links but
+the closure still carries is a claim that has not been made good on.
+
+**And `strings` is why the nested backend is now off by default.** winit pulls
+`xkbcommon-dl`, which `dlopen`s libxkbcommon at *runtime* — a binary carrying it
+reports a clean `ldd` while loading the very library this tree replaced. Same
+shape as `ash` dlopening libvulkan, and it makes the census lie in the
+flattering direction, which is worse than an honest link.
 
 ## What this ledger says plainly
 
-Four of the eight rows are **NOT BUILT or BLOCKED**, and one is the floor. The
-honest count today is: **one C library genuinely replaced end-to-end and running
-(`libseat` → logind), two replaced-but-not-default (`libpixman`, `libinput`+
-`libudev`), and the C daemon still there.**
+**Six C libraries are gone from the shipped compositor, measured on the
+artifact by two independent censuses.** What remains below the kernel is
+`libc` + `libm` + `libgcc_s` — the Rust runtime floor named at the top of this
+document before the work started, not discovered at its end.
 
-"We removed C from the compositor" would be a round-up. What is true is that the
-*replacements exist and are selectable*, and that the remaining work is named
-with its ceiling rather than implied to be nearly done.
+**Three things are still true and are not rounded away:**
+
+- **logind is still a C daemon.** `libseat.so` is gone from this binary, but
+  the seat is still arbitrated by a C process over D-Bus. That trades a linked
+  library for an out-of-process one; it does not remove C from the *system*.
+  `pending-omoya-direct-session` is the row that would.
+- **`hairetsu` is not XKB.** One layout, no keymap parsing, no compose, no
+  layout switching. It refuses what it cannot serve, which makes the gap loud
+  rather than silent — but a refusal is still a gap.
+- **input policy is absent, not ported.** Acceleration, tap-to-click and
+  gestures were libinput's real value and were not reimplemented.
+
+"No C in the compositor binary" is now true and measured. "No C on the seat"
+is not, and the two rows above are the distance between them.

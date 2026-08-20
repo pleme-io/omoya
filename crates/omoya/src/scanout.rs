@@ -66,6 +66,19 @@ pub struct DirectScanout {
     slots: [Slot; 2],
     /// Which slot is safe to draw into.
     back: usize,
+    /// ★ HAS THE CRTC EVER BEEN MODESET?
+    ///
+    /// `page_flip` documents itself as *"This will not cause the crtc to
+    /// modeset"*, and a flip against a CRTC that was never modeset is rejected
+    /// with `EINVAL`. `commit` is the call that sets the mode.
+    ///
+    /// Without this the very first frame — and therefore every frame — failed,
+    /// and it failed **quietly**: the error went to the log while the vkms gate
+    /// asserted only that the process was alive and holding the display, which
+    /// a compositor presenting nothing at all still satisfies. Measured on
+    /// vkms: `Page flip commit failed … (Invalid argument (os error 22))`, once
+    /// per frame, on a test that passed.
+    modeset: bool,
 }
 
 /// What can go wrong driving scanout directly.
@@ -125,6 +138,7 @@ impl DirectScanout {
             surface,
             slots,
             back: 0,
+            modeset: false,
         })
     }
 
@@ -172,9 +186,15 @@ impl DirectScanout {
             }),
         };
 
-        self.surface
-            .page_flip([state], true)
-            .map_err(|e| Error::Flip(e.to_string()))?;
+        // The first frame sets the mode; later frames flip. `commit_pending`
+        // also goes true when a connector or mode changed under us, so a
+        // hotplug re-modesets rather than flipping into a stale configuration.
+        if self.modeset && !self.surface.commit_pending() {
+            self.surface.page_flip([state], true).map_err(|e| Error::Flip(e.to_string()))?;
+        } else {
+            self.surface.commit([state], true).map_err(|e| Error::Flip(e.to_string()))?;
+            self.modeset = true;
+        }
 
         // ★ Swap AFTER the flip is accepted, not before. Swapping first and
         // then failing would leave the next frame drawing into the buffer the

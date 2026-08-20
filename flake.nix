@@ -489,6 +489,21 @@
               assert "no logind session" not in journal, (
                   "omoya fell back to look-only: the logind session was refused"
               )
+
+              # ★ AND IT MUST ACTUALLY PRESENT. This assertion exists because
+              # its absence hid a real bug for a whole session: `page_flip`
+              # does not modeset, so every flip against the never-committed
+              # CRTC was rejected with EINVAL — once per frame, ~57 times a
+              # second — while this test passed. "Alive and holding the
+              # display" is satisfied by a compositor that shows nothing.
+              #
+              # A frame error is a hard failure, not a warning: one is the same
+              # bug as a thousand, and tolerating "a few" is how the thousand
+              # got through.
+              assert "frame failed" not in journal, (
+                  "omoya took the display but could not present to it — "
+                  "scanout is failing per-frame; see the log above"
+              )
             '';
           };
         }
