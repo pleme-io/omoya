@@ -539,7 +539,6 @@ where
     }
 
     let mut damage_tracker = OutputDamageTracker::from_output(&output);
-    let cursor_id = smithay::backend::renderer::element::Id::new();
     // One stable id per border EDGE, for the same reason the cursor has one:
     // a fresh `Id` each frame reads as "the old element vanished and a new one
     // appeared", which re-damages both rectangles every frame and quietly

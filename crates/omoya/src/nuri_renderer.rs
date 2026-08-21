@@ -577,6 +577,10 @@ impl ImportMemWl for NuriRenderer {
             // the image being scanned out. `Arc::get_mut` returning None is
             // the honest signal to fall back to a fresh copy rather than a
             // reason to reach for unsafe.
+            // `Resource::id` — the trait must be in scope; `buffer.id` alone
+            // resolves to a private FIELD, and the error says "private
+            // field, not a method" rather than "missing trait".
+            use smithay::reexports::wayland_server::Resource as _;
             let key = buffer.id();
             let reused = self.shm_cache.get_mut(&key).and_then(|tex| {
                 let same = tex.width == width_u32
