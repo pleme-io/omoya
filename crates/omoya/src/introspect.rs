@@ -201,6 +201,36 @@ pub struct OmoyaIntrospect {
     pub capture_request: std::sync::Mutex<Option<String>>,
     /// What became of the last capture: the path written, or the error.
     pub capture_result: std::sync::Mutex<Option<String>>,
+    /// Every mode the connector offers, and which one we took —
+    /// `"1920x1080@60 1920x1080@360* …"`, the star marking the selection.
+    ///
+    /// Exists because "we are running at 60 Hz" and "60 Hz is all the panel
+    /// offers" are indistinguishable from outside, and the difference is the
+    /// whole bug: plo's 360 Hz display advertises six modes at its native
+    /// resolution and EDID flags the 60 Hz one as PREFERRED.
+    pub modes: std::sync::Mutex<String>,
+    /// Why the last frame happened — `"commit"`, `"pointer+chrome"`, … .
+    ///
+    /// The answer to "it is repainting, but nothing is moving — what is
+    /// dirtying the screen?", which is otherwise unanswerable from outside
+    /// the process. Names rather than a bitmask because a number would need
+    /// this file open to read.
+    pub last_frame_causes: std::sync::Mutex<String>,
+    /// The handle for telling the render loop a frame is owed.
+    ///
+    /// ★ **The socket thread MUST mark whenever it leaves work for the
+    /// loop.** Since the loop became damage-driven, waking it is no longer
+    /// enough: an un-marked wake finds nothing owed, skips, and the request
+    /// sits in its mutex until something unrelated dirties the screen. A
+    /// queued deed that never runs looks exactly like a deed that ran and did
+    /// nothing, which is the failure this note exists to prevent.
+    ///
+    /// A `OnceLock` rather than a plain field because `OmoyaIntrospect` is
+    /// built (and `Arc`-shared) before the gate exists, and because `OnceLock`
+    /// is `Default` — so the sidecar's derive keeps working untouched.
+    /// [`Self::mark`] treats "not yet set" as a no-op, which is correct: no
+    /// loop is running to owe a frame to.
+    pub owed: std::sync::OnceLock<mekuri::Ledger<crate::owed::Owed>>,
     /// Scanout width/height, 0 when nested or not yet known.
     pub output_w: AtomicU64,
     pub output_h: AtomicU64,
@@ -244,6 +274,16 @@ impl OmoyaIntrospect {
     #[must_use]
     pub fn new() -> Arc<Self> {
         Arc::new(Self::default())
+    }
+
+    /// Tell the render loop a frame is owed, from any thread.
+    ///
+    /// A no-op before the gate is installed — nothing is rendering yet, so
+    /// there is no frame to owe.
+    pub fn mark(&self, cause: crate::owed::Owed) {
+        if let Some(l) = self.owed.get() {
+            l.mark(cause);
+        }
     }
 
     /// Publish the per-tick facts. Called from the render loop, so it must stay
@@ -307,8 +347,13 @@ impl Introspect for OmoyaIntrospect {
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .push(deed);
-                // Wake the loop. Without this the deed sits until something
-                // else renders, which on an idle seat is never.
+                // Owe a frame, THEN wake the loop. Both are required and they
+                // are not the same thing: the ping makes the loop run a tick,
+                // and the mark makes that tick do something. Since the loop
+                // became damage-driven a bare ping wakes it to find nothing
+                // owed, and it goes straight back to sleep with the deed
+                // still queued.
+                self.mark(crate::owed::Owed::Deed);
                 if let Some(p) = self.wake.get() {
                     p.ping();
                 }
@@ -345,6 +390,37 @@ impl Introspect for OmoyaIntrospect {
             )),
             "windows" => Ok(n(&self.windows)),
             "owed_vt_switches" => Ok(n(&self.owed_vt_switches)),
+            // Why the LAST frame happened. Sourced from the drained mask the
+            // render loop actually acted on, not from a re-read of the
+            // ledger — a re-read would be a different question (what is owed
+            // NOW) wearing this one's name.
+            "modes" => Ok(serde_json::json!(
+                self.modes
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone()
+            )),
+            "last_frame_causes" => Ok(serde_json::json!(
+                self.last_frame_causes
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone()
+            )),
+            // Whether a frame is owed RIGHT NOW. Diagnostic: on a healthy
+            // idle seat this is `false` and `presented` is not climbing.
+            // `true` while `presented` stays put means the loop is not
+            // running — a wedged tick, not a missing mark.
+            "owed" => Ok(serde_json::json!(
+                self.owed.get().is_some_and(mekuri::Ledger::peek_owed)
+            )),
+            // The closed cause vocabulary, so a caller can read
+            // `last_frame_causes` without this file open.
+            "owed_causes" => Ok(serde_json::json!(
+                <crate::owed::Owed as mekuri::Cause>::all()
+                    .iter()
+                    .map(|c| c.name())
+                    .collect::<Vec<_>>()
+            )),
             // Ask for a screenshot. `capture` with a path argument leaves the
             // request; the render loop takes it on its next frame. Returns
             // immediately with "requested" — the caller then reads
@@ -359,6 +435,13 @@ impl Introspect for OmoyaIntrospect {
                 *self.capture_request.lock().unwrap_or_else(|e| e.into_inner()) =
                     Some(path.to_string());
                 *self.capture_result.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                // Same pairing as `do` above: owe the frame, then wake. A
+                // screenshot of an idle seat is precisely the case where no
+                // client is going to commit on our behalf.
+                self.mark(crate::owed::Owed::Capture);
+                if let Some(p) = self.wake.get() {
+                    p.ping();
+                }
                 Ok(serde_json::json!({ "requested": path }))
             }
             "capture_result" => Ok(serde_json::json!(

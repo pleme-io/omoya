@@ -67,6 +67,11 @@ impl CompositorHandler for Omoya {
 
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
+        // ★ THE ORDINARY REASON A FRAME EXISTS. Every pixel a client changes
+        // arrives through here, so this one line is what keeps the seat
+        // painting at all — the render loop no longer composes speculatively
+        // and will sit idle forever without it.
+        self.owed.mark(crate::owed::Owed::Commit);
         if !is_sync_subsurface(surface) {
             let mut root = surface.clone();
             while let Some(parent) = get_parent(&root) {

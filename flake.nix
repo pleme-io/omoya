@@ -973,12 +973,53 @@
                   f"only {ticks} render ticks in 3s — the render loop is not "
                   "running, so the presentation count below measures nothing."
               )
-              assert flips * 4 < ticks, (
+              # ★ ZERO, NOT "NEARLY ALL". This used to allow a quarter of the
+              # idle ticks to present, which was the honest bound while the
+              # loop composed every frame and asked about damage afterwards.
+              # Since `mekuri` decides FIRST, an idle seat owes nothing and
+              # the correct number is exactly 0 — and the loose bound would
+              # have passed just as happily with the gate removed, because
+              # damage tracking alone already got flips well under ticks/4.
+              #
+              # One frame of slack for the clock: the bar renders `hh:mm` and
+              # its timer marks `Chrome` when the minute rolls over, which can
+              # land inside a 3-second window.
+              assert flips <= 1, (
                   f"{flips} presentations for {ticks} idle render ticks. "
-                  "Nothing on screen changed, so damage tracking should have "
-                  "skipped nearly all of them. Suspect an unstable element "
-                  "Id (a fresh Id::new() per frame re-damages everything) or "
-                  "DirectScanout::back_buffer_age returning 0 forever."
+                  "Nothing changed on screen and no client is running, so the "
+                  "seat owed no frames at all. Something is marking the "
+                  "mekuri ledger every tick — read `last_frame_causes` to "
+                  "see which producer, then find out why it fires with "
+                  "nothing happening."
+              )
+              # ★ AND THE GATE MUST NOT BE STUCK CLOSED. Zero presentations
+              # is also what a seat that can never draw again looks like, and
+              # the assertion above cannot tell the two apart. So: wake it
+              # with a real cause and require a frame.
+              #
+              # `capture` is the cause to use precisely because it arrives
+              # from the OTHER THREAD — it exercises the socket-thread mark
+              # that a bare `ping` used to be sufficient for and no longer
+              # is. If the mark were missing, the request would sit in its
+              # mutex and this would hang rather than fail loudly, which is
+              # why it is asserted on the counter and not on the file.
+              p_before = int(machine.succeed("kanshou-get presented").strip())
+              machine.succeed("kanshou-capture /tmp/wake.ppm")
+              machine.sleep(2)
+              p_after = int(machine.succeed("kanshou-get presented").strip())
+              causes = machine.succeed("kanshou-get last_frame_causes").strip()
+              print(f"wake: presented {p_before} -> {p_after}, causes {causes}")
+              assert p_after > p_before, (
+                  f"presented stayed at {p_before} after a capture request. "
+                  "The gate is stuck CLOSED: a cross-thread producer marked "
+                  "nothing, so the loop woke, found nothing owed and went "
+                  "back to sleep with the request still queued. Check that "
+                  "OmoyaIntrospect::mark is called beside every wake.ping()."
+              )
+              assert "capture" in causes, (
+                  f"a frame was presented but last_frame_causes is {causes!r} "
+                  "— the capture did not cause it, so this assertion passed "
+                  "on somebody else's frame and proves nothing."
               )
             '';
           };

@@ -28,6 +28,7 @@ mod handlers;
 mod introspect;
 mod input;
 mod layout;
+mod owed;
 mod state;
 mod theme;
 /// The nested development backend. Off by default — it drags in winit, which
@@ -473,6 +474,10 @@ where
     introspect.backend.store(1, Ordering::Relaxed);
     introspect.output_w.store(u64::from(target.mode.size().0), Ordering::Relaxed);
     introspect.output_h.store(u64::from(target.mode.size().1), Ordering::Relaxed);
+    *introspect
+        .modes
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = target.mode_list.clone();
     // ★ THE SAME DERIVATION AS THE RENDER LOOP, NOT `vrefresh()` RAW.
     //
     // This line stored the panel's raw `vrefresh`, which is an optional DRM

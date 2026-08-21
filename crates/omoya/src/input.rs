@@ -34,6 +34,28 @@ use crate::state::Omoya;
 
 impl Omoya {
     pub fn process_input_event<I: InputBackend>(&mut self, event: InputEvent<I>) {
+        // ★ THE POINTER IS OURS TO DRAW, SO IT IS OURS TO MARK.
+        //
+        // Nothing commits when the mouse moves — the cursor is omoya's own
+        // render element, not a client surface — so a damage-driven loop that
+        // only listened to commits would leave the pointer frozen on screen
+        // while every window kept updating normally. That reads as "the mouse
+        // is broken", which is a long way from the actual cause.
+        //
+        // Matched on a reference, before `event` is consumed by the arms
+        // below, and covering BOTH motion shapes: mice emit relative motion
+        // and tablets/touchscreens absolute, so listening to one is the
+        // asymmetry that makes a bug appear on exactly one class of device.
+        // Buttons and axes count too — a click can move focus, and the focus
+        // border is likewise drawn by us.
+        match &event {
+            InputEvent::PointerMotion { .. }
+            | InputEvent::PointerMotionAbsolute { .. }
+            | InputEvent::PointerButton { .. }
+            | InputEvent::PointerAxis { .. } => self.owed.mark(crate::owed::Owed::Pointer),
+            _ => {}
+        }
+
         match event {
             InputEvent::Keyboard { event, .. } => {
                 let serial = SERIAL_COUNTER.next_serial();

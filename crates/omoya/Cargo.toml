@@ -29,6 +29,24 @@ default = []
 nested = ["smithay/backend_winit"]
 
 [dependencies]
+# ★ IN-WORKSPACE FOR NOW, DESTINATION IS ITS OWN REPO.
+#
+# mekuri is a fleet primitive with a second consumer already identified
+# (madori/mado), so its home is github.com/pleme-io/mekuri — declared in
+# org.yaml and pushed. It is not there yet because the `repos-1` shard that
+# owns it is SUSPENDED (measured 2026-08-21: conditions read
+# "Suspended: Template reconciliation is suspended", frozen mid-Planning
+# since 08-17; repos-0/2/3 are Ready).
+#
+# A sibling `path = "../../../mekuri"` is not an option in the meantime:
+# gen refuses it outright, because substrate's nix lockfile-builder cannot
+# see a sibling repo's source inside the build sandbox. So the choice was
+# in-workspace or not building at all.
+#
+# pending-mekuri-extraction: push crates/mekuri to pleme-io/mekuri and flip
+# this to a git dep once repos-1 resumes. There is exactly ONE copy of this
+# code until then.
+mekuri = { path = "../mekuri" }
 omoya-spec = { path = "../omoya-spec", version = "0.1.0" }
 # The palette. NOT a hex literal in this crate — `irodori::NORD` is where Nord
 # is BORN in this fleet (ishou-tokens itself reads it), so the compositor's

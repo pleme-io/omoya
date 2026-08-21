@@ -82,6 +82,13 @@ pub struct ScanoutTarget {
     /// The connector's human name, e.g. "eDP-1". Logged so an operator can tell
     /// which physical port omoya chose without guessing from a handle id.
     pub name: String,
+    /// Every mode the connector advertises, with the chosen one starred —
+    /// `"1920x1080@60 1920x1080@360* 1024x768@60"`.
+    ///
+    /// Carried on the target so `main` can publish it without re-scanning the
+    /// connector. "we run at 60" and "60 is all it offers" look identical
+    /// from outside, and only one of them is a bug.
+    pub mode_list: String,
 }
 
 /// Open a DRM device and take master.
@@ -194,16 +201,61 @@ pub fn probe(device: &DrmDevice) -> Result<ScanoutTarget, Box<dyn std::error::Er
             continue;
         }
 
-        // The connector's PREFERRED mode is the panel's native one. Taking
-        // modes[0] instead is the classic way to end up driving a 4K panel at
-        // 640x480 — the list is not sorted by desirability.
-        let mode = conn
+        // ── ★ PREFERRED PICKS THE RESOLUTION. IT DOES NOT PICK THE RATE. ──
+        //
+        // The connector's PREFERRED mode is the panel's native RESOLUTION,
+        // and taking modes[0] instead is the classic way to drive a 4K panel
+        // at 640x480 — the list is not sorted by desirability. All true, and
+        // it is only half the question.
+        //
+        // EDID's preferred *timing* on a high-refresh panel is routinely the
+        // 60 Hz one: the descriptor exists for compatibility, and the fast
+        // modes live in the extension blocks. So "preferred" on plo's 360 Hz
+        // display selected 1920x1080@60 — measured 2026-08-21, with the
+        // operator pointing out that the seat felt slow on a monitor six
+        // times faster than we were driving it.
+        //
+        // The failure is silent in both directions: the picture is perfect,
+        // the resolution is right, and the only symptom is latency, which
+        // reads as "the compositor is slow" rather than "the compositor
+        // asked for slow".
+        //
+        // So: take the resolution from PREFERRED, then take the FASTEST mode
+        // at that resolution. Never trade pixels for hertz — a 1280x720@360
+        // is not an upgrade over 1920x1080@240 and this must not silently
+        // choose it.
+        let preferred = conn
             .modes()
             .iter()
-            .find(|m| m.mode_type().contains(smithay::reexports::drm::control::ModeTypeFlags::PREFERRED))
+            .find(|m| {
+                m.mode_type()
+                    .contains(smithay::reexports::drm::control::ModeTypeFlags::PREFERRED)
+            })
             .or_else(|| conn.modes().first())
             .copied()
             .ok_or("connector is connected but advertises no modes")?;
+
+        // Ranked by the DERIVED rate, never by `vrefresh`: that field is
+        // optional in the DRM mode struct and is frequently 0, which would
+        // rank every mode equally and hand back whichever happened to come
+        // first. omoya already learned this once — the 1 Hz render loop.
+        let mode = conn
+            .modes()
+            .iter()
+            .filter(|m| m.size() == preferred.size())
+            .max_by_key(|m| refresh_hz(m))
+            .copied()
+            .unwrap_or(preferred);
+
+        if refresh_hz(&mode) != refresh_hz(&preferred) {
+            tracing::info!(
+                preferred_hz = refresh_hz(&preferred),
+                selected_hz = refresh_hz(&mode),
+                size = %format_args!("{}x{}", mode.size().0, mode.size().1),
+                modes_at_this_size = conn.modes().iter().filter(|m| m.size() == preferred.size()).count(),
+                "the panel's PREFERRED timing was not its fastest — taking the faster one"
+            );
+        }
 
         let name = format!("{:?}-{}", conn.interface(), conn.interface_id());
 
@@ -217,11 +269,26 @@ pub fn probe(device: &DrmDevice) -> Result<ScanoutTarget, Box<dyn std::error::Er
             };
             let possible = res.filter_crtcs(enc.possible_crtcs());
             if let Some(&crtc) = possible.first() {
+                let mode_list = conn
+                    .modes()
+                    .iter()
+                    .map(|m| {
+                        let star = if m.size() == mode.size() && refresh_hz(m) == refresh_hz(&mode)
+                        {
+                            "*"
+                        } else {
+                            ""
+                        };
+                        format!("{}x{}@{}{star}", m.size().0, m.size().1, refresh_hz(m))
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ");
                 return Ok(ScanoutTarget {
                     connector: conn_handle,
                     crtc,
                     mode,
                     name,
+                    mode_list,
                 });
             }
         }
@@ -703,6 +770,62 @@ where
                 }
                 return smithay::reexports::calloop::timer::TimeoutAction::ToInstant(next);
             }
+
+            // ★ `frames` COUNTS TICKS OF THIS LOOP, NOT COMPOSED FRAMES —
+            // and it has to be incremented ABOVE the gate below.
+            //
+            // It used to sit at the bottom of the frame body, where "the loop
+            // ran" and "a frame was composed" were the same event. They are
+            // not any more: an idle seat now skips the body entirely, so
+            // leaving the counter there would freeze it and make a HEALTHY
+            // idle compositor indistinguishable from a wedged one — the exact
+            // ambiguity this counter exists to remove, and the denominator
+            // the vkms gate's `ticks > 10` liveness check depends on.
+            //
+            // So: `frames` = the loop is alive. `presented` = a frame reached
+            // the display. Two questions, two counters, and the gap between
+            // them is the thing worth measuring.
+            introspect.tick(data.state.space.elements().count() as u64);
+
+            // ── ★ IS A FRAME OWED AT ALL? ───────────────────────────────
+            //
+            // Everything below this point — gathering elements, rasterising
+            // the bar, the whole `render_output` composite — used to run on
+            // EVERY tick, and the damage question was asked afterwards, at
+            // the flip. Measured on plo: 38.2% of a core while presenting
+            // ZERO frames. The work was correct; it was simply thrown away
+            // sixty times a second.
+            //
+            // `mado` had the identical defect with the operands reversed: it
+            // computed the skip verdict, counted it, logged it, and rendered
+            // anyway. Two independent renderers, same shape, opposite
+            // directions — which is what made this `mekuri`'s job rather than
+            // a local `if`.
+            //
+            // The verdict PRODUCES the permission. `Skip` carries no `Pass`,
+            // and the composite below is inside `pass.spend`, so "decided to
+            // skip, drew anyway" has no shape to write here.
+            let verdict = data.state.owed.open();
+            let mekuri::Verdict::Draw(pass) = verdict else {
+                let mut next = deadline + interval;
+                let now = std::time::Instant::now();
+                if next <= now {
+                    next = now + interval;
+                }
+                return smithay::reexports::calloop::timer::TimeoutAction::ToInstant(next);
+            };
+            // Publish why, for the `owed` leaf. Cheap: a decode of one u64
+            // against a 7-element table, on a path that is by definition
+            // about to do far more work than this.
+            {
+                let names: Vec<&'static str> =
+                    pass.causes().iter().map(|c| c.name()).collect();
+                *introspect
+                    .last_frame_causes
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = names.join("+");
+            }
+
             // ── ★ BUILD ONE SLICE: CURSOR FIRST, THEN THE CLIENTS ───────
             //
             // Index 0 is TOPMOST. `render_output` iterates the slice with
@@ -913,7 +1036,16 @@ where
             // and the renderer bind must both target the BACK buffer, and the
             // flip must come after the frame is complete — a flip mid-render
             // shows a half-drawn frame, which reads as a renderer bug.
-            let frame_result = (|| -> Result<(), Box<dyn std::error::Error>> {
+            // ★ THE COMPOSITE RUNS INSIDE THE PASS, and the pass is spent by
+            // the outcome. `Ok` marks it presented; `Err` puts the causes
+            // BACK on the ledger, so a refused flip or a lost device leaves
+            // the frame still owed and the next tick retries it.
+            //
+            // That error path is a bug neither original had: both drained
+            // their reason before rendering and dropped it on failure, so a
+            // single failed frame left the screen stale until something
+            // unrelated happened to dirty it again.
+            let frame_result = pass.spend(|_causes| (|| -> Result<(), Box<dyn std::error::Error>> {
                 let dmabuf = {
                     use smithay::backend::allocator::dmabuf::AsDmabuf;
                     scanout.back_buffer().export()?
@@ -1051,9 +1183,12 @@ where
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 }
                 Ok(())
-            })();
+            })());
             if let Err(e) = frame_result {
-                tracing::error!(error = %e, "frame failed");
+                // The causes are already back on the ledger — `spend` did it
+                // on the `Err`. Nothing to re-mark here, and re-marking would
+                // be wrong: it would owe the frame twice.
+                tracing::error!(error = %e, "frame failed — still owed, retrying next tick");
             }
 
             // Tell clients their buffers were consumed, or they will never draw
@@ -1074,13 +1209,6 @@ where
             // gate could never serve the moment it named, since a running
             // process's environment cannot be changed from outside.
 
-            // ★ Publish the frame counter HERE, in the loop that actually
-            // renders. The first cut incremented it nowhere, so a live query
-            // returned `frames: 0` while the compositor was rendering — the
-            // exact class kanshou exists to prevent (mado once reported
-            // frame_perf 0 at 120fps). A counter that is never incremented is
-            // indistinguishable from a compositor that is stuck.
-            introspect.tick(data.state.space.elements().count() as u64);
 
             // ★ AND PUBLISH `owed_vt_switches`, WHICH NOTHING WAS WRITING.
             //
@@ -1143,6 +1271,41 @@ where
             smithay::reexports::calloop::timer::TimeoutAction::ToInstant(next)
         },
     )?;
+
+    // ── ★ THE CLOCK, AND WHY IT IS NOT A ONE-SECOND REPAINT ─────────────
+    //
+    // The status bar shows `hh:mm`, so it changes 1440 times a day and not
+    // 86 400. A one-second timer that simply marked `Chrome` would hold the
+    // seat at a steady 1 fps forever — which is not free, because on this
+    // renderer a frame is a full-screen CPU composite, and it is exactly the
+    // kind of "small" idle cost that turned out to be 38% of a core the last
+    // time it was estimated instead of measured.
+    //
+    // So the timer TICKS every second and MARKS only when the rendered
+    // minute actually differs. An idle seat presents zero frames per second,
+    // and the bar is still never more than a second stale.
+    {
+        let ledger = data.state.owed.ledger();
+        let mut last_minute: Option<u64> = None;
+        event_loop.handle().insert_source(
+            smithay::reexports::calloop::timer::Timer::from_duration(
+                std::time::Duration::from_secs(1),
+            ),
+            move |_, _, _| {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_secs());
+                let minute = now / 60;
+                if last_minute != Some(minute) {
+                    last_minute = Some(minute);
+                    ledger.mark(crate::owed::Owed::Chrome);
+                }
+                smithay::reexports::calloop::timer::TimeoutAction::ToDuration(
+                    std::time::Duration::from_secs(1),
+                )
+            },
+        )?;
+    }
 
     tracing::info!(
         connector = %target.name,

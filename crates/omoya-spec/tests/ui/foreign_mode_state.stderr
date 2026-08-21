@@ -9,10 +9,15 @@ help: the trait `omoya_spec::sealed::Sealed` is not implemented for `Kiosk`
   |
 6 | struct Kiosk;
   | ^^^^^^^^^^^^
-  = help: the following other types implement trait `omoya_spec::sealed::Sealed`:
-            Entrance
-            Locked
-            Session
+help: the following other types implement trait `omoya_spec::sealed::Sealed`
+ --> src/lib.rs
+  |
+  | impl sealed::Sealed for Entrance {}
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Entrance`
+  | impl sealed::Sealed for Session {}
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Session`
+  | impl sealed::Sealed for Locked {}
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Locked`
 note: required by a bound in `ModeState`
  --> src/lib.rs
   |

@@ -116,6 +116,20 @@ pub struct Omoya {
     pub tiling: crate::layout::Tiling,
     pub loop_signal: LoopSignal,
 
+    /// Whether a frame is owed, and why. See [`crate::owed::Owed`].
+    ///
+    /// ★ **The render loop used to compose a full frame every tick and then
+    /// ask whether the damage was empty.** Measured on plo: 38.2% of a core
+    /// while presenting ZERO frames — the whole composite paid for, then
+    /// discarded, sixty times a second. `mado` had the same defect with the
+    /// operands reversed (it decided to skip and rendered anyway), which is
+    /// what made this a `mekuri` extraction rather than a local fix.
+    ///
+    /// A `Gate` is deliberately not `Clone`: one screen, one drain point. Use
+    /// [`mekuri::Gate::ledger`] (or `introspect.mark`) to MARK from anywhere;
+    /// only the render loop calls `open`.
+    pub owed: mekuri::Gate<crate::owed::Owed>,
+
     /// `wp_presentation` — when a frame actually reached the screen.
     ///
     /// Added because every client that animates smoothly wants it: a seat
@@ -267,6 +281,25 @@ impl Omoya {
             "omoya starting"
         );
 
+        // The gate, and the handle the socket thread marks through. Installed
+        // before `introspect` is moved into the struct below — the sidecar is
+        // already `Arc`-shared with the kanshou thread by this point, so this
+        // is the one moment both halves are reachable at once.
+        //
+        // The first frame is owed unconditionally: nothing has committed yet,
+        // and a seat that comes up showing whatever the framebuffer happened
+        // to contain — waiting for a client to dirty it — is a black screen
+        // with no error.
+        let owed: mekuri::Gate<crate::owed::Owed> = mekuri::Gate::new();
+        owed.mark(crate::owed::Owed::Resume);
+        if introspect.owed.set(owed.ledger()).is_err() {
+            // Only reachable if a second Omoya were built against one
+            // sidecar. Reported rather than ignored: it would mean the socket
+            // thread marks a gate nobody drains, and every `do` verb would
+            // queue forever while reporting success.
+            tracing::error!("the introspect sidecar already had a mekuri ledger installed");
+        }
+
         Self {
             start_time,
             display_handle: dh,
@@ -280,6 +313,7 @@ impl Omoya {
             owed_vt_switches: 0,
             space,
             introspect,
+            owed,
             tiling: crate::layout::Tiling::default(),
             bindings: {
                 let (map, clashes) = crate::deed::default_bindings();

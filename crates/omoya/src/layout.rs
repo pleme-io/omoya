@@ -294,6 +294,16 @@ impl crate::state::Omoya {
     /// calling it after any map, unmap or resize is always correct and never
     /// accumulates.
     pub fn apply_layout(&mut self) {
+        // ★ MARKED HERE, NOT AT THE FOUR CALL SITES. Every geometry change —
+        // a toplevel mapping or dying, a layer surface arriving or leaving,
+        // a re-tile — funnels through this one function, so this is the place
+        // that cannot be forgotten by whoever adds the fifth caller.
+        //
+        // Marked BEFORE the early return below: an `apply_layout` with no
+        // output still means the window set changed, and the frame is owed as
+        // soon as an output exists. Returning without marking would lose it.
+        self.owed.mark(crate::owed::Owed::Windows);
+
         // One output today. `outputs()` is the honest source rather than a
         // stored size, because the output can change mode under us and a
         // cached extent would tile into a screen that no longer exists.
