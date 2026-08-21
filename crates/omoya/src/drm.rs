@@ -466,6 +466,12 @@ where
         // DrmCompositor fail with `NoSupportedRendererFormat`, an error that
         // names the renderer rather than the missing declaration.
         + smithay::backend::renderer::ImportDma
+        // ★ `ImportMem` for the STATUS BAR, which is a CPU buffer rather than
+        // a client surface. nuri already implements it (`nuri_renderer.rs`),
+        // so this costs the shipping path nothing; it excludes a future
+        // renderer that cannot take raw memory, which is the same class of
+        // constraint as `ExportMem` below and stated for the same reason.
+        + smithay::backend::renderer::ImportMem
         + smithay::backend::renderer::Bind<smithay::backend::allocator::dmabuf::Dmabuf>
         // ★ `ExportMem` so the seat can be SCREENSHOT. This is a real
         // constraint on what may drive this loop, and it is the right one: a
@@ -479,7 +485,11 @@ where
         // cannot read its own framebuffer back.
         + smithay::backend::renderer::ExportMem
         + 'static,
-    R::TextureId: Clone + smithay::backend::renderer::Texture + 'static,
+    // `Send` is the bar's requirement too: `MemoryRenderBuffer` holds its
+    // texture behind an `Arc<Mutex<..>>` so the same buffer can be reused
+    // across frames without re-uploading, and that shape demands the texture
+    // be movable between threads even though this loop never does.
+    R::TextureId: Clone + Send + smithay::backend::renderer::Texture + 'static,
     R::Error: Send + Sync + 'static,
 {
     let surface = device.create_surface(target.crtc, target.mode, &[target.connector])?;
@@ -696,7 +706,7 @@ where
                                 smithay::backend::allocator::Fourcc::Argb8888,
                                 (mode.size.w, crate::bar::HEIGHT),
                                 1,
-                                Transform::Normal,
+                                smithay::utils::Transform::Normal,
                                 None,
                             ),
                         );
