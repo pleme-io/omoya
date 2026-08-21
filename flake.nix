@@ -641,10 +641,27 @@
               # framebuffer come out far too dark, so a wrong `format_is_srgb`
               # would leave a pointer that is technically present and visually
               # absent. Reading the pixel is the only way to tell those apart.
+              # ★ PROBE WHERE THE POINTER ACTUALLY IS, WHICH IS NO LONGER (4,4).
+              #
+              # This read (4,4) until the pointer became an arrow that starts
+              # in the MIDDLE of the output (`drm.rs`: a pointer left at the
+              # origin sits under the bar, in the one place an operator does
+              # not look). The test kept sampling the corner, so it went red
+              # on rgb(59,66,82) — the desktop background — and stayed red,
+              # because a `checks` entry in this repo is a declaration nobody
+              # builds. Found only when the mekuri work built it deliberately.
+              #
+              # The arrow's top-left corner is AT the pointer location, so the
+              # sample is an offset into the glyph. `cursor::ART` row 3 is
+              # "X##X......" and SCALE is 2, so mask cell (x=2, y=3) — pixel
+              # (+4, +6) — is interior FILL, not the outline. Picking an
+              # outline cell here would assert polar_night[0] and quietly test
+              # a different thing.
+              cx, cy = 1024 // 2 + 4, 768 // 2 + 6
               px = machine.succeed(
-                  "ppm-probe /tmp/seat.ppm 4 4"
+                  f"ppm-probe /tmp/seat.ppm {cx} {cy}"
               ).strip()
-              print(f"pixel(4,4) = {px}")
+              print(f"pixel({cx},{cy}) = {px}")
               r, g, b = (int(v) for v in px.split())
               # ★ EXACT, NOT "bright enough". A >180 threshold passed while the
               # encoding was WRONG: the cursor came out rgb(214,220,231), which
@@ -659,11 +676,29 @@
               # range cannot tell "right colour" from "right hue, wrong gamma",
               # and wrong gamma is the entire failure mode.
               assert (r, g, b) == (236, 239, 244), (
-                  f"pointer at (4,4) is rgb({r},{g},{b}), expected "
+                  f"pointer at ({cx},{cy}) is rgb({r},{g},{b}), expected "
                   "rgb(236,239,244) = Nord snow_storm[2]. "
                   "rgb(214,220,231) specifically means the LINEAR encoding was "
                   "written into a non-sRGB framebuffer — check "
-                  "theme::cursor_for_surface's format_is_srgb flag."
+                  "theme::cursor_for_surface's format_is_srgb flag. The "
+                  "background colour here means the pointer is not where this "
+                  "test expects — check the centring in drm.rs."
+              )
+
+              # ★ AND THE CORNER MUST NOT BE THE POINTER.
+              #
+              # The operator's original report was "a white square in the top
+              # left hand corner" — a pointer stuck at the origin, under the
+              # bar. Moving the probe to the centre would silently stop
+              # covering that, so the corner keeps an assertion of its own:
+              # whatever is at (4,4), it is not the cursor.
+              corner = machine.succeed("ppm-probe /tmp/seat.ppm 4 4").strip()
+              cr, cg, cb = (int(v) for v in corner.split())
+              print(f"corner(4,4) = {corner}")
+              assert (cr, cg, cb) != (236, 239, 244), (
+                  "the pointer is back in the top-left corner, under the bar — "
+                  "this is the 'white square in the corner' the arrow and the "
+                  "centring were introduced to fix."
               )
 
               # And the BACKGROUND, which is what the operator actually looks
