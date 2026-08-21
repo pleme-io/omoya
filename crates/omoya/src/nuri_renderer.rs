@@ -656,7 +656,7 @@ impl ImportMemWl for NuriRenderer {
             let mut owned = bytes.to_vec();
             normalise_opaque(&mut owned, fourcc);
             let tex = NuriTexture {
-                data: Arc::new(owned),
+                data: Arc::new(std::sync::RwLock::new(owned)),
                 width: width_u32,
                 height: height_u32,
                 stride,
@@ -789,7 +789,7 @@ impl ImportDma for NuriRenderer {
 
         #[allow(clippy::cast_sign_loss)]
         Ok(NuriTexture {
-            data: Arc::new(bytes),
+            data: Arc::new(std::sync::RwLock::new(bytes)),
             width: size.w as u32,
             height: size.h as u32,
             stride,
