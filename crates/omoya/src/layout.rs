@@ -319,6 +319,14 @@ impl crate::state::Omoya {
             let mut map = smithay::desktop::layer_map_for_output(&output);
             map.arrange();
             let zone = map.non_exclusive_zone();
+            // omoya's own bar reserves its strip the same way a layer surface
+            // would — by shrinking the zone before the tiler sees it, rather
+            // than by the tiler knowing a bar exists. That keeps one rule:
+            // windows fill whatever is left.
+            let zone = smithay::utils::Rectangle::new(
+                (zone.loc.x, zone.loc.y + crate::bar::HEIGHT).into(),
+                (zone.size.w, (zone.size.h - crate::bar::HEIGHT).max(1)).into(),
+            );
             // `non_exclusive_zone` is relative to the output; `arrange` wants
             // absolute coordinates, and on a single output at (0,0) those
             // coincide — offset explicitly so a future second output does not

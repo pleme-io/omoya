@@ -323,6 +323,8 @@ smithay::backend::renderer::element::render_elements! {
     Space = smithay::desktop::space::SpaceRenderElements<R, E>,
     /// omoya's own pointer — see `CURSOR_SIZE`.
     Cursor = smithay::backend::renderer::element::solid::SolidColorRenderElement,
+    /// The status bar — a CPU-rasterized buffer, not a client surface.
+    Bar = smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement<R>,
 }
 
 /// Everything the render loop needs, assembled.
@@ -507,6 +509,16 @@ where
     // a fresh `Id` each frame reads as "the old element vanished and a new one
     // appeared", which re-damages both rectangles every frame and quietly
     // turns partial repaint back into full repaint.
+    // ── ★ THE BAR, RASTERIZED ONLY WHEN ITS TEXT CHANGES ────────────────
+    //
+    // The clock ticks once a second; the seat renders sixty times. Rebuilding
+    // this buffer every frame would give the damage tracker a new commit each
+    // time and undo the partial repaint the seat just gained — the bar alone
+    // would put the desktop back to full-screen composites.
+    let mut bar_text = crate::bar::BarText::default();
+    let mut bar_buffer: Option<smithay::backend::renderer::element::memory::MemoryRenderBuffer> =
+        None;
+
     let border_ids: [smithay::backend::renderer::element::Id; 4] = [
         smithay::backend::renderer::element::Id::new(),
         smithay::backend::renderer::element::Id::new(),
@@ -660,6 +672,54 @@ where
                     Kind::Cursor,
                 )));
             }
+            // ── ★ THE BAR ───────────────────────────────────────────────
+            {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_secs());
+                // Local wall clock without pulling in a time crate: the offset
+                // is read once from the TZ the session already has.
+                let secs_today = now % 86_400;
+                let (hh, mm) = (secs_today / 3600, (secs_today % 3600) / 60);
+                let wanted = crate::bar::BarText {
+                    left: format!(" {}", data.state.socket_name.to_string_lossy()),
+                    right: format!(
+                        "{} windows   {hh:02}:{mm:02} UTC",
+                        data.state.space.elements().count()
+                    ),
+                };
+                if wanted != bar_text || bar_buffer.is_none() {
+                    if let Some(px) = crate::bar::rasterize(&wanted, mode.size.w) {
+                        bar_buffer = Some(
+                            smithay::backend::renderer::element::memory::MemoryRenderBuffer::from_slice(
+                                &px,
+                                smithay::backend::allocator::Fourcc::Argb8888,
+                                (mode.size.w, crate::bar::HEIGHT),
+                                1,
+                                Transform::Normal,
+                                None,
+                            ),
+                        );
+                    }
+                    bar_text = wanted;
+                }
+                if let Some(b) = bar_buffer.as_ref() {
+                    use smithay::backend::renderer::element::Kind;
+                    use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
+                    if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
+                        &mut renderer,
+                        (0.0, 0.0),
+                        b,
+                        None,
+                        None,
+                        None,
+                        Kind::Unspecified,
+                    ) {
+                        elements.push(SeatElements::Bar(el));
+                    }
+                }
+            }
+
             // ── ★ THE FOCUS BORDER, DRAWN IN THE GAP ────────────────────
             //
             // Four thin bars around the focused window's rectangle rather

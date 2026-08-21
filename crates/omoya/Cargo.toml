@@ -45,6 +45,11 @@ awase = "0.1.10"
 # once reported frame_perf 0 over MCP while its GUI rendered at 120fps
 # because the server had no wire into the live process.
 kanshou = "0.1"
+# fontdue — pure-Rust glyph rasterization for the status bar. No C, no
+# FreeType: consistent with the seat's whole point, and the bar is the first
+# thing on the CPU path that needs actual text. Deliberately NOT added to
+# nuri, whose header states it has zero dependencies.
+fontdue = "0.9"
 # kukaku (区画) — the split-tree layout algebra. Extracted from tear-types
 # when omoya became its third consumer (tear's panes, mado's planned rebase,
 # and this): the algebra used only "an id copies and two compare", so the id

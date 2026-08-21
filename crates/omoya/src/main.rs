@@ -18,6 +18,7 @@ mod uevent;
 mod logind;
 mod nuri_renderer;
 mod scanout;
+mod bar;
 mod chord;
 mod deed;
 #[cfg(target_os = "linux")]

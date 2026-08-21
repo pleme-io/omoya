@@ -1,12 +1,12 @@
 {
   "schema_version": 2,
-  "cargo_lock_sha256": "ba95bfd48dc586881528068705dab06fc94703c4ddb65c6aff11f391cf970d43",
+  "cargo_lock_sha256": "fd99cdbb5bbe9b3601ccb4db60027746d1e422331f823bfa80380c2ceadbbc5b",
   "manifest_sha256": {
-    "Cargo.toml": "df87ae3c2f62ee457110fc6afe076bd8951dafee9bb9cd85826baa95e10f390c",
+    "Cargo.toml": "706a4601952c1b507871a892f2746d06486f274b5b8ccb9f8155bb923d742228",
     "crates/hairetsu/Cargo.toml": "67a784b3f0dc716e74f9257bed09bef7c637618269586ecf20b1ff223114b0da",
     "crates/nuri/Cargo.toml": "c5c860abe8b16241d437c1bc3c202378eb59ea1da2a485154fdd6099e1452d41",
     "crates/omoya-spec/Cargo.toml": "75cd6d31f2ef617df89556610445abab8cf9cddb49d7bbf04c28ac5b7fc89031",
-    "crates/omoya/Cargo.toml": "7236faa1034c265e9d6d411c631a4ceef9ce3f54becba85d7cb666fac6dc8be1",
+    "crates/omoya/Cargo.toml": "efae499f003fe5dc3c43f4c2a82e0c678a16265adb462ab6c1f67245896776dd",
     "crates/xkbcommon-hairetsu/Cargo.toml": "b4b77d51ae78f642dfaad99896a1bc6202e897ca25311d1296610e0d4435e8fd"
   },
   "target_resolves": {
@@ -16,6 +16,13 @@
         "build_dependencies": [],
         "features": [
           "std"
+        ]
+      },
+      "allocator-api2-0.2.21": {
+        "runtime_dependencies": [],
+        "build_dependencies": [],
+        "features": [
+          "alloc"
         ]
       },
       "appendlist-1.4.0": {
@@ -488,6 +495,22 @@
         "build_dependencies": [],
         "features": []
       },
+      "core_maths-0.1.1": {
+        "runtime_dependencies": [
+          {
+            "name": "libm",
+            "package_key": "libm-0.2.16",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": []
+      },
       "crypto-common-0.1.7": {
         "runtime_dependencies": [
           {
@@ -909,6 +932,44 @@
         "build_dependencies": [],
         "features": []
       },
+      "foldhash-0.1.5": {
+        "runtime_dependencies": [],
+        "build_dependencies": [],
+        "features": []
+      },
+      "fontdue-0.9.4": {
+        "runtime_dependencies": [
+          {
+            "name": "hashbrown",
+            "package_key": "hashbrown-0.15.5",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": true,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "ttf_parser",
+            "package_key": "ttf-parser-0.25.1",
+            "kind": "normal",
+            "features": [
+              "no-std-float",
+              "opentype-layout"
+            ],
+            "uses_default_features": false,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": [
+          "default",
+          "hashbrown",
+          "simd"
+        ]
+      },
       "funty-2.0.0": {
         "runtime_dependencies": [],
         "build_dependencies": [],
@@ -1237,6 +1298,51 @@
         "build_dependencies": [],
         "features": []
       },
+      "hashbrown-0.15.5": {
+        "runtime_dependencies": [
+          {
+            "name": "allocator_api2",
+            "package_key": "allocator-api2-0.2.21",
+            "kind": "normal",
+            "features": [
+              "alloc"
+            ],
+            "uses_default_features": false,
+            "optional": true,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "equivalent",
+            "package_key": "equivalent-1.0.2",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": false,
+            "optional": true,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "foldhash",
+            "package_key": "foldhash-0.1.5",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": false,
+            "optional": true,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": [
+          "allocator-api2",
+          "default",
+          "default-hasher",
+          "equivalent",
+          "inline-more",
+          "raw-entry"
+        ]
+      },
       "hashbrown-0.17.1": {
         "runtime_dependencies": [],
         "build_dependencies": [],
@@ -1471,6 +1577,14 @@
           "std"
         ]
       },
+      "libm-0.2.16": {
+        "runtime_dependencies": [],
+        "build_dependencies": [],
+        "features": [
+          "arch",
+          "default"
+        ]
+      },
       "log-0.4.33": {
         "runtime_dependencies": [],
         "build_dependencies": [],
@@ -1608,7 +1722,7 @@
           "std"
         ]
       },
-      "nuri-0.1.27": {
+      "nuri-0.1.26": {
         "runtime_dependencies": [
           {
             "name": "thiserror",
@@ -1629,7 +1743,7 @@
         "build_dependencies": [],
         "features": []
       },
-      "omoya-0.1.27": {
+      "omoya-0.1.26": {
         "runtime_dependencies": [
           {
             "name": "awase",
@@ -1644,6 +1758,16 @@
           {
             "name": "evdev",
             "package_key": "evdev-0.13.2",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "fontdue",
+            "package_key": "fontdue-0.9.4",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -1683,7 +1807,7 @@
           },
           {
             "name": "nuri",
-            "package_key": "nuri-0.1.27",
+            "package_key": "nuri-0.1.26",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -1693,7 +1817,7 @@
           },
           {
             "name": "omoya_spec",
-            "package_key": "omoya-spec-0.1.27",
+            "package_key": "omoya-spec-0.1.26",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -1799,7 +1923,7 @@
           "default"
         ]
       },
-      "omoya-spec-0.1.27": {
+      "omoya-spec-0.1.26": {
         "runtime_dependencies": [
           {
             "name": "thiserror",
@@ -3725,6 +3849,26 @@
         ],
         "build_dependencies": [],
         "features": []
+      },
+      "ttf-parser-0.25.1": {
+        "runtime_dependencies": [
+          {
+            "name": "core_maths",
+            "package_key": "core_maths-0.1.1",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": true,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": [
+          "core_maths",
+          "no-std-float",
+          "opentype-layout"
+        ]
       },
       "typenum-1.20.1": {
         "runtime_dependencies": [],
@@ -6385,6 +6529,9 @@
     "aho-corasick-1.1.5": {
       "edition": "2021"
     },
+    "allocator-api2-0.2.21": {
+      "edition": "2018"
+    },
     "appendlist-1.4.0": {
       "edition": "2018"
     },
@@ -6446,6 +6593,9 @@
       "edition": "2015",
       "build_script": "build.rs"
     },
+    "core_maths-0.1.1": {
+      "edition": "2015"
+    },
     "cpufeatures-0.2.17": {
       "edition": "2018"
     },
@@ -6506,6 +6656,12 @@
     "find-msvc-tools-0.1.11": {
       "edition": "2021"
     },
+    "foldhash-0.1.5": {
+      "edition": "2021"
+    },
+    "fontdue-0.9.4": {
+      "edition": "2018"
+    },
     "funty-2.0.0": {
       "edition": "2018"
     },
@@ -6540,6 +6696,9 @@
         "path": "src/lib.rs"
       }
     },
+    "hashbrown-0.15.5": {
+      "edition": "2021"
+    },
     "hashbrown-0.17.1": {
       "edition": "2024"
     },
@@ -6569,6 +6728,10 @@
       "edition": "2015"
     },
     "libc-0.2.189": {
+      "edition": "2021",
+      "build_script": "build.rs"
+    },
+    "libm-0.2.16": {
       "edition": "2021",
       "build_script": "build.rs"
     },
@@ -6604,7 +6767,7 @@
       "edition": "2021",
       "build_script": "build.rs"
     },
-    "nuri-0.1.27": {
+    "nuri-0.1.26": {
       "edition": "2024",
       "lib_target": {
         "name": "nuri",
@@ -6614,7 +6777,7 @@
     "okiba-0.2.1": {
       "edition": "2024"
     },
-    "omoya-0.1.27": {
+    "omoya-0.1.26": {
       "edition": "2024",
       "binaries": [
         {
@@ -6623,7 +6786,7 @@
         }
       ]
     },
-    "omoya-spec-0.1.27": {
+    "omoya-spec-0.1.26": {
       "edition": "2024",
       "lib_target": {
         "name": "omoya_spec",
@@ -6817,6 +6980,9 @@
     },
     "trybuild-1.0.120": {
       "edition": "2024"
+    },
+    "ttf-parser-0.25.1": {
+      "edition": "2018"
     },
     "typenum-1.20.1": {
       "edition": "2018"
