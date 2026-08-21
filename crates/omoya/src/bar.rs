@@ -43,23 +43,60 @@ const FONT_PX: f32 = 14.0;
 fn font_bytes() -> Option<&'static [u8]> {
     static FONT: OnceLock<Option<Vec<u8>>> = OnceLock::new();
     FONT.get_or_init(|| {
+        // ★ ASK FONTCONFIG WHERE FONTS ARE — DO NOT GUESS PATHS.
+        //
+        // The first version hardcoded `/run/current-system/sw/share/fonts`
+        // and friends. On plo that directory does not exist: the fleet's
+        // faces arrive through home-manager and live at arbitrary store
+        // paths, and on the vkms machine `fonts.packages` puts them
+        // somewhere else again. The bar silently drew nothing on both, which
+        // its own no-font-no-bar rule then made look intentional.
+        //
+        // `/etc/fonts` IS the system's declaration of where fonts live —
+        // every `<dir>` element is a root, written there by the same NixOS
+        // module that installed the font. Parsing it is reading the
+        // declaration rather than re-deriving it, and it costs no C: this is
+        // a substring scan, not a link against libfontconfig.
+        let mut roots: Vec<std::path::PathBuf> = Vec::new();
+        let mut confs = vec![std::path::PathBuf::from("/etc/fonts/fonts.conf")];
+        if let Ok(rd) = std::fs::read_dir("/etc/fonts/conf.d") {
+            confs.extend(rd.flatten().map(|e| e.path()));
+        }
+        for c in confs {
+            let Ok(text) = std::fs::read_to_string(&c) else {
+                continue;
+            };
+            for chunk in text.split("<dir").skip(1) {
+                let Some(open) = chunk.find('>') else { continue };
+                let Some(close) = chunk.find("</dir>") else { continue };
+                if close <= open {
+                    continue;
+                }
+                let path = chunk[open + 1..close].trim();
+                // `prefix="xdg"` entries are relative to the user's data dir;
+                // skipped rather than mis-resolved, since the fleet faces are
+                // all absolute store paths.
+                if path.starts_with('/') {
+                    roots.push(std::path::PathBuf::from(path));
+                }
+            }
+        }
+        // The declared roots first, then the conventional ones as a floor for
+        // a system with no fontconfig at all.
+        roots.push(std::path::PathBuf::from("/run/current-system/sw/share/fonts"));
+        roots.push(std::path::PathBuf::from("/usr/share/fonts"));
+
         // Ordered by preference: the fleet face first, then anything
         // monospace, so a seat without Nerd Fonts still gets a bar.
-        const ROOTS: &[&str] = &[
-            "/run/current-system/sw/share/fonts",
-            // NixOS `fonts.packages` also lands faces here.
-            "/run/current-system/sw/share/X11/fonts",
-            "/usr/share/fonts",
-        ];
         const WANTED: &[&str] = &[
             "JetBrainsMonoNerdFont-Regular.ttf",
             "JetBrainsMonoNLNerdFontMono-Regular.ttf",
             "DejaVuSansMono.ttf",
             "DejaVuSans.ttf",
         ];
-        for root in ROOTS {
-            for want in WANTED {
-                if let Some(p) = find_file(std::path::Path::new(root), want) {
+        for want in WANTED {
+            for root in &roots {
+                if let Some(p) = find_file(root, want) {
                     if let Ok(b) = std::fs::read(&p) {
                         tracing::info!(path = %p.display(), "bar font");
                         return Some(b);
@@ -67,7 +104,10 @@ fn font_bytes() -> Option<&'static [u8]> {
                 }
             }
         }
-        tracing::warn!("no monospace font found — the bar will not draw");
+        tracing::warn!(
+            roots = roots.len(),
+            "no monospace font found in any fontconfig dir — the bar will not draw"
+        );
         None
     })
     .as_deref()
