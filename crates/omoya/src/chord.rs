@@ -54,10 +54,29 @@ pub fn modifiers_from(state: &ModifiersState) -> Modifiers {
 /// Translate an xkb keysym into an `awase::Key`.
 ///
 /// Returns `None` for anything outside the mapped set. That is a correct
-/// answer, not a gap: an unmapped key cannot appear in a claim (the test
-/// below enforces exactly that), so `None` means "this keystroke is the
-/// client's", which is the safe default for everything that is not an escape
-/// hatch.
+/// answer, not a gap: `None` means "this keystroke is the client's", which is
+/// the safe default for everything that is not a seat chord.
+///
+/// ★ **THIS TABLE WAS THE BUG, AND THE SHAPE OF IT IS WORTH KEEPING.**
+/// (Measured on plo, 2026-08-21.) It used to map F1–F12, Delete and Backspace
+/// and nothing else — correct for the day it was written, when the only
+/// chords were the VT-switch escape hatch. `deed.rs` then grew a full keymap:
+/// Logo+Return for the terminal, Logo+hjkl and Logo+arrows for focus,
+/// Logo+Shift+those for resize, Logo+Q to close. **Not one of those keys was
+/// in this table**, so every one of them translated to `None` and never
+/// reached `BindingMap` at all.
+///
+/// The seat had been up for days with `deeds_performed == 0`. Both halves were
+/// individually correct and individually tested — `default_bindings()` builds
+/// a collision-free map with passing tests, and this function returns exactly
+/// what it promises — because **`deed.rs`'s tests construct `Hotkey::new(LOGO,
+/// Key::H)` BY HAND and never go through this translator.** Two correct halves,
+/// no test spanning the seam, one dead keymap.
+///
+/// `every_bound_key_is_reachable` below is that missing test, and it is the
+/// only thing keeping this table honest: it walks the real binding map and
+/// fails if any bound key has no keysym that reaches it. Add a binding whose
+/// key is not here and the build goes red instead of the chord going quiet.
 #[must_use]
 pub fn key_from(sym: Keysym) -> Option<Key> {
     let k = match sym.raw() {
@@ -78,6 +97,29 @@ pub fn key_from(sym: Keysym) -> Option<Key> {
         // Ctrl+Alt+numpad-Del is the same reboot request to a user.
         keysyms::KEY_Delete | keysyms::KEY_KP_Delete => Key::Delete,
         keysyms::KEY_BackSpace => Key::Backspace,
+
+        // ── The seat's own chords ──────────────────────────────────────
+        // ★ BOTH CASES OF EVERY LETTER. xkb applies Shift before we see the
+        // keysym, so `Logo+Shift+H` (resize left) arrives as `KEY_H`, not
+        // `KEY_h`. Mapping only lowercase would leave focus working and
+        // resize silently dead — the half-broken variant of the bug this
+        // whole comment is about.
+        keysyms::KEY_h | keysyms::KEY_H => Key::H,
+        keysyms::KEY_j | keysyms::KEY_J => Key::J,
+        keysyms::KEY_k | keysyms::KEY_K => Key::K,
+        keysyms::KEY_l | keysyms::KEY_L => Key::L,
+        keysyms::KEY_q | keysyms::KEY_Q => Key::Q,
+
+        keysyms::KEY_Left => Key::Left,
+        keysyms::KEY_Right => Key::Right,
+        keysyms::KEY_Up => Key::Up,
+        keysyms::KEY_Down => Key::Down,
+
+        // `Return` only. awase reserves `NumpadEnter` for `KEY_KP_Enter`, and
+        // conflating them would bind a key the operator did not ask for.
+        keysyms::KEY_Return => Key::Return,
+        keysyms::KEY_space => Key::Space,
+
         _ => return None,
     };
     Some(k)
@@ -121,6 +163,24 @@ mod tests {
         keysyms::KEY_Delete,
         keysyms::KEY_KP_Delete,
         keysyms::KEY_BackSpace,
+        // The seat's own chords. Both cases per letter, because xkb applies
+        // Shift before we see the keysym.
+        keysyms::KEY_h,
+        keysyms::KEY_H,
+        keysyms::KEY_j,
+        keysyms::KEY_J,
+        keysyms::KEY_k,
+        keysyms::KEY_K,
+        keysyms::KEY_l,
+        keysyms::KEY_L,
+        keysyms::KEY_q,
+        keysyms::KEY_Q,
+        keysyms::KEY_Left,
+        keysyms::KEY_Right,
+        keysyms::KEY_Up,
+        keysyms::KEY_Down,
+        keysyms::KEY_Return,
+        keysyms::KEY_space,
     ];
 
     #[test]
@@ -151,6 +211,90 @@ mod tests {
             unreachable.is_empty(),
             "awase claims chords omoya cannot translate, so it would FORWARD them: {unreachable:?}"
         );
+    }
+
+    #[test]
+    fn every_bound_key_is_reachable() {
+        // ★ THE TEST THAT WAS MISSING, AND THE REASON THE SEAT HAD NO CHORDS.
+        //
+        // `every_claimed_chord_is_reachable` above walks `Reserved::fleet_linux()`
+        // — the VT-switch escape hatches — and reads as though it covers "the
+        // chords". It does not cover omoya's OWN keymap, and when `deed.rs`
+        // landed Logo+Return / Logo+hjkl / Logo+arrows / Logo+Q, none of those
+        // keys was in `key_from`. Every one translated to `None`, so
+        // `BindingMap` was never consulted at all.
+        //
+        // Measured on plo 2026-08-21: a seat up for days with
+        // `deeds_performed == 0`, while `do/spawn-terminal` over kanshou opened
+        // a window in one second. The deeds worked; nothing could reach them.
+        //
+        // This walks the LIVE binding map, so a future binding on an
+        // untranslatable key fails here instead of going quiet on the seat.
+        let (map, _clashes) = crate::deed::default_bindings();
+        let mode = map.mode("default").expect("the default mode must exist");
+        assert!(
+            mode.len() >= 18,
+            "the keymap shrank unexpectedly ({}) — this gate is only as good as \
+             what it walks",
+            mode.len()
+        );
+
+        let producible: Vec<Key> = MAPPED_SYMS
+            .iter()
+            .filter_map(|raw| key_from(Keysym::from(*raw)))
+            .collect();
+
+        let mut unreachable = Vec::new();
+        for (hk, _binding) in mode.iter() {
+            if !producible.contains(&hk.key) {
+                unreachable.push(format!("{:?}", hk.key));
+            }
+        }
+        unreachable.sort_unstable();
+        unreachable.dedup();
+        assert!(
+            unreachable.is_empty(),
+            "omoya BINDS keys that `key_from` cannot produce, so those chords can \
+             never fire: {unreachable:?}"
+        );
+    }
+
+    #[test]
+    fn a_shifted_letter_reaches_the_same_key_as_its_lowercase() {
+        // Resize is Logo+Shift+hjkl, and xkb hands us the UPPERCASE keysym for
+        // it. Mapping only lowercase would leave focus working and resize
+        // silently dead — a half-broken keymap is harder to diagnose than a
+        // fully dead one, because the operator concludes the feature is
+        // missing rather than that input is broken.
+        for (lower, upper) in [
+            (keysyms::KEY_h, keysyms::KEY_H),
+            (keysyms::KEY_j, keysyms::KEY_J),
+            (keysyms::KEY_k, keysyms::KEY_K),
+            (keysyms::KEY_l, keysyms::KEY_L),
+            (keysyms::KEY_q, keysyms::KEY_Q),
+        ] {
+            assert_eq!(
+                key_from(Keysym::from(lower)),
+                key_from(Keysym::from(upper)),
+                "case must not change which key this is"
+            );
+            assert!(key_from(Keysym::from(lower)).is_some());
+        }
+    }
+
+    #[test]
+    fn an_unbound_letter_is_still_the_clients() {
+        // The table must grow with the keymap and NOT beyond it. Every keysym
+        // mapped here is one the seat can consume, so mapping letters nobody
+        // binds would put a chord's worth of risk on the client's keys for no
+        // benefit.
+        for raw in [keysyms::KEY_a, keysyms::KEY_z, keysyms::KEY_Escape, keysyms::KEY_Tab] {
+            assert_eq!(
+                key_from(Keysym::from(raw)),
+                None,
+                "an unbound key must stay the client's"
+            );
+        }
     }
 
     #[test]

@@ -110,6 +110,20 @@ pub struct Omoya {
     /// `--`, so the chord opens another of whatever the seat opened first
     /// rather than a second hardcoded guess at the operator's terminal.
     pub session_command: Option<Vec<String>>,
+    /// What `Ctrl+Space` launches — the seat's application launcher, given by
+    /// `--launcher <cmd>`.
+    ///
+    /// A SEPARATE field from `session_command` rather than a reuse, because
+    /// the two answer different questions: `session_command` is "what did this
+    /// seat open first", and the launcher is a tool the seat offers whether or
+    /// not anything was opened. Folding them would mean `Ctrl+Space` on a bare
+    /// seat opened a terminal, which is the wrong key doing the right thing —
+    /// the operator would learn a chord that silently changes meaning.
+    ///
+    /// `None` is a real state and is REPORTED at the chord rather than
+    /// defaulted: a seat with no launcher configured must say so, not quietly
+    /// open something else.
+    pub launcher_command: Option<Vec<String>>,
     /// How the windows are arranged. See `layout.rs` — the algebra is
     /// `kukaku`'s, and only "a leaf is a Window" and "a rect is pixels" are
     /// omoya's.
@@ -327,6 +341,7 @@ impl Omoya {
                 map
             },
             session_command: None,
+            launcher_command: None,
             loop_signal,
             socket_name,
             layer_shell_state,

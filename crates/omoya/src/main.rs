@@ -56,6 +56,12 @@ struct Args {
     mode: SeatMode,
     /// A command to spawn into the new seat once it is up.
     spawn: Option<Vec<String>>,
+    /// The seat's application launcher, bound to `Ctrl+Space`.
+    ///
+    /// Its own flag rather than a slot in `--`, because `--` is positional and
+    /// terminal: everything after it is one command. A seat wants both a first
+    /// program AND a launcher, and there is no second `--`.
+    launcher: Option<Vec<String>>,
     /// Which backend drives the pixels.
     ///
     /// Typed rather than auto-detected, deliberately. Guessing between "nested
@@ -150,6 +156,7 @@ enum RendererKind {
 fn parse_args() -> Result<Args, String> {
     let mut mode = SeatMode::Session;
     let mut spawn = None;
+    let mut launcher = None;
     // The nested backend is the convenient default when it exists, because
     // that build is for developing on a machine that already has a session.
     // A shipped binary has no such backend and takes a seat: Drm.
@@ -252,6 +259,22 @@ fn parse_args() -> Result<Args, String> {
                     }
                 };
             }
+            "--launcher" => {
+                // Split on whitespace so a Nix module can pass one string.
+                // Deliberately NOT a shell parse: no quoting, no expansion, no
+                // `sh -c`. A launcher command needing shell syntax is a
+                // launcher command that should be a script, and running one
+                // through a shell here would put an argv-injection surface on
+                // a chord the operator presses constantly.
+                let v = it
+                    .next()
+                    .ok_or("--launcher needs a command (e.g. --launcher tobira)")?;
+                let parts: Vec<String> = v.split_whitespace().map(str::to_owned).collect();
+                if parts.is_empty() {
+                    return Err("--launcher was given an empty command".into());
+                }
+                launcher = Some(parts);
+            }
             "--" => {
                 let rest: Vec<String> = it.by_ref().collect();
                 if !rest.is_empty() {
@@ -264,7 +287,8 @@ fn parse_args() -> Result<Args, String> {
                     "omoya — the pleme-io Wayland compositor\n\n",
                     "  omoya [--mode entrance|session] [--backend nested|drm]\n",
                     "        [--session logind|libseat] [--input evdev|libinput]\n",
-                    "        [--renderer nuri|pixman] [-- CMD ARGS...]\n\n",
+                    "        [--renderer nuri|pixman] [--launcher CMD]\n",
+                    "        [-- CMD ARGS...]\n\n",
                     "--backend nested  composite into an existing session's window\n",
                     "--backend drm     take a display (M4a: scanout only, no input)\n",
                     "--session libseat the C library (default — what has been running)\n",
@@ -279,6 +303,10 @@ fn parse_args() -> Result<Args, String> {
                     "--input libinput  the C library, and it carries that policy.\n",
                     "--renderer nuri   The renderer. pleme-io's own, zero dependencies.\n",
                     "                  libpixman is NOT LINKED — the feature is off.\n\n",
+                    "--launcher CMD    what Ctrl+Space opens. Split on whitespace, NOT\n",
+                    "                  through a shell — a launcher needing shell syntax\n",
+                    "                  should be a script. Absent means Ctrl+Space says so\n",
+                    "                  in the log rather than opening something else.\n\n",
                     "`lock` is not a launchable mode: it is in-process session\n",
                     "state (theory/OMOYA.md §4.2)."
                 )
@@ -293,6 +321,7 @@ fn parse_args() -> Result<Args, String> {
         input,
         renderer,
         spawn,
+        launcher,
         backend,
     })
 }
@@ -805,6 +834,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // below, and because the seat's terminal is state the compositor should be
     // able to answer about, not an argument it happens to still be holding.
     data.state.session_command = args.spawn.clone();
+    data.state.launcher_command = args.launcher.clone();
 
     if let Some(cmd) = args.spawn
         && let Some((program, rest)) = cmd.split_first()

@@ -60,6 +60,15 @@ pub enum Deed {
     Close,
     /// Launch the seat's terminal.
     SpawnTerminal,
+    /// Launch the seat's application launcher.
+    ///
+    /// A SECOND spawn verb rather than a parameterised one, and that is the
+    /// whole reason `perform` can stay a remote-safe surface: neither arm
+    /// carries a command, so there is no string for a caller to fill in. Both
+    /// run a command this seat was configured with at startup. Collapsing them
+    /// into `Spawn(String)` would turn the kanshou verb surface into a remote
+    /// shell, which is exactly what `parse`'s doc refuses.
+    SpawnLauncher,
 }
 
 impl Deed {
@@ -89,6 +98,7 @@ impl Deed {
             "resize-down" => Self::Resize(Direction::Below),
             "close" => Self::Close,
             "spawn-terminal" => Self::SpawnTerminal,
+            "spawn-launcher" => Self::SpawnLauncher,
             _ => return None,
         })
     }
@@ -107,6 +117,7 @@ impl Deed {
         "resize-down",
         "close",
         "spawn-terminal",
+        "spawn-launcher",
     ];
 }
 
@@ -171,6 +182,25 @@ pub fn default_bindings() -> (BindingMap<Deed>, Vec<Hotkey>) {
     if let Err(prev) = mode.try_bind(Binding::new(
         Hotkey::new(logo, Key::Return),
         Deed::SpawnTerminal,
+    )) {
+        clashes.push(prev.hotkey);
+    }
+
+    // ★ Ctrl+Space, and it is the ONE deliberate exception to this module's
+    // "Ctrl belongs to the applications" rule. The header argues that a
+    // compositor taking Ctrl+H takes it from every editor at once, and that
+    // still holds — but Ctrl+Space is the launcher chord the operator already
+    // has in muscle memory from macOS, and unlike Ctrl+H almost nothing inside
+    // a terminal claims it. `Binding::consume` is left at its default (true),
+    // so a client never also sees it: a launcher that opened AND typed a space
+    // into whatever was focused would be worse than no launcher.
+    //
+    // The exception is worth naming rather than quietly making, because the
+    // next person to reach for a Ctrl chord should have to argue against this
+    // paragraph instead of citing this line as precedent.
+    if let Err(prev) = mode.try_bind(Binding::new(
+        Hotkey::new(Modifiers::CTRL, Key::Space),
+        Deed::SpawnLauncher,
     )) {
         clashes.push(prev.hotkey);
     }
@@ -273,6 +303,7 @@ impl crate::state::Omoya {
             }
             Deed::Close => self.close_focused(),
             Deed::SpawnTerminal => self.spawn_terminal(),
+            Deed::SpawnLauncher => self.spawn_launcher(),
         }
     }
 
@@ -362,12 +393,41 @@ impl crate::state::Omoya {
     }
 
     fn spawn_terminal(&mut self) {
-        let Some(cmd) = self.session_command.clone() else {
+        self.spawn_configured(
+            self.session_command.clone(),
+            "terminal",
+            "Logo+Return pressed but this seat has no terminal command",
+        );
+    }
+
+    fn spawn_launcher(&mut self) {
+        self.spawn_configured(
+            self.launcher_command.clone(),
+            "launcher",
+            "Ctrl+Space pressed but this seat has no launcher command \
+             (start omoya with --launcher <cmd>)",
+        );
+    }
+
+    /// Spawn one of the seat's own configured commands into its own display.
+    ///
+    /// ★ ONE body, two callers, because the second copy was going to be a
+    /// hand-edit of the first and the `WAYLAND_DISPLAY` line is exactly the
+    /// kind of thing a hand-edit drops. A launcher spawned without it connects
+    /// to whatever display the compositor's own environment names — which on a
+    /// nested run is the OUTER session, so the window opens on the wrong seat
+    /// and the operator sees nothing.
+    ///
+    /// Takes the resolved command rather than reaching for a field, so the
+    /// only thing that decides WHICH command runs is the caller's arm in
+    /// `perform` — there is no place for a lookup to pick the wrong one.
+    fn spawn_configured(&self, cmd: Option<Vec<String>>, what: &'static str, absent: &str) {
+        let Some(cmd) = cmd else {
             // Nothing to spawn is a real state, not an error: omoya can be
             // run with no `-- <cmd>` at all. Logged rather than silent,
             // because a chord that does nothing is otherwise indistinguishable
             // from a chord that is not bound.
-            tracing::warn!("Logo+Return pressed but this seat has no terminal command");
+            tracing::warn!("{absent}");
             return;
         };
         let Some((program, rest)) = cmd.split_first() else {
@@ -378,8 +438,8 @@ impl crate::state::Omoya {
             .env("WAYLAND_DISPLAY", &self.socket_name)
             .spawn()
         {
-            Ok(child) => tracing::info!(pid = child.id(), program, "spawned into the seat"),
-            Err(e) => tracing::error!(error = %e, program, "spawn failed"),
+            Ok(child) => tracing::info!(pid = child.id(), program, what, "spawned into the seat"),
+            Err(e) => tracing::error!(error = %e, program, what, "spawn failed"),
         }
     }
 }
