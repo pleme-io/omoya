@@ -31,6 +31,7 @@ mod layout;
 mod localtime;
 mod owed;
 mod state;
+mod synth;
 mod theme;
 /// The nested development backend. Off by default — it drags in winit, which
 /// `dlopen`s libxkbcommon behind `ldd`'s back. See `Cargo.toml`'s `[features]`.
@@ -687,6 +688,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .unwrap_or_else(|e| e.into_inner())
                     .drain(..)
                     .collect();
+                // ★ SYNTHETIC INPUT, ON THE SAME SEAM AND FOR THE SAME
+                // REASON. Drained here because `Omoya::key` needs `&mut
+                // Omoya`, and applied through the very method the evdev
+                // backend calls — see `synth.rs` for why taking a shortcut to
+                // the client would make this surface worthless as a
+                // diagnostic.
+                let synths: Vec<_> = sink
+                    .pending_input
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .drain(..)
+                    .collect();
+                for sy in synths {
+                    match crate::synth::expand(&sy) {
+                        Ok(steps) => {
+                            for step in steps {
+                                data.state.apply_step(step);
+                                sink.synth_performed
+                                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            }
+                        }
+                        // Validated at queue time too, so this is unreachable
+                        // unless the two disagree — which is worth saying out
+                        // loud rather than dropping.
+                        Err(e) => tracing::error!(error = %e, ?sy, "unexpandable synthetic input"),
+                    }
+                }
+
                 for deed in deeds {
                     tracing::info!(?deed, "performing a deed requested over kanshou");
                     data.state.perform(deed);

@@ -152,6 +152,16 @@ pub struct OmoyaIntrospect {
     /// here may touch `Omoya`; the socket thread enqueues, the compositor
     /// thread drains.
     pub pending_deeds: Mutex<Vec<crate::deed::Deed>>,
+    /// Synthetic input awaiting the render thread. Same shape and same reason
+    /// as `pending_deeds`: the socket thread may not touch `Omoya`.
+    pub pending_input: Mutex<Vec<crate::synth::Synth>>,
+    /// How many synthetic steps the COMPOSITOR thread actually performed.
+    ///
+    /// ★ Written on the far side of the seam, like `deeds_performed`. A
+    /// caller that only saw "queued" could not tell an applied keystroke from
+    /// one nothing ever drained — which is the exact failure this whole
+    /// surface exists to diagnose.
+    pub synth_performed: AtomicU64,
     /// Deeds the COMPOSITOR THREAD has actually performed.
     ///
     /// ★ THE READ-BACK FOR THE WRITE SURFACE, AND IT WAS MISSING ONCE.
@@ -287,6 +297,23 @@ impl OmoyaIntrospect {
         Arc::new(Self::default())
     }
 
+    /// Queue one synthetic input action and wake the loop.
+    ///
+    /// ★ Marks AND pings, both required and not the same thing — the ping
+    /// makes the loop run, the mark makes that run do something. Since the
+    /// loop became damage-driven a bare ping finds nothing owed and goes
+    /// straight back to sleep with the input still queued.
+    fn queue_input(&self, s: crate::synth::Synth) {
+        self.pending_input
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(s);
+        self.mark(crate::owed::Owed::Deed);
+        if let Some(p) = self.wake.get() {
+            p.ping();
+        }
+    }
+
     /// Tell the render loop a frame is owed, from any thread.
     ///
     /// A no-op before the gate is installed — nothing is rendering yet, so
@@ -370,6 +397,78 @@ impl Introspect for OmoyaIntrospect {
                 }
                 Ok(serde_json::json!(format!("queued: {verb}")))
             }
+            // ── ★ THE INPUT WRITE SURFACE ───────────────────────────
+            //
+            // Queued, then drained by the ping source where `&mut Omoya` is
+            // legal — the same seam `do` uses, for the same reason. The reply
+            // says "queued" and NOTHING about whether it landed; read
+            // `synth_performed` for that, which the compositor thread writes.
+            "type" => {
+                let Some(text) = q.args.first().and_then(|v| v.as_str()) else {
+                    return Err(QueryError::unknown_field(
+                        "type needs a string argument, e.g. type \"ls -la\\n\"",
+                    ));
+                };
+                let synth = crate::synth::Synth::Text(text.to_string());
+                // ★ VALIDATED BEFORE QUEUEING. `expand` is where an
+                // unmappable character is refused; doing it here means the
+                // caller is told, instead of the render thread silently
+                // dropping half a string an hour later.
+                let steps = crate::synth::expand(&synth)
+                    .map_err(|e| QueryError::unknown_field(e))?;
+                let n = steps.len();
+                self.queue_input(synth);
+                Ok(serde_json::json!({ "queued": text, "steps": n }))
+            }
+            "key" => {
+                let Some(code) = q.args.first().and_then(serde_json::Value::as_u64) else {
+                    return Err(QueryError::unknown_field(
+                        "key needs an evdev keycode, e.g. key 28 (KEY_ENTER)",
+                    ));
+                };
+                let down = q.args.get(1).and_then(serde_json::Value::as_bool);
+                let code = u32::try_from(code)
+                    .map_err(|_| QueryError::unknown_field("keycode out of range"))?;
+                match down {
+                    // No explicit state: a tap, so a caller never has to
+                    // remember to release and cannot strand a modifier.
+                    None => {
+                        self.queue_input(crate::synth::Synth::Key { code, pressed: true });
+                        self.queue_input(crate::synth::Synth::Key { code, pressed: false });
+                        Ok(serde_json::json!({ "queued": "tap", "code": code }))
+                    }
+                    Some(pressed) => {
+                        self.queue_input(crate::synth::Synth::Key { code, pressed });
+                        Ok(serde_json::json!({ "queued": "hold", "code": code, "pressed": pressed }))
+                    }
+                }
+            }
+            "pointer" => {
+                let (Some(dx), Some(dy)) = (
+                    q.args.first().and_then(serde_json::Value::as_f64),
+                    q.args.get(1).and_then(serde_json::Value::as_f64),
+                ) else {
+                    return Err(QueryError::unknown_field(
+                        "pointer needs dx and dy, e.g. pointer -40 20",
+                    ));
+                };
+                self.queue_input(crate::synth::Synth::Pointer { dx, dy });
+                Ok(serde_json::json!({ "queued": "pointer", "dx": dx, "dy": dy }))
+            }
+            "click" => {
+                // BTN_LEFT unless told otherwise; press and release, so a
+                // caller cannot leave a button down on the operator's desktop.
+                let code = q
+                    .args
+                    .first()
+                    .and_then(serde_json::Value::as_u64)
+                    .and_then(|c| u32::try_from(c).ok())
+                    .unwrap_or(272);
+                self.queue_input(crate::synth::Synth::Button { code, pressed: true });
+                self.queue_input(crate::synth::Synth::Button { code, pressed: false });
+                Ok(serde_json::json!({ "queued": "click", "code": code }))
+            }
+            "synth_performed" => Ok(n(&self.synth_performed)),
             "verbs" => Ok(serde_json::json!(crate::deed::Deed::VERBS)),
             "deeds_performed" => Ok(n(&self.deeds_performed)),
             "focus_rect" => Ok(serde_json::json!(
