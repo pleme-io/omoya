@@ -142,6 +142,25 @@ impl Texture for NuriFramebuffer<'_> {
 #[derive(Debug)]
 pub struct NuriRenderer {
     debug: DebugFlags,
+    /// The last texture imported for each shm buffer, kept so a re-import
+    /// can copy only what changed.
+    ///
+    /// ★ THIS IS THE KEYSTROKE-LATENCY FIX. `import_shm_buffer` is handed a
+    /// DAMAGE list and used to ignore it, copying the client's entire buffer
+    /// — 8 MB for a 1920x1045 terminal — and then running `normalise_opaque`
+    /// over all two million pixels. Every commit. Typing one character
+    /// redrew, re-copied and re-normalised the whole window.
+    ///
+    /// Measured before the fix: 99% of a core, every `gdb` sample inside
+    /// `memmove`, ~2 frames per second on an otherwise idle 16-core machine.
+    ///
+    /// Keyed by the buffer's `ObjectId`, because a client cycles a small set
+    /// of buffers and re-uses them; keying on anything derived from the
+    /// CONTENTS would defeat the point.
+    shm_cache: std::collections::HashMap<
+        smithay::reexports::wayland_server::backend::ObjectId,
+        NuriTexture,
+    >,
     /// ★ MINTED ONCE, AT CONSTRUCTION — NOT PER CALL.
     ///
     /// `ContextId` is an Arc IDENTITY, not a value: `ContextId::new()`
@@ -176,6 +195,7 @@ impl NuriRenderer {
         // `DebugFlags` has no Default impl — spelled out rather than derived.
         Self {
             debug: DebugFlags::empty(),
+            shm_cache: std::collections::HashMap::new(),
             context: smithay::backend::renderer::ContextId::new(),
         }
     }
@@ -505,7 +525,7 @@ impl ImportMemWl for NuriRenderer {
         &mut self,
         buffer: &smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer,
         _surface: Option<&smithay::wayland::compositor::SurfaceData>,
-        _damage: &[Rectangle<i32, BufferCoord>],
+        damage: &[Rectangle<i32, BufferCoord>],
     ) -> Result<Self::TextureId, Self::Error> {
         use smithay::wayland::shm;
 
@@ -523,6 +543,8 @@ impl ImportMemWl for NuriRenderer {
                 data.height as usize,
                 data.width,
             );
+            #[allow(clippy::cast_sign_loss)]
+            let (width_u32, height_u32) = (width as u32, data.height as u32);
 
             // ★ CHECKED, not trusted. `offset`, `stride` and `height` come
             // from the CLIENT. A pool shorter than they claim is how a
@@ -541,17 +563,73 @@ impl ImportMemWl for NuriRenderer {
             // duration, and the range is bounds-checked above.
             let bytes = unsafe { std::slice::from_raw_parts(ptr.add(offset), need - offset) };
 
+            // ── ★ COPY ONLY WHAT CHANGED ────────────────────────────
+            //
+            // smithay hands us `damage` precisely so a renderer need not
+            // re-upload an unchanged buffer. Reusing the cached allocation
+            // also avoids an 8 MB alloc+free per frame, which is its own
+            // share of the memmove time.
+            //
+            // The fast route needs three things to hold: a cached texture
+            // for THIS buffer, identical geometry, and sole ownership of the
+            // allocation. The last one matters — the `Arc` may still be held
+            // by a frame in flight, and mutating it underneath would tear
+            // the image being scanned out. `Arc::get_mut` returning None is
+            // the honest signal to fall back to a fresh copy rather than a
+            // reason to reach for unsafe.
+            let key = buffer.id();
+            let reused = self.shm_cache.get_mut(&key).and_then(|tex| {
+                let same = tex.width == width_u32
+                    && tex.height == height_u32
+                    && tex.stride == stride
+                    && tex.format == fourcc
+                    && tex.data.len() == bytes.len();
+                if !same || damage.is_empty() {
+                    return None;
+                }
+                let buf = Arc::get_mut(&mut tex.data)?;
+                for d in damage {
+                    let y0 = usize::try_from(d.loc.y.max(0)).unwrap_or(0).min(height);
+                    let y1 = usize::try_from((d.loc.y + d.size.h).max(0))
+                        .unwrap_or(0)
+                        .min(height);
+                    let x0 = usize::try_from(d.loc.x.max(0)).unwrap_or(0);
+                    let x1 = usize::try_from((d.loc.x + d.size.w).max(0)).unwrap_or(0);
+                    let (x0, x1) = (x0 * 4, (x1 * 4).min(stride));
+                    if x1 <= x0 {
+                        continue;
+                    }
+                    for y in y0..y1 {
+                        let a = y * stride + x0;
+                        let b = y * stride + x1;
+                        if b > buf.len() || b > bytes.len() {
+                            break;
+                        }
+                        buf[a..b].copy_from_slice(&bytes[a..b]);
+                        normalise_opaque(&mut buf[a..b], fourcc);
+                    }
+                }
+                Some(tex.clone())
+            });
+            if let Some(tex) = reused {
+                return Ok(tex);
+            }
+
             let mut owned = bytes.to_vec();
             normalise_opaque(&mut owned, fourcc);
-            Ok(NuriTexture {
+            let tex = NuriTexture {
                 data: Arc::new(owned),
-                #[allow(clippy::cast_sign_loss)]
-                width: width as u32,
-                #[allow(clippy::cast_sign_loss)]
-                height: data.height as u32,
+                width: width_u32,
+                height: height_u32,
                 stride,
                 format: fourcc,
-            })
+            };
+            // Cached for the NEXT commit, which is the one that gets to copy
+            // only its damage. Bounded by how many buffers a client cycles
+            // through — a handful — because the key is the buffer's identity
+            // and a client re-uses them.
+            self.shm_cache.insert(key, tex.clone());
+            Ok(tex)
         })
         .map_err(|e| Error::Map(format!("shm pool: {e:?}")))?
     }
