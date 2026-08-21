@@ -28,6 +28,7 @@ mod handlers;
 mod introspect;
 mod input;
 mod layout;
+mod localtime;
 mod owed;
 mod state;
 mod theme;

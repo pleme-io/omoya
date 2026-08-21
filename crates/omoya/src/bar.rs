@@ -31,7 +31,71 @@ use irodori::NORD;
 pub const HEIGHT: i32 = 28;
 
 /// The point size the bar's text is rasterized at.
-const FONT_PX: f32 = 14.0;
+///
+/// ★ 13, NOT 14, AND THE RATIO IS THE REASON. Bar type is judged by its size
+/// RELATIVE to the strip, not absolutely: 13/28 = 0.46 sits in the middle of
+/// the band every well-regarded bar lands in (Waybar 30px/13, omarchy 26/12,
+/// yambar 26/12 — all 0.43–0.50). At 14 the ratio is 0.50, right at the top
+/// of the band, which is what made the strip read as cramped rather than as
+/// typeset.
+const FONT_PX: f32 = 13.0;
+
+/// The horizontal inset from either screen edge.
+///
+/// On the fleet's 4 px grid (`ishou_tokens::Spacing::px_3`). It was 10, which
+/// is off-grid — one of the reasons the strip read as assembled rather than
+/// designed.
+const PAD: f32 = 12.0;
+
+/// The gutter between items inside one group. `Spacing::px_2`.
+const GUTTER: f32 = 8.0;
+
+/// A parcel cell's side, and the slot it occupies.
+const CELL: f32 = 20.0;
+
+// ── ROLES, NOT BAND INDEXES ──────────────────────────────────────────────
+//
+// ★ Every colour below is named for the JOB it does. A band index at a call
+// site is how `frost[2]` (nord9, Nord's *recessive* frost) ended up as this
+// seat's accent for months — 1.35:1 from the real accent, so it never read as
+// a mistake, only as a duller desktop.
+//
+// The names read backwards from the palette on purpose: nord6 is Nord's
+// "text that must be noticed", not its body face. Body is nord4 at 7.45:1 on
+// the bar's ground; nord6 at 8.73:1 is emphasis. Hierarchy runs
+// muted → emphasis, never emphasis → dim.
+
+/// The bar's own plane. One rung above the desktop ground.
+fn role_surface() -> irodori::Color {
+    NORD.polar_night[1] // nord1
+}
+
+/// Body text. Everything the operator reads by default.
+fn role_text_muted() -> irodori::Color {
+    NORD.snow_storm[0] // nord4 — 7.45:1 on surface
+}
+
+/// Emphasis. The one item in a group that has focus.
+fn role_text() -> irodori::Color {
+    NORD.snow_storm[2] // nord6 — 8.73:1 on surface
+}
+
+/// Structural hairlines and empty marks. **Never a label that must be read**
+/// — 1.36:1 on the bar's ground is legible in a screenshot and gone in
+/// daylight.
+fn role_text_dim() -> irodori::Color {
+    NORD.polar_night[3] // nord3
+}
+
+/// The accent. Means "here", and nothing else, and appears at most twice.
+fn role_primary() -> irodori::Color {
+    NORD.frost[1] // nord8
+}
+
+/// An honest degraded state — used when the seat cannot resolve a timezone.
+fn role_warning() -> irodori::Color {
+    NORD.aurora[2] // nord13
+}
 
 /// The fleet's monospace face, found on disk rather than embedded.
 ///
@@ -96,11 +160,11 @@ fn font_bytes() -> Option<&'static [u8]> {
         ];
         for want in WANTED {
             for root in &roots {
-                if let Some(p) = find_file(root, want) {
-                    if let Ok(b) = std::fs::read(&p) {
-                        tracing::info!(path = %p.display(), "bar font");
-                        return Some(b);
-                    }
+                if let Some(p) = find_file(root, want)
+                    && let Ok(b) = std::fs::read(&p)
+                {
+                    tracing::info!(path = %p.display(), "bar font");
+                    return Some(b);
                 }
             }
         }
@@ -137,11 +201,117 @@ fn find_file(dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
     walk(dir, name, 6)
 }
 
-/// What the bar says. Compared to decide whether to re-rasterize.
-#[derive(Clone, PartialEq, Eq, Debug, Default)]
-pub struct BarText {
-    pub left: String,
-    pub right: String,
+/// What the bar shows. A VALUE, compared for equality to decide whether the
+/// strip needs re-rasterizing at all.
+///
+/// ★ Deliberately not `{ left: String, right: String }`. That shape forced the
+/// caller to decide typography — where a separator goes, how many spaces —
+/// and it is why the strip said `" wayland-1"` and `"3 windows   14:22 UTC"`:
+/// a socket name that already lives in `introspect`, a count you can get by
+/// looking at the screen, and a timezone admission dressed as information.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct BarState {
+    /// One entry per parcel on this output, in layout order. `true` marks the
+    /// focused one — at most one may be true.
+    pub parcels: Vec<bool>,
+    /// `HH:MM`. Local time; see [`Clock`].
+    pub clock: Clock,
+}
+
+/// The clock, and whether it is telling the truth about its zone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Clock {
+    /// Local time resolved. Renders in `text_muted`.
+    Local(String),
+    /// No timezone could be resolved, so this is UTC and SAYS so, in
+    /// `warning`. An honest degraded state — a seat that silently shows UTC
+    /// as if it were local is lying at a glance.
+    UtcFallback(String),
+}
+
+impl Default for Clock {
+    fn default() -> Self {
+        Self::Local(String::from("00:00"))
+    }
+}
+
+impl Clock {
+    fn text(&self) -> &str {
+        match self {
+            Self::Local(s) | Self::UtcFallback(s) => s,
+        }
+    }
+    fn colour(&self) -> irodori::Color {
+        match self {
+            Self::Local(_) => role_text_muted(),
+            Self::UtcFallback(_) => role_warning(),
+        }
+    }
+}
+
+/// Coverage → blended byte, per (background, foreground) pair.
+///
+/// ★ THE BLEND WAS WRONG, AND IT WAS WRONG IN THE DIRECTION THAT LOOKS LIKE A
+/// FONT PROBLEM. Glyph coverage is a LINEAR quantity; the bytes in the buffer
+/// are sRGB. The old code did `dst*(1-a) + src*a` directly on sRGB bytes, so
+/// for this palette a requested coverage of 0.25 was *seen* as 0.125 — half
+/// of it — and 0.5 was seen as 0.327. On a dark ground the error is always
+/// toward too dark, so antialiased stems render starved and the strip reads
+/// as "the font is too thin". The usual fix is a heavier weight, which is
+/// treating the symptom.
+///
+/// Because both endpoints are compile-time role constants, correctness here
+/// is also strictly FASTER than what it replaces: the whole per-pixel blend
+/// collapses to three array lookups, no float math at all.
+struct Blend {
+    b: [u8; 256],
+    g: [u8; 256],
+    r: [u8; 256],
+}
+
+impl Blend {
+    fn new(bg: irodori::Color, fg: irodori::Color) -> Self {
+        let chan = |from: u8, to: u8| -> [u8; 256] {
+            let mut t = [0u8; 256];
+            let (lo, hi) = (srgb_to_linear(from), srgb_to_linear(to));
+            for (a, slot) in t.iter_mut().enumerate() {
+                #[allow(clippy::cast_precision_loss)]
+                let cov = a as f32 / 255.0;
+                *slot = linear_to_srgb(lo + (hi - lo) * cov);
+            }
+            t
+        };
+        Self {
+            b: chan(bg.b, fg.b),
+            g: chan(bg.g, fg.g),
+            r: chan(bg.r, fg.r),
+        }
+    }
+}
+
+/// sRGB byte → linear float. The piecewise IEC 61966-2-1 curve, not a bare
+/// 2.2 power — they differ by up to 3% near black, which is precisely where
+/// antialiased text on a dark ground lives.
+fn srgb_to_linear(c: u8) -> f32 {
+    let v = f32::from(c) / 255.0;
+    if v <= 0.040_45 {
+        v / 12.92
+    } else {
+        ((v + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn linear_to_srgb(v: f32) -> u8 {
+    let v = v.clamp(0.0, 1.0);
+    let s = if v <= 0.003_130_8 {
+        v * 12.92
+    } else {
+        1.055 * v.powf(1.0 / 2.4) - 0.055
+    };
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    {
+        (s * 255.0).round().clamp(0.0, 255.0) as u8
+    }
 }
 
 /// Rasterize the bar to a premultiplied ARGB8888 buffer, `width` x [`HEIGHT`].
@@ -149,15 +319,12 @@ pub struct BarText {
 /// Returns `None` when there is no font — a bar that cannot draw text should
 /// be absent, not a blank stripe that looks like a rendering bug.
 #[must_use]
-pub fn rasterize(text: &BarText, width: i32) -> Option<Vec<u8>> {
-    let font_data = font_bytes()?;
-    let font = fontdue::Font::from_bytes(font_data, fontdue::FontSettings::default()).ok()?;
+pub fn rasterize(state: &BarState, width: i32) -> Option<Vec<u8>> {
+    let font = font()?;
 
     let w = usize::try_from(width).ok()?;
     let h = usize::try_from(HEIGHT).ok()?;
-    let bg = NORD.polar_night[1];
-    let fg = NORD.snow_storm[1];
-    let accent = NORD.frost[2];
+    let bg = role_surface();
 
     // ARGB8888 little-endian is B,G,R,A in memory order.
     let mut buf = vec![0u8; w * h * 4];
@@ -168,29 +335,121 @@ pub fn rasterize(text: &BarText, width: i32) -> Option<Vec<u8>> {
         px[3] = 0xff;
     }
 
-    // A single accent line along the bottom edge — the one piece of chrome
-    // that says "this is a bar" rather than "the background is a bit lighter
-    // up here".
+    // ── The bottom edge: a hairline, not an accent stripe ────────────────
+    //
+    // ★ A full-width accent line spends the seat's ONE accent on a decoration
+    // that is always present and therefore says nothing. `primary` has to mean
+    // "here"; a 1920 px band of it at all times means "bar", which the
+    // luminance step already said. So: a 1 px `text_dim` hairline terminates
+    // the plane (the fill step alone cannot — nord1→nord0 is 1.24:1, below
+    // every perceptual floor), and `primary` is spent under the focused
+    // parcel only.
+    let hair = role_text_dim();
     for x in 0..w {
         let o = ((h - 1) * w + x) * 4;
-        buf[o] = accent.b;
-        buf[o + 1] = accent.g;
-        buf[o + 2] = accent.r;
+        buf[o] = hair.b;
+        buf[o + 1] = hair.g;
+        buf[o + 2] = hair.r;
         buf[o + 3] = 0xff;
     }
 
-    let pad = 10_usize;
-    draw_text(&mut buf, w, h, &font, &text.left, pad, fg);
-    let right_w = measure(&font, &text.right);
-    let right_x = w.saturating_sub(right_w + pad);
-    draw_text(&mut buf, w, h, &font, &text.right, right_x, fg);
+    // ── Left: one cell per parcel ────────────────────────────────────────
+    let muted = Blend::new(bg, role_text_muted());
+    let bright = Blend::new(bg, role_text());
+    let mut x = PAD;
+    for (idx, focused) in state.parcels.iter().take(9).enumerate() {
+        let digit = char::from(b'1' + u8::try_from(idx).unwrap_or(8));
+        let blend = if *focused { &bright } else { &muted };
+        // Centre the digit in its cell so the row is a rhythm of fixed slots
+        // rather than a string whose length depends on its content.
+        let adv = font.metrics(digit, FONT_PX).advance_width;
+        draw_glyph(&mut buf, w, h, font, digit, x + (CELL - adv) / 2.0, blend);
+        if *focused {
+            // The accent, spent here and nowhere else: a 2 px underline the
+            // width of the cell, sitting on the hairline.
+            let p = role_primary();
+            underline(&mut buf, w, h, x, CELL, p);
+        }
+        x += CELL + GUTTER;
+    }
+
+    // ── Centre: the clock, centred on the SCREEN ─────────────────────────
+    //
+    // ★ Screen-centred, not flex-centred between the groups. A clock centred
+    // in the space left over drifts a few pixels every time a parcel appears
+    // or leaves; screen-centred, it is the only element on the desktop with a
+    // permanently constant rect — which also makes it the cheapest thing to
+    // redraw when only the minute has changed.
+    //
+    // Snapped to an even pixel, or the same string rasterizes to two
+    // different bitmaps at two sub-pixel offsets and defeats the
+    // "re-rasterize only when the text changed" rule entirely.
+    let clock = state.clock.text();
+    let cw = measure(font, clock);
+    #[allow(clippy::cast_precision_loss)]
+    let centre = ((w as f32 - cw) / 2.0 / 2.0).round() * 2.0;
+    let clock_blend = Blend::new(bg, state.clock.colour());
+    draw_text(&mut buf, w, h, font, clock, centre, &clock_blend);
+
+    // ── Right: deliberately empty ────────────────────────────────────────
+    // Nothing earns this space yet. It fills when the system has something to
+    // say (§2.5: state colours, as (fg, bg) pairs).
+
     Some(buf)
 }
 
-fn measure(font: &fontdue::Font, s: &str) -> usize {
-    s.chars()
-        .map(|c| font.metrics(c, FONT_PX).advance_width as usize)
-        .sum()
+/// The parsed face, kept for the process's life.
+///
+/// ★ Hoisted out of `rasterize`. `Font::from_bytes` re-parsed the whole file
+/// on every call — which is once a minute now, and was once a frame before
+/// the damage gate landed.
+fn font() -> Option<&'static fontdue::Font> {
+    static PARSED: OnceLock<Option<fontdue::Font>> = OnceLock::new();
+    PARSED
+        .get_or_init(|| {
+            let bytes = font_bytes()?;
+            fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default()).ok()
+        })
+        .as_ref()
+}
+
+/// The baseline, derived from the face's own metrics rather than guessed.
+///
+/// ★ Was `h/2 + FONT_PX * 0.35`. That 0.35 is a guess that happens to look
+/// right for one face at one size; change either and the text sits visibly
+/// off-centre. `horizontal_line_metrics` gives the real ascent and descent,
+/// so the ink box is centred by construction and the value survives a font
+/// change.
+fn baseline(font: &fontdue::Font, h: usize) -> f32 {
+    #[allow(clippy::cast_precision_loss)]
+    let h = h as f32;
+    font.horizontal_line_metrics(FONT_PX).map_or(
+        h / 2.0 + FONT_PX * 0.35,
+        |m| {
+            // ascent is positive up, descent negative down.
+            let ink = m.ascent - m.descent;
+            (h - ink) / 2.0 + m.ascent
+        },
+    )
+}
+
+fn measure(font: &fontdue::Font, s: &str) -> f32 {
+    s.chars().map(|c| font.metrics(c, FONT_PX).advance_width).sum()
+}
+
+/// A 2 px underline in the accent, sitting on the bottom hairline.
+fn underline(buf: &mut [u8], w: usize, h: usize, x: f32, width: f32, c: irodori::Color) {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let (x0, x1) = (x.round() as usize, (x + width).round() as usize);
+    for y in h.saturating_sub(3)..h.saturating_sub(1) {
+        for px in x0..x1.min(w) {
+            let o = (y * w + px) * 4;
+            buf[o] = c.b;
+            buf[o + 1] = c.g;
+            buf[o + 2] = c.r;
+            buf[o + 3] = 0xff;
+        }
+    }
 }
 
 fn draw_text(
@@ -199,40 +458,54 @@ fn draw_text(
     h: usize,
     font: &fontdue::Font,
     s: &str,
-    start_x: usize,
-    fg: irodori::Color,
+    start_x: f32,
+    blend: &Blend,
 ) {
-    // Baseline: centre the face vertically. `HEIGHT` is chosen so a 14px face
-    // has room, and the ascent is where the glyph's top sits relative to it.
-    let baseline = (h as f32 / 2.0 + FONT_PX * 0.35) as usize;
+    // ★ AN f32 PEN, ROUNDED ONLY AT THE WRITE. The old pen was a `usize` and
+    // truncated `advance_width` on every character, so a face whose advance is
+    // 7.8 px lost 0.8 px per glyph and the string crept left — visibly uneven
+    // spacing that reads as a bad font rather than as accumulated truncation.
     let mut pen = start_x;
     for ch in s.chars() {
-        let (metrics, bitmap) = font.rasterize(ch, FONT_PX);
-        for gy in 0..metrics.height {
-            for gx in 0..metrics.width {
-                let cov = bitmap[gy * metrics.width + gx];
-                if cov == 0 {
-                    continue;
-                }
-                let px = pen as i64 + metrics.xmin as i64 + gx as i64;
-                let py = baseline as i64 - metrics.ymin as i64 - metrics.height as i64 + gy as i64;
-                if px < 0 || py < 0 || px >= w as i64 || py >= h as i64 {
-                    continue;
-                }
-                let o = (py as usize * w + px as usize) * 4;
-                // Blend the glyph's coverage over whatever is already there,
-                // so text over the accent line does not punch a hole in it.
-                let a = f32::from(cov) / 255.0;
-                let mix = |dst: u8, src: u8| -> u8 {
-                    (f32::from(dst) * (1.0 - a) + f32::from(src) * a) as u8
-                };
-                buf[o] = mix(buf[o], fg.b);
-                buf[o + 1] = mix(buf[o + 1], fg.g);
-                buf[o + 2] = mix(buf[o + 2], fg.r);
-                buf[o + 3] = 0xff;
+        draw_glyph(buf, w, h, font, ch, pen, blend);
+        pen += font.metrics(ch, FONT_PX).advance_width;
+    }
+}
+
+fn draw_glyph(
+    buf: &mut [u8],
+    w: usize,
+    h: usize,
+    font: &fontdue::Font,
+    ch: char,
+    pen: f32,
+    blend: &Blend,
+) {
+    let (metrics, bitmap) = font.rasterize(ch, FONT_PX);
+    let base = baseline(font, h);
+    #[allow(clippy::cast_possible_truncation)]
+    let pen_i = pen.round() as i64;
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let base_i = base.round() as i64;
+    for gy in 0..metrics.height {
+        for gx in 0..metrics.width {
+            let cov = bitmap[gy * metrics.width + gx];
+            if cov == 0 {
+                continue;
             }
+            let px = pen_i + metrics.xmin as i64 + gx as i64;
+            let py = base_i - metrics.ymin as i64 - metrics.height as i64 + gy as i64;
+            if px < 0 || py < 0 || px >= w as i64 || py >= h as i64 {
+                continue;
+            }
+            #[allow(clippy::cast_sign_loss)]
+            let o = (py as usize * w + px as usize) * 4;
+            let a = usize::from(cov);
+            buf[o] = blend.b[a];
+            buf[o + 1] = blend.g[a];
+            buf[o + 2] = blend.r[a];
+            buf[o + 3] = 0xff;
         }
-        pen += font.metrics(ch, FONT_PX).advance_width as usize;
     }
 }
 
@@ -240,33 +513,134 @@ fn draw_text(
 mod tests {
     use super::*;
 
+    fn state(n: usize, focused: Option<usize>) -> BarState {
+        BarState {
+            parcels: (0..n).map(|i| Some(i) == focused).collect(),
+            clock: Clock::Local("14:22".into()),
+        }
+    }
+
     #[test]
     fn the_bar_is_absent_without_a_font_rather_than_blank() {
         // `rasterize` returns None when no font is found. A blank stripe would
         // look like a rendering bug; absence looks like what it is.
-        let t = BarText {
-            left: "x".into(),
-            right: "y".into(),
-        };
+        //
         // On a machine WITH fonts this yields a buffer of the right size; on
         // one without, None. Both are correct — what must never happen is a
         // wrongly-sized buffer, which would be read as a corrupt frame.
-        if let Some(b) = rasterize(&t, 200) {
+        if let Some(b) = rasterize(&state(2, Some(0)), 200) {
             assert_eq!(b.len(), 200 * HEIGHT as usize * 4);
         }
     }
 
     #[test]
-    fn text_that_does_not_fit_is_clipped_not_wrapped() {
-        // Every write is bounds-checked against w/h, so a long string cannot
-        // scribble outside the buffer. This pins that the buffer size is a
-        // function of the requested width alone.
-        let t = BarText {
-            left: "a very long left side that will certainly not fit".into(),
-            right: "and a right side too".into(),
-        };
-        if let Some(b) = rasterize(&t, 120) {
+    fn content_that_does_not_fit_is_clipped_not_wrapped() {
+        // Every write is bounds-checked against w/h, so more parcels than fit
+        // cannot scribble outside the buffer. This pins that the buffer size
+        // is a function of the requested width ALONE.
+        if let Some(b) = rasterize(&state(9, Some(8)), 120) {
             assert_eq!(b.len(), 120 * HEIGHT as usize * 4);
         }
+    }
+
+    #[test]
+    fn the_accent_appears_only_when_something_has_focus() {
+        // ★ THE ONE-ACCENT RULE, ASSERTED IN PIXELS. `primary` means "here".
+        // If it shows up on a seat where nothing is focused, it means nothing.
+        let Some(with) = rasterize(&state(3, Some(1)), 400) else {
+            return; // no font on this machine; the size tests cover the rest
+        };
+        let Some(without) = rasterize(&state(3, None), 400) else {
+            return;
+        };
+        let p = role_primary();
+        let count = |buf: &[u8]| {
+            buf.chunks_exact(4)
+                .filter(|px| px[0] == p.b && px[1] == p.g && px[2] == p.r)
+                .count()
+        };
+        assert!(
+            count(&with) > 0,
+            "a focused parcel must draw the accent underline"
+        );
+        assert_eq!(
+            count(&without),
+            0,
+            "with nothing focused the accent must not appear anywhere — \
+             an always-present accent is decoration, not information"
+        );
+    }
+
+    #[test]
+    fn the_bar_is_opaque_everywhere() {
+        // The strip is a plane, not a translucent overlay. A stray alpha byte
+        // would blend the desktop through it and read as a compositing bug.
+        if let Some(b) = rasterize(&state(2, Some(0)), 200) {
+            assert!(
+                b.chunks_exact(4).all(|px| px[3] == 0xff),
+                "every bar pixel must be fully opaque"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unresolved_zone_is_said_out_loud_not_silently_rendered_as_local() {
+        // ★ A clock three hours out is worse than no clock, because it gets
+        // consulted rather than ignored. The UTC fallback must be visually
+        // DIFFERENT, not merely differently labelled — the label is four
+        // characters at 13px on a 1920px strip.
+        let local = BarState {
+            parcels: vec![false],
+            clock: Clock::Local("14:22".into()),
+        };
+        let utc = BarState {
+            parcels: vec![false],
+            clock: Clock::UtcFallback("17:22 UTC".into()),
+        };
+        assert_ne!(local.clock.colour(), utc.clock.colour());
+        assert_eq!(utc.clock.colour(), role_warning());
+        let (Some(a), Some(b)) = (rasterize(&local, 400), rasterize(&utc, 400)) else {
+            return;
+        };
+        assert_ne!(a, b, "the two clock states must not rasterize identically");
+    }
+
+    #[test]
+    fn the_blend_is_gamma_correct_at_half_coverage() {
+        // ★ THE BUG THIS REPLACES, IN ITS OWN UNITS. Blending coverage on raw
+        // sRGB bytes is wrong in the dark direction: for this palette a
+        // requested 0.5 was *seen* as 0.327. Assert the midpoint lands where
+        // linear-light says it should, not where a naive byte lerp would.
+        let bg = role_surface();
+        let fg = role_text_muted();
+        let blend = Blend::new(bg, fg);
+        let naive = |a: u8, b: u8| ((f32::from(a) + f32::from(b)) / 2.0).round() as u8;
+        let mid = blend.g[128];
+        assert_ne!(
+            mid,
+            naive(bg.g, fg.g),
+            "a gamma-correct midpoint must differ from the byte average — \
+             equal means the LUT collapsed back to the naive blend"
+        );
+        // And it must be BRIGHTER than the naive answer on a dark ground,
+        // which is the whole perceptual point.
+        assert!(
+            mid > naive(bg.g, fg.g),
+            "on a dark ground the correct midpoint is lighter than the byte \
+             average; got {mid} vs {}",
+            naive(bg.g, fg.g)
+        );
+        // Endpoints must still be exact.
+        assert_eq!(blend.g[0], bg.g, "zero coverage is the background");
+        assert_eq!(blend.g[255], fg.g, "full coverage is the foreground");
+    }
+
+    #[test]
+    fn the_face_is_parsed_once() {
+        // The parse was inside `rasterize`, so it re-read the whole font file
+        // on every call — once a frame, before the damage gate landed.
+        let a = font().map(std::ptr::from_ref);
+        let b = font().map(std::ptr::from_ref);
+        assert_eq!(a, b, "font() must hand back the same parsed face");
     }
 }

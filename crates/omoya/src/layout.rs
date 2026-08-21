@@ -32,9 +32,23 @@ use smithay::utils::{Logical, Rectangle};
 /// ★ NOT DECORATION — it is what makes a border VISIBLE and a tiling layout
 /// legible. With windows flush against each other there is nowhere to draw a
 /// focus indicator and no visual seam, so a two-window split reads as one
-/// confusing surface. 8px is enough to see and small enough not to waste a
-/// panel.
-pub const GAP: i32 = 8;
+/// confusing surface.
+///
+/// ★ 4, NOT 8, AND THE REASON IS THAT GAPS COMPOUND. This is a per-window
+/// inset, so the space BETWEEN two adjacent windows is 2×GAP. At 8 that was
+/// 16 px of empty ground down the middle of a 1080p screen — the single
+/// loudest "this is a rice" tell, and the one that reads as wasted panel
+/// rather than as breathing room. At 4 the seam is 8 px: unmistakable, and
+/// quiet.
+///
+/// The floor is set by the border, not by taste: `GAP >= BORDER * 2`, or two
+/// focused neighbours' rings would touch. 4 sits exactly on that floor, which
+/// is why it is the smallest honest value and not merely a smaller one.
+///
+/// Part of `shitsurai` (設え), the seat's visual design — see
+/// `docs/SHITSURAI.md`. Distances there come from a 4 px grid; a 7 or a 13
+/// in a layout expression is a defect.
+pub const GAP: i32 = 4;
 
 /// How thick the focused window's border is.
 ///
@@ -502,6 +516,26 @@ mod tests {
     /// Gaps must not make windows overlap — the inset shrinks each parcel,
     /// so disjointness is preserved by construction, and this pins it.
     #[test]
+    #[test]
+    fn the_gap_is_at_least_two_borders_wide() {
+        // ★ THE FLOOR IS THE BORDER, NOT TASTE. GAP is a per-window inset, so
+        // two adjacent windows are separated by 2*GAP, and each may draw a
+        // BORDER-thick focus ring inside its own inset. Below 2*BORDER the two
+        // rings would touch and a split would read as one framed surface —
+        // which is the exact confusion GAP exists to prevent.
+        //
+        // shitsurai puts GAP at 4 and BORDER at 2, i.e. EXACTLY on this floor.
+        // That makes it the smallest honest value rather than merely a small
+        // one, and it means any future "let's tighten the gaps a bit more"
+        // fails here instead of silently producing touching rings.
+        assert!(
+            GAP >= BORDER * 2,
+            "GAP ({GAP}) must be at least 2*BORDER ({}) or two focused \
+             neighbours' rings meet in the middle",
+            BORDER * 2
+        );
+    }
+
     fn the_gap_separates_rather_than_overlaps() {
         // Two 960-wide halves of a 1920 screen, each inset by GAP.
         let half = 960;

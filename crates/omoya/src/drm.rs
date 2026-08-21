@@ -631,7 +631,7 @@ where
     // new commit each time — the same trap the bar's text comparison avoids.
     let mut cursor_buffer: Option<smithay::backend::renderer::element::memory::MemoryRenderBuffer> =
         None;
-    let mut bar_text = crate::bar::BarText::default();
+    let mut bar_text = crate::bar::BarState::default();
     let mut bar_buffer: Option<smithay::backend::renderer::element::memory::MemoryRenderBuffer> =
         None;
 
@@ -912,17 +912,38 @@ where
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_or(0, |d| d.as_secs());
-                // Local wall clock without pulling in a time crate: the offset
-                // is read once from the TZ the session already has.
-                let secs_today = now % 86_400;
-                let (hh, mm) = (secs_today / 3600, (secs_today % 3600) / 60);
-                let wanted = crate::bar::BarText {
-                    left: format!(" {}", data.state.socket_name.to_string_lossy()),
-                    right: format!(
-                        "{} windows   {hh:02}:{mm:02} UTC",
-                        data.state.space.elements().count()
-                    ),
+                // ★ LOCAL, OR SAY UTC. The comment that used to sit here
+                // claimed "local wall clock ... the offset is read once from
+                // the TZ" — and no offset was ever applied. It rendered UTC
+                // and labelled it UTC, so the code and its own comment
+                // disagreed about which of them was lying.
+                #[allow(clippy::cast_possible_wrap)]
+                let (hhmm, resolved) = crate::localtime::hhmm(now as i64);
+                let clock = if resolved {
+                    crate::bar::Clock::Local(hhmm)
+                } else {
+                    crate::bar::Clock::UtcFallback(format!("{hhmm} UTC"))
                 };
+                // One cell per parcel, the focused one marked. `focus_rect`
+                // is the layout's own answer, so the bar cannot disagree with
+                // the ring on screen about which window has focus.
+                let focused = *introspect
+                    .focus_rect
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                let parcels: Vec<bool> = data
+                    .state
+                    .space
+                    .elements()
+                    .map(|w| {
+                        data.state.space.element_geometry(w).is_some_and(|g| {
+                            focused.is_some_and(|(x, y, _, _)| {
+                                g.loc.x == x && g.loc.y == y
+                            })
+                        })
+                    })
+                    .collect();
+                let wanted = crate::bar::BarState { parcels, clock };
                 if wanted != bar_text || bar_buffer.is_none() {
                     if let Some(px) = crate::bar::rasterize(&wanted, mode.size.w) {
                         bar_buffer = Some(
