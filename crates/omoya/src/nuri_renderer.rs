@@ -57,7 +57,20 @@ pub enum Error {
 /// frame — copies a pointer rather than an image.
 #[derive(Debug, Clone)]
 pub struct NuriTexture {
-    data: Arc<Vec<u8>>,
+    /// ★ `RwLock`, NOT A BARE `Arc<Vec<u8>>`, AND THE REASON IS MEASURED.
+    ///
+    /// The damage-only import needs to write into the cached allocation. With
+    /// a bare `Arc` that requires `Arc::get_mut`, which returns `None`
+    /// whenever anyone else holds a clone — and smithay ALWAYS does: it
+    /// caches the imported texture per surface and keeps it across frames.
+    /// So the incremental path silently never engaged and every commit fell
+    /// back to copying the client's whole 8 MB buffer. Measured after that
+    /// "fix": 99% CPU and 1.4 fps, exactly as before it.
+    ///
+    /// The lock is taken ONCE PER TEXTURE PER FRAME — at the top of a blit,
+    /// not per pixel — so it costs nothing measurable against the copy it
+    /// makes unnecessary.
+    data: Arc<std::sync::RwLock<Vec<u8>>>,
     width: u32,
     height: u32,
     stride: usize,
@@ -362,8 +375,13 @@ impl Frame for NuriFrame<'_, '_> {
         src_transform: Transform,
         alpha: f32,
     ) -> Result<(), Self::Error> {
+        // Held for the blit only. See `NuriTexture::data`.
+        let guard = texture
+            .data
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let src_ref = nuri::SurfaceRef::new(
-            &texture.data,
+            &guard,
             i32::try_from(texture.width).unwrap_or(i32::MAX),
             i32::try_from(texture.height).unwrap_or(i32::MAX),
             texture.stride,
@@ -485,7 +503,7 @@ impl ImportMem for NuriRenderer {
         let mut owned = data.to_vec();
         normalise_opaque(&mut owned, format);
         Ok(NuriTexture {
-            data: Arc::new(owned),
+            data: Arc::new(std::sync::RwLock::new(owned)),
             width: w,
             height: h,
             stride,
@@ -594,11 +612,14 @@ impl ImportMemWl for NuriRenderer {
                     && tex.height == height_u32
                     && tex.stride == stride
                     && tex.format == fourcc
-                    && tex.data.len() == bytes.len();
+                    && tex.data.read().map(|d| d.len()).unwrap_or(0) == bytes.len();
                 if !same || damage.is_empty() {
                     return None;
                 }
-                let buf = Arc::get_mut(&mut tex.data)?;
+                let mut buf = tex
+                    .data
+                    .write()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 for d in damage {
                     let y0 = usize::try_from(d.loc.y.max(0)).unwrap_or(0).min(height);
                     let y1 = usize::try_from((d.loc.y + d.size.h).max(0))
@@ -1044,8 +1065,13 @@ impl smithay::backend::renderer::ExportMem for NuriRenderer {
         region: Rectangle<i32, BufferCoord>,
         format: Fourcc,
     ) -> Result<Self::TextureMapping, Self::Error> {
+        // Held for the copy only. See `NuriTexture::data`.
+        let guard = texture
+            .data
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         copy_region(
-            &texture.data,
+            &guard,
             texture.stride,
             i32::try_from(texture.width).unwrap_or(i32::MAX),
             i32::try_from(texture.height).unwrap_or(i32::MAX),
