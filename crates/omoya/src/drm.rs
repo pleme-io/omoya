@@ -60,6 +60,7 @@ use smithay::{
             // typo rather than as a grammar limit. The bound must be one
             // identifier, so the trait comes into scope here.
             ImportAll,
+            ImportMem,
             damage::OutputDamageTracker,
         },
     },
@@ -318,7 +319,7 @@ const CURSOR_SIZE: i32 = 12;
 // moves and otherwise never changes is exactly what the marking is for.
 smithay::backend::renderer::element::render_elements! {
     /// Everything the seat composites: client surfaces and our own pointer.
-    pub SeatElements<R, E> where R: ImportAll;
+    pub SeatElements<R, E> where R: ImportAll + ImportMem;
     /// A client surface, as `Space` laid it out.
     Space = smithay::desktop::space::SpaceRenderElements<R, E>,
     /// omoya's own pointer — see `CURSOR_SIZE`.
@@ -471,7 +472,7 @@ where
         // so this costs the shipping path nothing; it excludes a future
         // renderer that cannot take raw memory, which is the same class of
         // constraint as `ExportMem` below and stated for the same reason.
-        + smithay::backend::renderer::ImportMem
+        + ImportMem
         + smithay::backend::renderer::Bind<smithay::backend::allocator::dmabuf::Dmabuf>
         // ★ `ExportMem` so the seat can be SCREENSHOT. This is a real
         // constraint on what may drive this loop, and it is the right one: a
