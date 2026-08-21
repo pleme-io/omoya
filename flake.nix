@@ -42,6 +42,32 @@
         # the builder's "defaults to single member" path has nothing to default
         # to and picks wrong.
         member = "omoya";
+        # ★ NOT A GUI CRATE — and this is the one place in the fleet where
+        # that has to be said out loud rather than derived.
+        #
+        # substrate reads `Cargo.lock` to decide whether a crate needs a window
+        # system at runtime (gui-detect.nix), and a lock is FEATURE-BLIND: it
+        # records the union of every optional dependency any feature could turn
+        # on. omoya's `nested` backend pulls winit for developing on a machine
+        # that already has a session, so the closure contains winit and the
+        # detector says GUI.
+        #
+        # The shipped binary does not. Measured on rio, on the artifact rather
+        # than the wrapper:
+        #
+        #   $ ldd .../rust_omoya-0.1.41/bin/omoya
+        #     linux-vdso  libgcc_s  libm  libc  ld-linux
+        #
+        # Nothing else — omoya's whole naturalization was removing libwayland,
+        # libinput, libseat and libpixman, and it reached pure-Rust drm, evdev
+        # and logind-over-D-Bus. Letting the derivation stand would wrap it in
+        # an `LD_LIBRARY_PATH` for libraries it does not link and drag five C
+        # libraries back into a closure that deliberately shed them — undoing
+        # the measurement this repo exists to hold.
+        #
+        # So: `false`, with the ldd above as its warrant. Re-measure before
+        # changing it; do not infer it from the feature list.
+        gui = false;
         # ★ EXACTLY ONE build input, and the list is measured rather than
         # guessed — it took two failed builds to get here, each narrowing it.
         #
