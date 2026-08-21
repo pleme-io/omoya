@@ -190,3 +190,37 @@ mod tests {
         assert!(b > r, "Nord0 is a cool grey — blue leads red");
     }
 }
+
+/// The focused window's border, in whichever encoding the framebuffer needs.
+///
+/// ★ `frost[2]` — the palette's ACCENT family, not a foreground tone.
+/// A border's job is to answer "where does my typing go" at a glance, from
+/// across a room, without being read. `snow_storm` would be brighter but is
+/// the TEXT colour, so a border in it competes with the content it frames;
+/// `polar_night` would be tasteful and invisible against the background.
+/// Frost is the family Nord reserves for accent precisely so that a UI has
+/// somewhere to put "this one".
+///
+/// Takes the same `format_is_srgb` flag as its siblings and for the same
+/// measured reason — see [`background_for_surface`]. On a border the failure
+/// is the cursor's, in miniature: a border too dark to see is a border that
+/// is not there.
+#[must_use]
+pub fn focus_border_for_surface(format_is_srgb: bool) -> [f32; 4] {
+    let c = NORD.frost[2];
+    if format_is_srgb {
+        [
+            f32::from(c.r) / 255.0,
+            f32::from(c.g) / 255.0,
+            f32::from(c.b) / 255.0,
+            1.0,
+        ]
+    } else {
+        [
+            srgb_to_linear(c.r),
+            srgb_to_linear(c.g),
+            srgb_to_linear(c.b),
+            1.0,
+        ]
+    }
+}

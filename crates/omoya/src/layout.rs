@@ -26,6 +26,23 @@ use kukaku::{Direction, LayoutNode, LeafRemoval, Rect, SplitOrientation};
 use smithay::desktop::Window;
 use smithay::utils::{Logical, Rectangle};
 
+/// The space left between tiled windows, and between a window and the screen
+/// edge, in logical pixels.
+///
+/// ★ NOT DECORATION — it is what makes a border VISIBLE and a tiling layout
+/// legible. With windows flush against each other there is nowhere to draw a
+/// focus indicator and no visual seam, so a two-window split reads as one
+/// confusing surface. 8px is enough to see and small enough not to waste a
+/// panel.
+pub const GAP: i32 = 8;
+
+/// How thick the focused window's border is.
+///
+/// Drawn in the GAP, so it costs no window area — a border that shrank the
+/// content would make focusing a window resize it, which is worse than
+/// having no border.
+pub const BORDER: i32 = 2;
+
 /// A window's identity inside the layout tree.
 ///
 /// Deliberately a plain counter and not a hash of the `Window`: smithay's
@@ -171,13 +188,21 @@ impl Tiling {
             .into_iter()
             .filter_map(|(id, r)| {
                 let w = self.windows.get(&id)?.clone();
-                Some((
-                    w,
-                    Rectangle::new(
-                        (i32::from(r.x), i32::from(r.y)).into(),
-                        (i32::from(r.w), i32::from(r.h)).into(),
-                    ),
-                ))
+                // Inset by the gap. Done HERE rather than inside kukaku on
+                // purpose: a gap is a compositor's aesthetic choice, not a
+                // property of partitioning a space, and putting it in the
+                // algebra would mean every consumer inherits one seat's taste
+                // — and that `compute_rects` no longer tiles its bounds
+                // exactly, which its own test asserts.
+                let (x, y) = (i32::from(r.x) + GAP, i32::from(r.y) + GAP);
+                // `max(1)`: a parcel narrower than two gaps would go negative
+                // and wrap. One pixel is degenerate but representable; a
+                // wrapped u32 is a window the size of the universe.
+                let (w_px, h_px) = (
+                    (i32::from(r.w) - GAP * 2).max(1),
+                    (i32::from(r.h) - GAP * 2).max(1),
+                );
+                Some((w, Rectangle::new((x, y).into(), (w_px, h_px).into())))
             })
             .collect()
     }
@@ -327,6 +352,20 @@ impl crate::state::Omoya {
             self.space.map_element(window.clone(), rect.loc, false);
         }
 
+        // Where focus is, for the border the render loop draws and for anyone
+        // who asks. Published from here because this is where geometry is
+        // decided; deriving it in the render loop would be a second source.
+        *self
+            .introspect
+            .focus_rect
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = self.tiling.focused().and_then(|f| {
+            arranged
+                .iter()
+                .find(|(w, _)| *w == f)
+                .map(|(_, r)| (r.loc.x, r.loc.y, r.size.w, r.size.h))
+        });
+
         // ★ PUBLISH WHAT `Space` HOLDS, NOT WHAT THE TREE ASKED FOR — read
         // back AFTER the writes.
         //
@@ -440,6 +479,27 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Gaps must not make windows overlap — the inset shrinks each parcel,
+    /// so disjointness is preserved by construction, and this pins it.
+    #[test]
+    fn the_gap_separates_rather_than_overlaps() {
+        // Two 960-wide halves of a 1920 screen, each inset by GAP.
+        let half = 960;
+        let left_right_edge = 0 + GAP + (half - GAP * 2);
+        let right_left_edge = half + GAP;
+        assert!(
+            left_right_edge < right_left_edge,
+            "the inset halves must leave a visible seam: {left_right_edge} \
+             then {right_left_edge}"
+        );
+        // And the seam must be wide enough for a border to sit in.
+        assert!(
+            right_left_edge - left_right_edge >= BORDER * 2,
+            "the gap must fit two borders, or a focused window's edge is \
+             drawn over its neighbour"
+        );
     }
 
     #[test]

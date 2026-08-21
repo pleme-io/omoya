@@ -90,6 +90,10 @@ pub struct OmoyaIntrospect {
     /// `apply_layout`. This is the tree's own answer, read from the same
     /// socket, so the two can be compared instead of one being inferred.
     pub layout: Mutex<Vec<String>>,
+    /// The focused window's rectangle, or empty when nothing is focused.
+    /// Read by the render loop to draw the focus border, and queryable so an
+    /// agent can ask "where is focus" without inferring it from pixels.
+    pub focus_rect: Mutex<Option<(i32, i32, i32, i32)>>,
     /// How many RENDER ELEMENTS the last frame actually had.
     ///
     /// ★ NOT THE SAME AS `windows`, AND THE GAP IS THE DIAGNOSIS. `windows`
@@ -283,6 +287,14 @@ impl Introspect for OmoyaIntrospect {
             }
             "verbs" => Ok(serde_json::json!(crate::deed::Deed::VERBS)),
             "deeds_performed" => Ok(n(&self.deeds_performed)),
+            "focus_rect" => Ok(serde_json::json!(
+                self.focus_rect
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .map_or_else(|| "none".to_string(), |(x, y, w, h)| format!(
+                        "{x},{y} {w}x{h}"
+                    ))
+            )),
             "elements" => Ok(n(&self.elements)),
             "geometry" => Ok(serde_json::json!(
                 self.geometry
@@ -367,6 +379,7 @@ impl Introspect for OmoyaIntrospect {
             "presented",
             "verbs",
             "deeds_performed",
+            "focus_rect",
             "elements",
             "geometry",
             "layout",

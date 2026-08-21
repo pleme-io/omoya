@@ -503,6 +503,16 @@ where
     // machinery was present, built, and never wired to anything.
     let mut damage_tracker = OutputDamageTracker::from_output(&output);
     let cursor_id = smithay::backend::renderer::element::Id::new();
+    // One stable id per border EDGE, for the same reason the cursor has one:
+    // a fresh `Id` each frame reads as "the old element vanished and a new one
+    // appeared", which re-damages both rectangles every frame and quietly
+    // turns partial repaint back into full repaint.
+    let border_ids: [smithay::backend::renderer::element::Id; 4] = [
+        smithay::backend::renderer::element::Id::new(),
+        smithay::backend::renderer::element::Id::new(),
+        smithay::backend::renderer::element::Id::new(),
+        smithay::backend::renderer::element::Id::new(),
+    ];
 
     // ── ★ ADVERTISE DMABUF, FROM THE RENDERER'S OWN FORMAT LIST ───────────
     //
@@ -650,6 +660,52 @@ where
                     Kind::Cursor,
                 )));
             }
+            // ── ★ THE FOCUS BORDER, DRAWN IN THE GAP ────────────────────
+            //
+            // Four thin bars around the focused window's rectangle rather
+            // than one filled rect behind it: a filled rect would be entirely
+            // hidden by an opaque window, so it would cost a full-screen
+            // element and show nothing. The four edges live in the GAP, which
+            // is why `GAP` and `BORDER` are sized together.
+            //
+            // Pushed AFTER the cursor and BEFORE the windows: index order is
+            // front-to-back, so the border sits under the windows (it does not
+            // cover content) and over the background (it is visible in the
+            // gap). Getting this order wrong does not error — it just draws a
+            // border nobody can see.
+            if let Some((fx, fy, fw, fh)) = *introspect
+                .focus_rect
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+            {
+                use smithay::backend::renderer::element::Kind;
+                use smithay::backend::renderer::element::solid::SolidColorRenderElement;
+                use smithay::backend::renderer::utils::CommitCounter;
+                let b = crate::layout::BORDER;
+                let colour = smithay::backend::renderer::Color32F::from(
+                    crate::theme::focus_border_for_surface(false),
+                );
+                // top, bottom, left, right — each already inset into the gap.
+                let edges = [
+                    (fx - b, fy - b, fw + b * 2, b),
+                    (fx - b, fy + fh, fw + b * 2, b),
+                    (fx - b, fy, b, fh),
+                    (fx + fw, fy, b, fh),
+                ];
+                for (i, (x, y, w, h)) in edges.into_iter().enumerate() {
+                    if w <= 0 || h <= 0 {
+                        continue;
+                    }
+                    elements.push(SeatElements::Cursor(SolidColorRenderElement::new(
+                        border_ids[i].clone(),
+                        smithay::utils::Rectangle::new((x, y).into(), (w, h).into()),
+                        CommitCounter::default(),
+                        colour,
+                        Kind::Unspecified,
+                    )));
+                }
+            }
+
             elements.extend(space_elements.into_iter().map(SeatElements::Space));
             // Published so `windows` and `elements` can be compared. A window
             // exists in `Space` from creation; an element exists only once the
