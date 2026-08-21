@@ -368,10 +368,28 @@ impl Frame for NuriFrame<'_, '_> {
             })
             .collect();
 
+        // Count which path nuri will take, so a profile that only says
+        // "memmove" can be told apart from a fast path that is never
+        // entered. Mirrors nuri's own precondition exactly — if these drift,
+        // the counter lies, so they are written next to each other.
+        let dst_r = to_rect(dst);
+        let fast = matches!(map_transform(src_transform), nuri::Transform::Normal)
+            && src_rect.w == dst_r.w
+            && src_rect.h == dst_r.h
+            && alpha >= 1.0;
+        let rows = u64::try_from(dst_r.h.max(0)).unwrap_or(0);
+        if let Some(c) = BLIT_COUNTS.get() {
+            if fast {
+                c.0.fetch_add(rows, std::sync::atomic::Ordering::Relaxed);
+            } else {
+                c.1.fetch_add(rows, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+
         self.surface.blit(
             &src_ref,
             src_rect,
-            to_rect(dst),
+            dst_r,
             map_transform(src_transform),
             alpha,
             &dmg,
@@ -415,6 +433,16 @@ const fn map_transform(t: Transform) -> nuri::Transform {
 }
 
 // ── IMPORT ────────────────────────────────────────────────────────────────
+
+/// Where the blit path counters live.
+///
+/// A global because `Frame` is constructed per frame by smithay and cannot
+/// carry a handle without changing the trait's shape. Installed once from
+/// the render loop; absent in tests, where the counters are simply not kept.
+pub static BLIT_COUNTS: std::sync::OnceLock<(
+    std::sync::Arc<std::sync::atomic::AtomicU64>,
+    std::sync::Arc<std::sync::atomic::AtomicU64>,
+)> = std::sync::OnceLock::new();
 
 impl ImportMem for NuriRenderer {
     fn import_memory(

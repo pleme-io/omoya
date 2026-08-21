@@ -106,6 +106,19 @@ pub struct OmoyaIntrospect {
     /// problem. Those live in different files and a screenshot cannot tell
     /// them apart.
     pub elements: AtomicU64,
+    /// Microseconds the last frame spent inside `render_output`.
+    ///
+    /// ★ ADDED AFTER GUESSING TWICE. The seat sat at 99% CPU with every gdb
+    /// sample inside `memmove`, and two separate optimisations — a derived
+    /// refresh rate, then a row-wise blit — each looked like the answer and
+    /// each moved the number barely. Guessing at a hot spot from the outside
+    /// is how that happens; this is the inside.
+    pub frame_us: AtomicU64,
+    /// Rows the blit took the 1:1 fast path for, and rows it did not.
+    /// If `blit_slow` dominates, the fast path's precondition is wrong —
+    /// which is invisible from a profile that only says "memmove".
+    pub blit_fast: AtomicU64,
+    pub blit_slow: AtomicU64,
     /// Each render element's geometry, as the RENDERER sees it.
     ///
     /// ★ THE THIRD INDEPENDENT VIEW OF THE SAME QUESTION. `layout` is what
@@ -295,6 +308,9 @@ impl Introspect for OmoyaIntrospect {
                         "{x},{y} {w}x{h}"
                     ))
             )),
+            "frame_us" => Ok(n(&self.frame_us)),
+            "blit_fast" => Ok(n(&self.blit_fast)),
+            "blit_slow" => Ok(n(&self.blit_slow)),
             "elements" => Ok(n(&self.elements)),
             "geometry" => Ok(serde_json::json!(
                 self.geometry
@@ -380,6 +396,9 @@ impl Introspect for OmoyaIntrospect {
             "verbs",
             "deeds_performed",
             "focus_rect",
+            "frame_us",
+            "blit_fast",
+            "blit_slow",
             "elements",
             "geometry",
             "layout",

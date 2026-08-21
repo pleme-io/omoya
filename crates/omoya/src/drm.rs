@@ -526,6 +526,14 @@ where
             (f64::from(mode.size.w) / 2.0, f64::from(mode.size.h) / 2.0).into();
     }
 
+    // Install the blit-path counters (see `nuri_renderer::BLIT_COUNTS`).
+    {
+        let fast = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let slow = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let _ = crate::nuri_renderer::BLIT_COUNTS.set((fast.clone(), slow.clone()));
+        blit_counters = Some((fast, slow));
+    }
+
     let mut damage_tracker = OutputDamageTracker::from_output(&output);
     let cursor_id = smithay::backend::renderer::element::Id::new();
     // One stable id per border EDGE, for the same reason the cursor has one:
@@ -541,6 +549,10 @@ where
     // The arrow bitmap. Built on first use and kept: the shape never
     // changes, so rebuilding it per frame would hand the damage tracker a
     // new commit each time — the same trap the bar's text comparison avoids.
+    let mut blit_counters: Option<(
+        std::sync::Arc<std::sync::atomic::AtomicU64>,
+        std::sync::Arc<std::sync::atomic::AtomicU64>,
+    )> = None;
     let mut cursor_buffer: Option<smithay::backend::renderer::element::memory::MemoryRenderBuffer> =
         None;
     let mut bar_text = crate::bar::BarText::default();
@@ -885,6 +897,7 @@ where
                     // changed since this BUFFER was last drawn into (hence the
                     // age), clears only that, and skips any element that does
                     // not intersect it.
+                    let frame_start = std::time::Instant::now();
                     let result = damage_tracker.render_output(
                         &mut renderer,
                         &mut fb,
@@ -933,6 +946,23 @@ where
                             .unwrap_or_else(|e| e.into_inner()) = Some(outcome);
                     }
 
+                    // Published so the cost of a frame is a number anyone
+                    // can read, rather than something inferred from a CPU
+                    // percentage and a stripped stack trace.
+                    introspect.frame_us.store(
+                        u64::try_from(frame_start.elapsed().as_micros()).unwrap_or(u64::MAX),
+                        std::sync::atomic::Ordering::Relaxed,
+                    );
+                    if let Some((f, sl)) = blit_counters.as_ref() {
+                        introspect.blit_fast.store(
+                            f.load(std::sync::atomic::Ordering::Relaxed),
+                            std::sync::atomic::Ordering::Relaxed,
+                        );
+                        introspect.blit_slow.store(
+                            sl.load(std::sync::atomic::Ordering::Relaxed),
+                            std::sync::atomic::Ordering::Relaxed,
+                        );
+                    }
                     result.damage.is_some()
                 };
 
