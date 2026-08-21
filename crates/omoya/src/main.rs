@@ -471,7 +471,18 @@ where
     introspect.backend.store(1, Ordering::Relaxed);
     introspect.output_w.store(u64::from(target.mode.size().0), Ordering::Relaxed);
     introspect.output_h.store(u64::from(target.mode.size().1), Ordering::Relaxed);
-    introspect.refresh_hz.store(u64::from(target.mode.vrefresh()), Ordering::Relaxed);
+    // ★ THE SAME DERIVATION AS THE RENDER LOOP, NOT `vrefresh()` RAW.
+    //
+    // This line stored the panel's raw `vrefresh`, which is an optional DRM
+    // field and is 0 on plo's DP-1 — so the leaf reported 0 while the loop
+    // paced at 1 Hz, and the one diagnostic that could have named the bug
+    // answered with a number that looked like "not measured yet".
+    //
+    // Two writers to one field is the drift hazard on its own; both now go
+    // through `drm::refresh_hz` so they cannot disagree.
+    introspect
+        .refresh_hz
+        .store(u64::from(crate::drm::refresh_hz(&target.mode)), Ordering::Relaxed);
 
     let mut device = device;
     // ★ THE MATCH IS HERE AND NOT INSIDE `run` because the renderer is a TYPE

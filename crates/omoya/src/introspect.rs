@@ -102,15 +102,6 @@ pub struct OmoyaIntrospect {
     /// problem. Those live in different files and a screenshot cannot tell
     /// them apart.
     pub elements: AtomicU64,
-    /// The refresh rate the seat is actually pacing at, in Hz.
-    ///
-    /// ★ PUBLISHED BECAUSE A WRONG ONE IS INVISIBLE FROM EVERY OTHER ANGLE.
-    /// The seat ran at 1.2 Hz on plo — `vrefresh` was 0 and the guard turned
-    /// that into 1 — while nothing logged an error, no frame failed, and
-    /// damage tracking worked perfectly on the frames it was given. The only
-    /// symptom was a human saying the desktop felt slow. A number that
-    /// decides the entire feel of the machine should be readable.
-    pub refresh_hz: AtomicU64,
     /// Each render element's geometry, as the RENDERER sees it.
     ///
     /// ★ THE THIRD INDEPENDENT VIEW OF THE SAME QUESTION. `layout` is what
@@ -180,7 +171,19 @@ pub struct OmoyaIntrospect {
     /// Scanout width/height, 0 when nested or not yet known.
     pub output_w: AtomicU64,
     pub output_h: AtomicU64,
-    /// Refresh in Hz, as the panel reported it.
+    /// Refresh in Hz — the rate the seat is actually PACING at.
+    ///
+    /// ★ THIS LEAF ALREADY EXISTED AND WOULD HAVE NAMED THE BUG. On plo it
+    /// read the panel's `vrefresh`, which is an OPTIONAL DRM field that this
+    /// panel leaves at 0 — and `frame_interval`'s `.max(1)` turned that into
+    /// a 1 Hz desktop. The number was queryable the whole time; nobody asked
+    /// it, because every other signal was healthy and the only symptom was a
+    /// human saying the machine felt slow.
+    ///
+    /// It now carries the DERIVED rate (`refresh_hz()` in `drm.rs`), so it
+    /// reports what the loop is really doing rather than what the driver
+    /// declined to say. A leaf that reports an unset field is a leaf that
+    /// looks like it is answering.
     pub refresh_hz: AtomicU64,
     /// Whether libinput attached. An agent debugging "I cannot type" should be
     /// able to ask this rather than infer it from a log line.
@@ -280,7 +283,6 @@ impl Introspect for OmoyaIntrospect {
             }
             "verbs" => Ok(serde_json::json!(crate::deed::Deed::VERBS)),
             "deeds_performed" => Ok(n(&self.deeds_performed)),
-            "refresh_hz" => Ok(n(&self.refresh_hz)),
             "elements" => Ok(n(&self.elements)),
             "geometry" => Ok(serde_json::json!(
                 self.geometry
@@ -341,7 +343,6 @@ impl Introspect for OmoyaIntrospect {
                 "frames": self.frames.load(Ordering::Relaxed),
                 "presented": self.presented.load(Ordering::Relaxed),
                 "deeds_performed": self.deeds_performed.load(Ordering::Relaxed),
-                "refresh_hz": self.refresh_hz.load(Ordering::Relaxed),
                 "elements": self.elements.load(Ordering::Relaxed),
                 "geometry": self.geometry.lock().unwrap_or_else(|e| e.into_inner()).clone(),
                 "layout": self.layout.lock().unwrap_or_else(|e| e.into_inner()).clone(),
@@ -366,7 +367,6 @@ impl Introspect for OmoyaIntrospect {
             "presented",
             "verbs",
             "deeds_performed",
-            "refresh_hz",
             "elements",
             "geometry",
             "layout",
