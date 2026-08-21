@@ -15,8 +15,7 @@ pedantic = { level = "warn", priority = -1 }
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
 
-[profile.release]
-opt-level = "z"
-lto = true
-codegen-units = 1
-strip = true
+# NOTE: no [profile.release] here. Cargo ignores profiles on a non-root
+# workspace member and warns about it; the workspace root owns them. The
+# section returns when this crate moves to its own repo
+# (pending-mekuri-extraction) and becomes a root again.
