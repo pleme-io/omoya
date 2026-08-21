@@ -131,6 +131,27 @@ pub struct Omoya {
     /// draw, which the hypothesis does not yet explain. The `elements` leaf
     /// beside `windows` is the measurement that settles it either way; this
     /// protocol earns its place on the first reason regardless of the second.
+    /// `xdg-decoration` — who draws the titlebar, the client or us.
+    ///
+    /// ★ THE ANSWER IS "NEITHER", AND THAT IS WHY THE PROTOCOL IS HERE.
+    /// A client with no decoration protocol falls back to drawing its OWN
+    /// titlebar, and mado deliberately does: it overrides the fleet's
+    /// `decorations_linux = false` back to `true` because on GNOME an
+    /// undecorated window is "a fixed rectangle you cannot drag or maximize"
+    /// (mado `config.rs`, reported 2026-08-17). That is right on GNOME and
+    /// exactly wrong here — a tiling compositor OWNS geometry, so drag and
+    /// maximize are not the client's to offer, and the titlebar is a
+    /// near-white 35px band across the top of a Nord seat.
+    ///
+    /// Answering `ServerSide` is the protocol-correct way to say "I will
+    /// handle it", and every toolkit that speaks the protocol then drops its
+    /// own chrome. omoya draws no frame, which for a tiling seat is the
+    /// intended look — the window IS its parcel.
+    ///
+    /// ★ FIXED AT THE COMPOSITOR, NOT IN mado'S CONFIG. Turning mado's flag
+    /// off would fix mado on this seat and break it on GNOME, and would do
+    /// nothing for any other client. One protocol handler fixes the class.
+    pub xdg_decoration_state: smithay::wayland::shell::xdg::decoration::XdgDecorationState,
     pub presentation_state: smithay::wayland::presentation::PresentationState,
     pub compositor_state: CompositorState,
     pub xdg_shell_state: XdgShellState,
@@ -201,6 +222,8 @@ impl Omoya {
         //
         // Built here beside its siblings rather than inline in the struct
         // literal, because `dh` is moved into `display_handle` there.
+        let xdg_decoration_state =
+            smithay::wayland::shell::xdg::decoration::XdgDecorationState::new::<Self>(&dh);
         let presentation_state =
             smithay::wayland::presentation::PresentationState::new::<Self>(&dh, 1);
         let output_manager_state = OutputManagerState::new_with_xdg_output::<Self>(&dh);
@@ -256,6 +279,7 @@ impl Omoya {
             session_command: None,
             loop_signal,
             socket_name,
+            xdg_decoration_state,
             presentation_state,
             compositor_state,
             xdg_shell_state,

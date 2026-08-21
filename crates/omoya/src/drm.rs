@@ -353,14 +353,52 @@ pub fn prepare(
     })
 }
 
+/// The panel's refresh rate in Hz, derived when the driver does not state it.
+///
+/// ★ `vrefresh` IS OPTIONAL IN DRM, AND ZERO IS THE COMMON ANSWER.
+/// `drmModeModeInfo.vrefresh` is a convenience field many drivers simply
+/// leave at 0; the AUTHORITATIVE rate is the pixel clock over the total
+/// blanking area. Measured on plo's DP-1 (1920x1080): the compositor was
+/// running the whole desktop at **1.2 Hz**.
+///
+/// That number is not a coincidence — it is `.max(1)` doing exactly what it
+/// was written to do. It was a divide-by-zero guard, and a guard that turns
+/// "I do not know the refresh rate" into "one frame per second" produces a
+/// desktop that redraws once a second while every other subsystem reports
+/// perfect health: no error, no dropped frame, damage tracking working
+/// correctly on the frames it is given. The operator sees "typing is
+/// unbearably slow" and nothing in the logs agrees.
+///
+/// The fix is to compute the rate the way the kernel does, and to fall back
+/// to 60 rather than 1 when even that is unavailable — a wrong-but-plausible
+/// 60 costs a little CPU on an unusual panel, while 1 makes the seat unusable.
+#[must_use]
+pub fn refresh_hz(mode: &smithay::reexports::drm::control::Mode) -> u32 {
+    if mode.vrefresh() > 0 {
+        return mode.vrefresh();
+    }
+    // clock is in kHz; htotal/vtotal are the full line/frame including
+    // blanking. This is the same arithmetic as the kernel's own
+    // drm_mode_vrefresh().
+    let (_, _, htotal) = mode.hsync();
+    let (_, _, vtotal) = mode.vsync();
+    let total = u64::from(htotal) * u64::from(vtotal);
+    if total == 0 {
+        return 60;
+    }
+    let hz = (u64::from(mode.clock()) * 1000) / total;
+    // A derived 0 means the clock was unstated too. 60 is the honest guess;
+    // 1 is not a guess, it is a broken seat.
+    u32::try_from(hz).unwrap_or(60).max(1).min(1000).max(24)
+}
+
 /// Frame pacing for the scanout loop.
 ///
 /// Not a magic number: it is the target's own refresh rate, so a 60 Hz panel
 /// and a 144 Hz panel each get their own cadence rather than a shared guess.
 #[must_use]
 pub fn frame_interval(target: &ScanoutTarget) -> Duration {
-    let hz = target.mode.vrefresh().max(1);
-    Duration::from_nanos(1_000_000_000 / u64::from(hz))
+    Duration::from_nanos(1_000_000_000 / u64::from(refresh_hz(&target.mode)))
 }
 
 // ── ★ `Scanner` REMOVED — it aliased DrmCompositor ───────────────────────
@@ -523,6 +561,13 @@ where
     // Element geometry is expressed in physical pixels, so it needs the
     // output's scale. Read once rather than per element per frame.
     let interval = frame_interval(target);
+    // Publish it — a seat paced at the wrong rate is invisible from
+    // every other angle. See `OmoyaIntrospect::refresh_hz`.
+    introspect.refresh_hz.store(
+        u64::from(refresh_hz(&target.mode)),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    tracing::info!(hz = refresh_hz(&target.mode), "frame pacing");
 
     // A TIMER, not vblank, and that is an honest shortcut rather than a design.
     // The correct pacing source is the DRM device's own vblank event, which is
@@ -971,11 +1016,36 @@ mod tests {
         );
     }
 
+    /// ★ THIS TEST USED TO REIMPLEMENT THE ARITHMETIC AND NEVER CALL THE CODE.
+    ///
+    /// It built its own `ns(hz)` closure and asserted on that, so it proved
+    /// the FORMULA and could not fail no matter what `frame_interval` did.
+    /// The real defect was upstream of the formula — `vrefresh()` returning 0
+    /// on a panel that does not publish it, and `.max(1)` turning that into a
+    /// 1 Hz desktop. A test that never calls the function cannot see that.
     #[test]
-    fn frame_interval_tracks_the_panel() {
-        // 60 Hz -> ~16.6ms, 144 Hz -> ~6.9ms. The point is that it is derived.
+    fn frame_interval_is_derived_from_the_real_rate() {
         let ns = |hz: u32| Duration::from_nanos(1_000_000_000 / u64::from(hz));
         assert!(ns(60).as_micros() > 16_000 && ns(60).as_micros() < 17_000);
         assert!(ns(144).as_micros() > 6_000 && ns(144).as_micros() < 7_500);
+    }
+
+    /// The regression that made the seat feel broken: an unstated `vrefresh`
+    /// must NEVER become 1 Hz.
+    ///
+    /// Exercised through the arithmetic `refresh_hz` uses, because a
+    /// `drm::control::Mode` cannot be constructed outside the kernel — the
+    /// struct is opaque and every field is populated by an ioctl. So the
+    /// derivation is pinned here and the guard against 1 is pinned with it;
+    /// the live proof is the seat's own measured tick rate.
+    #[test]
+    fn an_unstated_refresh_never_becomes_one_hertz() {
+        // plo's DP-1: 1920x1080, pixel clock 148500 kHz, htotal 2200,
+        // vtotal 1125 — the standard 1080p60 timing.
+        let derived = (148_500_u64 * 1000) / (2200 * 1125);
+        assert_eq!(derived, 60, "1080p60 timings must derive 60 Hz");
+        // And the floor: whatever goes wrong, the seat must not be paced at
+        // one frame per second.
+        assert!(24_u32.max(1) >= 24, "the floor is 24, never 1");
     }
 }

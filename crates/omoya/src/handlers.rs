@@ -225,6 +225,43 @@ delegate_xdg_shell!(Omoya);
 // implement: the protocol is pure output, so the delegate is the whole wiring.
 smithay::delegate_presentation!(Omoya);
 
+// ── xdg-decoration ───────────────────────────────────────────────────────
+//
+// See `Omoya::xdg_decoration_state`. Every arm answers `ServerSide`,
+// including `request_mode` when a client ASKS for client-side: on a tiling
+// seat the compositor owns geometry, so a client-drawn titlebar is chrome
+// for operations it cannot perform. The protocol lets us say so rather than
+// leaving the client to guess, which is what produced a near-white 35px band
+// across a Nord desktop.
+impl smithay::wayland::shell::xdg::decoration::XdgDecorationHandler for Omoya {
+    fn new_decoration(&mut self, toplevel: ToplevelSurface) {
+        toplevel.with_pending_state(|state| {
+            state.decoration_mode = Some(
+                smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode::ServerSide,
+            );
+        });
+        toplevel.send_pending_configure();
+    }
+
+    fn request_mode(
+        &mut self,
+        toplevel: ToplevelSurface,
+        _mode: smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode,
+    ) {
+        // Deliberately ignores what the client asked for. The protocol allows
+        // the compositor the final say, and a tiling seat has a real reason
+        // to use it — honouring a ClientSide request here would put back the
+        // titlebar this exists to remove.
+        self.new_decoration(toplevel);
+    }
+
+    fn unset_mode(&mut self, toplevel: ToplevelSurface) {
+        // "No preference" still means server-side here, for the same reason.
+        self.new_decoration(toplevel);
+    }
+}
+smithay::delegate_xdg_decoration!(Omoya);
+
 /// Called on every `WlSurface::commit`.
 ///
 /// The load-bearing half is the initial configure: a toplevel that never

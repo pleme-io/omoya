@@ -102,6 +102,15 @@ pub struct OmoyaIntrospect {
     /// problem. Those live in different files and a screenshot cannot tell
     /// them apart.
     pub elements: AtomicU64,
+    /// The refresh rate the seat is actually pacing at, in Hz.
+    ///
+    /// ★ PUBLISHED BECAUSE A WRONG ONE IS INVISIBLE FROM EVERY OTHER ANGLE.
+    /// The seat ran at 1.2 Hz on plo — `vrefresh` was 0 and the guard turned
+    /// that into 1 — while nothing logged an error, no frame failed, and
+    /// damage tracking worked perfectly on the frames it was given. The only
+    /// symptom was a human saying the desktop felt slow. A number that
+    /// decides the entire feel of the machine should be readable.
+    pub refresh_hz: AtomicU64,
     /// Each render element's geometry, as the RENDERER sees it.
     ///
     /// ★ THE THIRD INDEPENDENT VIEW OF THE SAME QUESTION. `layout` is what
@@ -271,6 +280,7 @@ impl Introspect for OmoyaIntrospect {
             }
             "verbs" => Ok(serde_json::json!(crate::deed::Deed::VERBS)),
             "deeds_performed" => Ok(n(&self.deeds_performed)),
+            "refresh_hz" => Ok(n(&self.refresh_hz)),
             "elements" => Ok(n(&self.elements)),
             "geometry" => Ok(serde_json::json!(
                 self.geometry
@@ -331,6 +341,7 @@ impl Introspect for OmoyaIntrospect {
                 "frames": self.frames.load(Ordering::Relaxed),
                 "presented": self.presented.load(Ordering::Relaxed),
                 "deeds_performed": self.deeds_performed.load(Ordering::Relaxed),
+                "refresh_hz": self.refresh_hz.load(Ordering::Relaxed),
                 "elements": self.elements.load(Ordering::Relaxed),
                 "geometry": self.geometry.lock().unwrap_or_else(|e| e.into_inner()).clone(),
                 "layout": self.layout.lock().unwrap_or_else(|e| e.into_inner()).clone(),
@@ -355,6 +366,7 @@ impl Introspect for OmoyaIntrospect {
             "presented",
             "verbs",
             "deeds_performed",
+            "refresh_hz",
             "elements",
             "geometry",
             "layout",
