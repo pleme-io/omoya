@@ -283,6 +283,18 @@ impl crate::state::Omoya {
         let Some(geo) = self.space.output_geometry(&output) else {
             return;
         };
+        // Same zone the layout used — asking for a neighbour inside a
+        // different rectangle than the one the windows were placed in gives
+        // answers that are subtly wrong near the edges.
+        let geo = {
+            let mut map = smithay::desktop::layer_map_for_output(&output);
+            map.arrange();
+            let z = map.non_exclusive_zone();
+            smithay::utils::Rectangle::new(
+                (geo.loc.x + z.loc.x, geo.loc.y + z.loc.y).into(),
+                z.size,
+            )
+        };
         let Some(window) = self.tiling.focus_direction(dir, geo) else {
             // Nothing that way. A finding, not a failure — the operator
             // pressed a direction at the edge of the screen, and the right

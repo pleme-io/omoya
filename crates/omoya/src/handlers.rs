@@ -262,6 +262,57 @@ impl smithay::wayland::shell::xdg::decoration::XdgDecorationHandler for Omoya {
 }
 smithay::delegate_xdg_decoration!(Omoya);
 
+// ── wlr-layer-shell ──────────────────────────────────────────────────────
+//
+// See `Omoya::layer_shell_state`. A layer surface is mapped into the
+// output's `LayerMap`, which computes exclusive zones; `apply_layout` then
+// tiles inside `non_exclusive_zone()` so a bar reserves its strip and the
+// windows take what is left.
+impl smithay::wayland::shell::wlr_layer::WlrLayerShellHandler for Omoya {
+    fn shell_state(&mut self) -> &mut smithay::wayland::shell::wlr_layer::WlrLayerShellState {
+        &mut self.layer_shell_state
+    }
+
+    fn new_layer_surface(
+        &mut self,
+        surface: smithay::wayland::shell::wlr_layer::LayerSurface,
+        _output: Option<smithay::reexports::wayland_server::protocol::wl_output::WlOutput>,
+        _layer: smithay::wayland::shell::wlr_layer::Layer,
+        _namespace: String,
+    ) {
+        // One output today, so the client's requested output is ignored
+        // rather than honoured-or-refused. When a second lands this becomes a
+        // lookup; naming it here so the single-output assumption is visible.
+        let Some(output) = self.space.outputs().next().cloned() else {
+            return;
+        };
+        let mut map = smithay::desktop::layer_map_for_output(&output);
+        if map.map_layer(&surface).is_err() {
+            tracing::warn!("a layer surface could not be mapped");
+            return;
+        }
+        drop(map);
+        // The exclusive zone may have changed, so the tiling has to be
+        // recomputed — this is the line that makes a bar actually reserve
+        // space instead of being drawn over the windows.
+        self.apply_layout();
+    }
+
+    fn layer_destroyed(&mut self, surface: smithay::wayland::shell::wlr_layer::LayerSurface) {
+        let Some(output) = self.space.outputs().next().cloned() else {
+            return;
+        };
+        {
+            let mut map = smithay::desktop::layer_map_for_output(&output);
+            map.unmap_layer(&surface);
+        }
+        // Give the space back. Without this a bar that exits leaves a strip
+        // of permanently unused screen, which reads as a rendering bug.
+        self.apply_layout();
+    }
+}
+smithay::delegate_layer_shell!(Omoya);
+
 /// Called on every `WlSurface::commit`.
 ///
 /// The load-bearing half is the initial configure: a toplevel that never

@@ -279,7 +279,32 @@ impl crate::state::Omoya {
             return;
         };
 
-        let arranged = self.tiling.arrange(geo);
+        // ★ TILE INSIDE THE NON-EXCLUSIVE ZONE, NOT THE WHOLE OUTPUT.
+        //
+        // A layer surface that anchors to an edge and asks for an exclusive
+        // zone — a status bar — is asking the compositor NOT to place windows
+        // there. `LayerMap::arrange` computes what is left; using the raw
+        // output geometry instead would tile a window under the bar, where it
+        // is permanently half-hidden. That looks like a z-order bug and is
+        // actually a geometry one.
+        //
+        // With no layer surfaces this is exactly the output rectangle, so the
+        // bar-less case is unchanged rather than special-cased.
+        let usable = {
+            let mut map = smithay::desktop::layer_map_for_output(&output);
+            map.arrange();
+            let zone = map.non_exclusive_zone();
+            // `non_exclusive_zone` is relative to the output; `arrange` wants
+            // absolute coordinates, and on a single output at (0,0) those
+            // coincide — offset explicitly so a future second output does not
+            // inherit a silent assumption.
+            smithay::utils::Rectangle::new(
+                (geo.loc.x + zone.loc.x, geo.loc.y + zone.loc.y).into(),
+                zone.size,
+            )
+        };
+
+        let arranged = self.tiling.arrange(usable);
         // Publish what the TREE asked for, before anything is applied. See
         // `OmoyaIntrospect::layout` — a screenshot says where windows ended
         // up and cannot say what was requested, so when the two disagree

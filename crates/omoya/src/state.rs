@@ -151,6 +151,20 @@ pub struct Omoya {
     /// ★ FIXED AT THE COMPOSITOR, NOT IN mado'S CONFIG. Turning mado's flag
     /// off would fix mado on this seat and break it on GNOME, and would do
     /// nothing for any other client. One protocol handler fixes the class.
+    /// `wlr-layer-shell` — bars, docks, notifications and lock surfaces.
+    ///
+    /// ★ THE PREREQUISITE FOR A STATUS BAR, AND FOR TILING AROUND ONE.
+    /// A bar is not a toplevel: it anchors to an edge, it is not in the
+    /// window cycle, and it RESERVES SPACE the tiler must not use. That
+    /// reservation is the whole reason this belongs in the compositor rather
+    /// than being a window that happens to sit at the top — a normal window
+    /// would be tiled into a half like any other.
+    ///
+    /// `space_render_elements` already draws layer surfaces (it calls
+    /// `layer_map_for_output` itself), so once the shell exists the bar
+    /// composites for free; what omoya has to add is honouring the exclusive
+    /// zone in `apply_layout`.
+    pub layer_shell_state: smithay::wayland::shell::wlr_layer::WlrLayerShellState,
     pub xdg_decoration_state: smithay::wayland::shell::xdg::decoration::XdgDecorationState,
     pub presentation_state: smithay::wayland::presentation::PresentationState,
     pub compositor_state: CompositorState,
@@ -222,6 +236,8 @@ impl Omoya {
         //
         // Built here beside its siblings rather than inline in the struct
         // literal, because `dh` is moved into `display_handle` there.
+        let layer_shell_state =
+            smithay::wayland::shell::wlr_layer::WlrLayerShellState::new::<Self>(&dh);
         let xdg_decoration_state =
             smithay::wayland::shell::xdg::decoration::XdgDecorationState::new::<Self>(&dh);
         let presentation_state =
@@ -279,6 +295,7 @@ impl Omoya {
             session_command: None,
             loop_signal,
             socket_name,
+            layer_shell_state,
             xdg_decoration_state,
             presentation_state,
             compositor_state,
