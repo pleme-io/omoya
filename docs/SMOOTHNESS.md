@@ -89,7 +89,7 @@ full frame and asked about damage afterwards; mado computed the skip verdict,
 counted it into `TOTAL_FRAMES_SKIPPED`, logged it, and fell through to a full
 repaint (9 934 969 of 10 726 562 "skipped", none skipped). Same defect,
 opposite operand order, never coordinated — so the decision was extracted as
-**`mekuri`**, where the verdict *produces* the permission: `Verdict::Skip`
+**[`mekuri`](https://github.com/pleme-io/mekuri)**, where the verdict *produces* the permission: `Verdict::Skip`
 carries no `Pass`, and drawing takes one. The GPU-side twin is
 `madori::RenderCallback::needs_frame`, asked before the swapchain acquire so
 skipping the draw also skips the present — which is what mado's original

@@ -44,9 +44,10 @@ three findings that cost the most to reach, so nobody re-derives them:
   `crates/mekuri` — `Verdict::Skip` carries no `Pass`, and the composite runs
   inside `pass.spend`, so "decided to skip, drew anyway" has no shape to write.
   Extracted because mado had the identical defect with the operands reversed.
-  `pending-mekuri-extraction`: its home is `github.com/pleme-io/mekuri`
-  (declared in `org.yaml`, awaiting the parked `repos-1` shard); a sibling path
-  dep is not an option because `gen` cannot see it in the build sandbox.
+  It is its own crate now — [`pleme-io/mekuri`](https://github.com/pleme-io/mekuri),
+  consumed from crates.io — so **fix the decision there, not here**. The GPU
+  twin is `madori::RenderCallback::needs_frame`, asked before the swapchain
+  acquire; mado implements it.
 
 **The rule the file exists to enforce: measure after each step before starting
 the next.** Three fixes in a row were justified by a plausible story about
