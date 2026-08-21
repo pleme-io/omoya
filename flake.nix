@@ -702,6 +702,13 @@
                   "normalisation."
               )
 
+              # The Nord0 background, as ppm-region wants it. Defined here
+              # because this is its FIRST use — it was previously introduced
+              # further down and the driver's type checker caught the
+              # forward reference, which a plain Python run would only have
+              # found at that line.
+              nord0 = "46 52 64"
+
               # ── ★ DID THE BAR DRAW? ─────────────────────────────────────
               #
               # The bar is `bar::HEIGHT` tall and spans the full width, in
@@ -783,7 +790,6 @@
               # What actually distinguishes tiled from stacked is whether there
               # is ANY client content in the right half — under stacking both
               # windows sit at the same origin and that half is empty.
-              nord0 = "46 52 64"
               lc, lt = (
                   int(v) for v in
                   machine.succeed(
