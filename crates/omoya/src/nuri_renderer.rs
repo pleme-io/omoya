@@ -135,6 +135,85 @@ fn normalise_opaque(bytes: &mut [u8], format: Fourcc) -> bool {
     bytes.chunks_exact(4).all(|px| px[3] == 0xff)
 }
 
+/// Copy `src` into `dst` and normalise its alpha **in the same walk**.
+///
+/// ★ **THIS DELETES A WHOLE PASS OVER THE SURFACE, AND THAT IS THE POINT.**
+/// Every import site used to do `dst.copy_from_slice(src)` and then call
+/// [`normalise_opaque`] on the bytes it had *just written* — two traversals of
+/// the same memory, back to back, where one would do. On a fullscreen client
+/// that is not a rounding error:
+///
+/// Measured on plo 2026-08-21, before this existed. The content surface is
+/// 1912×1044 = **7.98 MB**, mado commits full-surface damage every frame
+/// (`wl_surface.damage_buffer` is unreachable through wgpu — see
+/// `mado/src/grid_damage.rs`), and one keystroke therefore walked it three
+/// times: this copy, this normalise, then `nuri::blit`. **~24 MB per
+/// character.** A commit-caused frame cost **4,099 µs** median against a
+/// **2,778 µs** vblank interval at 360 Hz — 1.47 intervals, so every keystroke
+/// missed its flip by construction rather than occasionally.
+///
+/// Fusing removes one of the three. It is a *deletion*, not a speed-up, which
+/// is the only kind of win the hitofude doctrine counts
+/// (`docs/VISUAL-PERFORMANCE.md` §I): making a redundant copy faster is never
+/// the answer, removing it is.
+///
+/// ★ **BYTE-IDENTICAL BY CONSTRUCTION, NOT BY HOPE.** The alpha rule is
+/// literally [`normalise_opaque`]'s, applied to each pixel as it lands instead
+/// of after they all have. `the_fused_copy_matches_copy_then_normalise` pins
+/// that against the original for every format and a deliberately-mismatched
+/// case, so a future edit to one and not the other fails rather than drifting.
+///
+/// ★ **WHY NOT SKIP THE ALPHA WRITE ENTIRELY?** For `Xrgb8888` the bytes it
+/// writes are provably never read — the texture's `opaque` flag is `true`, so
+/// `nuri::blit` takes `OpaqueHint::Opaque`, which `copy_from_slice`s the row
+/// without consulting alpha. Deleting the write is therefore *tempting and
+/// wrong to do in the same change*: it is only safe while nothing later blends
+/// against the scanout buffer's own alpha, and that is a property of draw
+/// ORDER, not of this function. Fusing is unconditionally safe; skipping needs
+/// its own measurement. `pending-nuri-alpha-write-elision`.
+///
+/// Returns whether every pixel written is fully opaque, exactly as
+/// [`normalise_opaque`] would have reported for the same bytes.
+fn copy_normalising(dst: &mut [u8], src: &[u8], format: Fourcc) -> bool {
+    debug_assert_eq!(dst.len(), src.len(), "fused copy over mismatched lengths");
+    if matches!(format, Fourcc::Xrgb8888) {
+        // X is undefined in the source; the compositor needs it to read 0xff.
+        for (d, s) in dst.chunks_exact_mut(4).zip(src.chunks_exact(4)) {
+            d[0] = s[0];
+            d[1] = s[1];
+            d[2] = s[2];
+            d[3] = 0xff;
+        }
+        // A partial trailing chunk cannot carry a whole pixel, but it CAN
+        // exist when a stride is not a multiple of 4. Copy it verbatim rather
+        // than dropping it — leaving stale bytes there is a one-pixel smear
+        // down the right edge, which reads as a rendering bug rather than as
+        // the arithmetic slip it is.
+        let tail = dst.len() - dst.len() % 4;
+        dst[tail..].copy_from_slice(&src[tail..]);
+        return true;
+    }
+    // Argb8888 — and this is the arm that matters, because it is the one the
+    // fleet's own terminal takes. mado's swapchain is `Bgra8UnormSrgb`, so the
+    // Xrgb branch above never fires for the client whose frames cost anything.
+    //
+    // ★ `copy_from_slice` FIRST, THEN SCAN — deliberately NOT a fused
+    // per-pixel loop. `copy_from_slice` lowers to `memmove`, which the libc
+    // implements with wide vector loads and non-temporal stores; a hand-rolled
+    // `chunks_exact_mut(4).zip(..)` that also ANDs the alpha is ONE pass on
+    // paper and roughly a third of memcpy's bandwidth in practice, so the
+    // "fused" version loses to the two-pass one it replaces. Passes are a
+    // proxy for bytes-moved, and the proxy breaks exactly here.
+    //
+    // The scan that follows re-reads what the copy just wrote. At the call
+    // sites that matter it is re-reading a ROW — the partial-import loop
+    // interleaves copy and normalise per row — so it lands in L1 and costs
+    // nearly nothing. On the full-buffer paths it is a genuine second pass
+    // and this fusion is genuinely one fewer.
+    dst.copy_from_slice(src);
+    dst.chunks_exact(4).all(|px| px[3] == 0xff)
+}
+
 impl Texture for NuriTexture {
     fn width(&self) -> u32 {
         self.width
@@ -697,7 +776,11 @@ impl ImportMemWl for NuriRenderer {
                         if b > buf.len() || b > bytes.len() {
                             break;
                         }
-                        buf[a..b].copy_from_slice(&bytes[a..b]);
+                        // ★ ONE WALK, NOT TWO. This was `copy_from_slice`
+                        // followed by `normalise_opaque` over the bytes it had
+                        // just written — see `copy_normalising`, which is where
+                        // the 24 MB-per-keystroke arithmetic is recorded.
+                        let row_opaque = copy_normalising(&mut buf[a..b], &bytes[a..b], fourcc);
                         // ★ AND, NEVER ASSIGN. This pass examined only the
                         // DAMAGED rows; the rest were not re-read, so their
                         // opacity is whatever it already was. A partial
@@ -705,7 +788,7 @@ impl ImportMemWl for NuriRenderer {
                         // Assigning would let one opaque damage rect declare
                         // a translucent window opaque, and the failure would
                         // be a window composited without its alpha.
-                        range_opaque &= normalise_opaque(&mut buf[a..b], fourcc);
+                        range_opaque &= row_opaque;
                     }
                 }
                 if !range_opaque {
@@ -724,8 +807,11 @@ impl ImportMemWl for NuriRenderer {
                 c.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
 
-            let mut owned = bytes.to_vec();
-            let opaque = normalise_opaque(&mut owned, fourcc);
+            // One walk: allocate uninitialised-then-filled rather than
+            // copy-then-rewrite. `to_vec()` + `normalise_opaque` walked the
+            // whole buffer twice on every FIRST import of a client buffer.
+            let mut owned = vec![0u8; bytes.len()];
+            let opaque = copy_normalising(&mut owned, bytes, fourcc);
             let tex = NuriTexture {
                 data: Arc::new(std::sync::RwLock::new(owned)),
                 width: width_u32,
@@ -851,13 +937,12 @@ impl ImportDma for NuriRenderer {
             .map_err(|e| Error::Map(format!("sync start: {e:?}")))?;
         // SAFETY: the mapping is valid for `length()` bytes while `mapping`
         // lives, and `expected <= length()` was checked immediately above.
-        let mut bytes =
-            unsafe { std::slice::from_raw_parts(mapping.ptr().cast::<u8>(), expected) }.to_vec();
+        let src = unsafe { std::slice::from_raw_parts(mapping.ptr().cast::<u8>(), expected) };
+        let mut bytes = vec![0u8; expected];
+        let opaque = copy_normalising(&mut bytes, src, format.code);
         dmabuf
             .sync_plane(0, DmabufSyncFlags::END | DmabufSyncFlags::READ)
             .map_err(|e| Error::Map(format!("sync end: {e:?}")))?;
-
-        let opaque = normalise_opaque(&mut bytes, format.code);
 
         #[allow(clippy::cast_sign_loss)]
         Ok(NuriTexture {
@@ -937,6 +1022,91 @@ impl Bind<Dmabuf> for NuriRenderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ★ THE DIFFERENTIAL THAT LETS `copy_normalising` REPLACE THE PAIR.
+    ///
+    /// The fused copy is only allowed to exist if it is byte-identical to
+    /// `copy_from_slice` followed by `normalise_opaque` — the exact pair it
+    /// replaced at three call sites, one of which is on the keystroke path.
+    /// Asserting that here rather than reasoning about it is the whole reason
+    /// this change is safe to ship to a machine whose console is its only
+    /// local access.
+    ///
+    /// It runs against BOTH formats and against buffers that are opaque,
+    /// translucent and mixed, because the two arms disagree about what the
+    /// alpha byte MEANS: Xrgb imposes 0xff, Argb reports what it found.
+    #[test]
+    fn the_fused_copy_matches_copy_then_normalise() {
+        let cases: Vec<Vec<u8>> = vec![
+            // fully opaque
+            vec![1, 2, 3, 0xff, 4, 5, 6, 0xff],
+            // fully transparent — the case that made an Xrgb window invisible
+            vec![1, 2, 3, 0x00, 4, 5, 6, 0x00],
+            // mixed: one opaque pixel and one not
+            vec![1, 2, 3, 0xff, 4, 5, 6, 0x7f],
+            // a single pixel
+            vec![9, 8, 7, 0x01],
+            // empty — a zero-width damage rect is a real input
+            vec![],
+        ];
+        for fourcc in [Fourcc::Argb8888, Fourcc::Xrgb8888] {
+            for src in &cases {
+                // The original: copy, then walk again.
+                let mut want = src.clone();
+                let want_opaque = normalise_opaque(&mut want, fourcc);
+
+                // The replacement: one walk.
+                let mut got = vec![0u8; src.len()];
+                let got_opaque = copy_normalising(&mut got, src, fourcc);
+
+                assert_eq!(
+                    got, want,
+                    "{fourcc:?}: fused bytes differ from copy-then-normalise for {src:?}"
+                );
+                assert_eq!(
+                    got_opaque, want_opaque,
+                    "{fourcc:?}: fused opacity differs for {src:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_fused_copy_does_not_read_the_destination() {
+        // ★ The partial-import path writes into a CACHED texture, so `dst`
+        // arrives holding the previous frame's pixels. A fused routine that
+        // blended with, or read, whatever was already there would leave a
+        // ghost of the last frame — and it would only show up on the second
+        // commit, which is the kind of bug that reaches a screen.
+        let src = vec![10, 20, 30, 0x80];
+        for fourcc in [Fourcc::Argb8888, Fourcc::Xrgb8888] {
+            let mut from_dirty = vec![0xaa, 0xbb, 0xcc, 0xdd];
+            let mut from_zero = vec![0u8; 4];
+            let a = copy_normalising(&mut from_dirty, &src, fourcc);
+            let b = copy_normalising(&mut from_zero, &src, fourcc);
+            assert_eq!(
+                from_dirty, from_zero,
+                "{fourcc:?}: the prior contents of dst changed the result"
+            );
+            assert_eq!(a, b);
+        }
+    }
+
+    #[test]
+    fn xrgb_alpha_is_forced_and_argb_alpha_is_preserved() {
+        // The two arms must not converge. If a refactor ever made Argb also
+        // force 0xff, every translucent window would composite opaque and the
+        // differential above would still pass — both sides would be wrong
+        // together, because `normalise_opaque` is the oracle.
+        let src = vec![1, 2, 3, 0x40];
+        let mut x = vec![0u8; 4];
+        assert!(copy_normalising(&mut x, &src, Fourcc::Xrgb8888));
+        assert_eq!(x[3], 0xff, "Xrgb must impose opacity");
+
+        let mut a = vec![0u8; 4];
+        assert!(!copy_normalising(&mut a, &src, Fourcc::Argb8888));
+        assert_eq!(a[3], 0x40, "Argb must preserve the client's alpha");
+    }
 
     #[test]
     fn only_the_two_reachable_formats_are_advertised() {
