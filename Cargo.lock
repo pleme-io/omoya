@@ -958,6 +958,8 @@ dependencies = [
 [[package]]
 name = "mekuri"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c5f749c5ae624dfec2a4c52ab3dcb8dfe7e9a7f6b8f444c0d9af38c43a11b831"
 
 [[package]]
 name = "memchr"
