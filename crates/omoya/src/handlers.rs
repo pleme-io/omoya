@@ -278,7 +278,7 @@ impl smithay::wayland::shell::wlr_layer::WlrLayerShellHandler for Omoya {
         surface: smithay::wayland::shell::wlr_layer::LayerSurface,
         _output: Option<smithay::reexports::wayland_server::protocol::wl_output::WlOutput>,
         _layer: smithay::wayland::shell::wlr_layer::Layer,
-        _namespace: String,
+        namespace: String,
     ) {
         // One output today, so the client's requested output is ignored
         // rather than honoured-or-refused. When a second lands this becomes a
@@ -286,8 +286,16 @@ impl smithay::wayland::shell::wlr_layer::WlrLayerShellHandler for Omoya {
         let Some(output) = self.space.outputs().next().cloned() else {
             return;
         };
+        // ★ TWO `LayerSurface` TYPES, AND THEY ARE NOT INTERCHANGEABLE.
+        // The handler is handed the PROTOCOL object
+        // (`wayland::shell::wlr_layer::LayerSurface`); `LayerMap` stores
+        // `desktop::LayerSurface`, the desktop-layer wrapper that carries an
+        // id, the namespace and a userdata map. `desktop::LayerSurface::new`
+        // is the bridge, and the namespace is what a bar is identified by —
+        // which is why it is taken rather than ignored.
+        let desktop_surface = smithay::desktop::LayerSurface::new(surface, namespace);
         let mut map = smithay::desktop::layer_map_for_output(&output);
-        if map.map_layer(&surface).is_err() {
+        if map.map_layer(&desktop_surface).is_err() {
             tracing::warn!("a layer surface could not be mapped");
             return;
         }
@@ -304,7 +312,15 @@ impl smithay::wayland::shell::wlr_layer::WlrLayerShellHandler for Omoya {
         };
         {
             let mut map = smithay::desktop::layer_map_for_output(&output);
-            map.unmap_layer(&surface);
+            // Find the wrapper the map is holding — the handler only has the
+            // protocol object, and the two are different types.
+            let held = map
+                .layers()
+                .find(|l| l.layer_surface() == &surface)
+                .cloned();
+            if let Some(l) = held {
+                map.unmap_layer(&l);
+            }
         }
         // Give the space back. Without this a bar that exits leaves a strip
         // of permanently unused screen, which reads as a rendering bug.
