@@ -189,6 +189,72 @@ mod tests {
         // And it is bluish: Nord0's blue channel leads.
         assert!(b > r, "Nord0 is a cool grey — blue leads red");
     }
+
+    #[test]
+    fn the_focus_ring_is_nord8_and_survives_the_encoding_it_is_given() {
+        // ★ THE TEST THAT WAS MISSING, AND ITS ABSENCE IS WHY THIS SHIPPED
+        // INVERTED. The background has had a pinning test for this exact class
+        // since the black-screen incident; the border had none, so it took the
+        // opposite branch from both of its siblings and nothing said so.
+        //
+        // Measured on plo before the fix, from a screenshot: the ring painted
+        // rgb(56, 91, 136) — which is srgb_to_linear(nord9) written verbatim
+        // into a framebuffer that applies no transfer function.
+        let byte = |f: f32| (f * 255.0).round() as u8;
+
+        // Plain DRM_FORMAT_ARGB8888 (what `drm.rs` actually passes): the bytes
+        // go straight to scanout, so they must already BE nord8.
+        let [r, g, b, a] = focus_border_for_surface(false);
+        assert_eq!(
+            (byte(r), byte(g), byte(b)),
+            (136, 192, 208),
+            "a non-sRGB surface must receive nord8's sRGB bytes verbatim"
+        );
+        assert!((a - 1.0).abs() < f32::EPSILON, "the ring is opaque");
+
+        // An sRGB-storage surface encodes on write, so it must be handed
+        // linear — the mirror of the background's second assertion.
+        let [lr, lg, lb, _] = focus_border_for_surface(true);
+        assert!(
+            byte(lr) < 136 && byte(lg) < 192 && byte(lb) < 208,
+            "an sRGB surface must receive LINEAR values, which are darker; \
+             got ({}, {}, {})",
+            byte(lr),
+            byte(lg),
+            byte(lb)
+        );
+
+        // ★ AND THE TWO ENCODINGS MUST NOT AGREE. If a refactor collapses the
+        // branch, both arms return the same bytes and every assertion above
+        // still passes — the failure this whole module exists to catch would
+        // be invisible again.
+        assert_ne!(
+            (byte(r), byte(g), byte(b)),
+            (byte(lr), byte(lg), byte(lb)),
+            "the two encodings are different answers; a collapsed branch makes \
+             this function's parameter meaningless"
+        );
+    }
+
+    #[test]
+    fn the_focus_ring_agrees_with_its_siblings_about_which_branch_is_which() {
+        // The actual defect was not a wrong constant — it was ONE function
+        // disagreeing with the other two about what `format_is_srgb` means.
+        // Assert the agreement directly, so the next person to add a
+        // `*_for_surface` cannot get it backwards without failing here.
+        let darker = |f: fn(bool) -> [f32; 4]| {
+            let srgb_surface = f(true);
+            let plain = f(false);
+            // linear values are always <= their sRGB counterparts for these
+            // colours, so the sRGB-surface arm must be the darker one.
+            srgb_surface[0] <= plain[0]
+                && srgb_surface[1] <= plain[1]
+                && srgb_surface[2] <= plain[2]
+        };
+        assert!(darker(background_for_surface), "background");
+        assert!(darker(focus_border_for_surface), "focus border");
+        assert!(darker(cursor_for_surface), "cursor");
+    }
 }
 
 /// The focused window's border, in whichever encoding the framebuffer needs.
@@ -207,19 +273,42 @@ mod tests {
 /// is not there.
 #[must_use]
 pub fn focus_border_for_surface(format_is_srgb: bool) -> [f32; 4] {
-    let c = NORD.frost[2];
+    // ★ nord8, NOT nord9. `frost[2]` is nord9 (#81A1C1), which Nord defines as
+    // a SECONDARY frost — recessive UI chrome. The accent Nord reserves for
+    // "this one" is nord8 (#88C0D0), `frost[1]`. They sit 1.35:1 apart, so the
+    // substitution is invisible as a mistake and merely reads as a slightly
+    // duller seat.
+    let c = NORD.frost[1];
+    // ★ THE BRANCHES WERE INVERTED, AND BACKWARDS FROM BOTH SIBLINGS.
+    //
+    // `background_for_surface` and `cursor_for_surface` both read
+    // `if format_is_srgb { …linear() } else { …srgb() }`: an sRGB-storage
+    // surface encodes on write, so it must be HANDED linear; a plain
+    // `DRM_FORMAT_ARGB8888` dumb buffer converts nothing, so it must be handed
+    // the sRGB bytes verbatim.
+    //
+    // This function had it the other way round. `drm.rs` passes `false` — the
+    // scanout buffer is plain ARGB8888 — so the border took `srgb_to_linear`
+    // and wrote LINEAR bytes into a framebuffer that applies no transfer
+    // function. Measured on plo before this fix: the focus ring painted
+    // **rgb(56, 91, 136)**, a muddy navy, which is exactly
+    // `srgb_to_linear(129, 161, 193) * 255` for the old nord9.
+    //
+    // The module header, this function's own doc comment, and the background's
+    // regression test all describe this precise failure class. The background
+    // had a test pinning it. The border did not, so it shipped inverted.
     if format_is_srgb {
-        [
-            f32::from(c.r) / 255.0,
-            f32::from(c.g) / 255.0,
-            f32::from(c.b) / 255.0,
-            1.0,
-        ]
-    } else {
         [
             srgb_to_linear(c.r),
             srgb_to_linear(c.g),
             srgb_to_linear(c.b),
+            1.0,
+        ]
+    } else {
+        [
+            f32::from(c.r) / 255.0,
+            f32::from(c.g) / 255.0,
+            f32::from(c.b) / 255.0,
             1.0,
         ]
     }
