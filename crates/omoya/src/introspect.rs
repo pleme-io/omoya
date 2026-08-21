@@ -117,8 +117,20 @@ pub struct OmoyaIntrospect {
     /// Rows the blit took the 1:1 fast path for, and rows it did not.
     /// If `blit_slow` dominates, the fast path's precondition is wrong —
     /// which is invisible from a profile that only says "memmove".
+    /// Rows nuri took wholesale via `copy_from_slice`.
     pub blit_fast: AtomicU64,
+    /// Rows that fell to per-pixel alpha blending.
+    ///
+    /// ★ THIS NOW MEANS WHAT IT SAYS. It used to be derived from the OUTER
+    /// precondition, which cannot see nuri's per-row opacity test — so a
+    /// client whose every row contained one translucent pixel reported
+    /// `blit_slow: 0` while blending every row.
     pub blit_slow: AtomicU64,
+    /// Pixels through the general transform/scale path, entered when the
+    /// outer precondition fails entirely. Counted in PIXELS, not rows,
+    /// because that arm has no row structure — a row count there would be a
+    /// different unit wearing the same name.
+    pub blit_general: AtomicU64,
     /// Microseconds the last frame spent GATHERING elements — which is where
     /// texture import happens, and therefore where a client's buffer is
     /// copied.
@@ -482,6 +494,7 @@ impl Introspect for OmoyaIntrospect {
             "frame_us" => Ok(n(&self.frame_us)),
             "blit_fast" => Ok(n(&self.blit_fast)),
             "blit_slow" => Ok(n(&self.blit_slow)),
+            "blit_general" => Ok(n(&self.blit_general)),
             "gather_us" => Ok(n(&self.gather_us)),
             "import_full" => Ok(n(&self.import_full)),
             "import_partial" => Ok(n(&self.import_partial)),
@@ -616,6 +629,7 @@ impl Introspect for OmoyaIntrospect {
             "focus_rect",
             "frame_us",
             "blit_fast",
+            "blit_general",
             "blit_slow",
             "gather_us",
             "import_full",
@@ -626,6 +640,19 @@ impl Introspect for OmoyaIntrospect {
             "windows",
             "owed_vt_switches",
             "capture_result",
+            // ★ THESE WERE ANSWERED AND UNLISTED. `schema()` is how an agent
+            // discovers what it can ask, so a leaf missing here is a leaf that
+            // effectively does not exist — and `last_frame_causes` is the one
+            // that named mado as the idle-repaint source in a single query
+            // after the compositor had been suspected for hours. The
+            // every-schema-leaf-answers gate is one-directional and could not
+            // catch this; the reverse gate below now can.
+            "last_frame_causes",
+            "owed",
+            "owed_causes",
+            "modes",
+            "input_devices",
+            "synth_performed",
             "input_attached",
             "session_active",
             "session_events",
@@ -654,6 +681,65 @@ mod tests {
                 "schema advertises `{leaf}` but query() does not answer it"
             );
         }
+    }
+
+    #[test]
+    fn every_answered_leaf_is_advertised() {
+        // ★ THE REVERSE GATE, AND THE ONE THAT WAS MISSING.
+        //
+        // `every_schema_leaf_answers` catches a leaf advertised and not
+        // handled. Nothing caught the opposite — a leaf HANDLED and not
+        // advertised — and that is the direction that actually bit: an agent
+        // reads `schema()` to learn what it may ask, so an unlisted leaf
+        // effectively does not exist. `last_frame_causes` sat unlisted while
+        // being the leaf that identified mado as the idle-repaint source in
+        // one query, after the compositor had been suspected for hours.
+        //
+        // Enumerated from the source rather than from a second hand-list,
+        // because a hand-list would need updating in the same commit as the
+        // match arm — which is exactly the discipline that already failed.
+        let src = include_str!("introspect.rs");
+        let body = src
+            .split_once("fn query(")
+            .map(|(_, rest)| rest)
+            .unwrap_or(src);
+        let mut answered: Vec<String> = Vec::new();
+        for line in body.lines() {
+            let t = line.trim();
+            // Match arms of the form `"name" => ...`, which is how every leaf
+            // is written. Methods that take arguments (`do`, `type`, `key`,
+            // `pointer`, `click`, `capture`) are excluded: they are verbs, not
+            // readable fields, and `schema()` advertises fields.
+            let Some(rest) = t.strip_prefix('"') else { continue };
+            let Some((name, after)) = rest.split_once('"') else { continue };
+            if !after.trim_start().starts_with("=>") {
+                continue;
+            }
+            const VERBS: &[&str] = &[
+                "do", "type", "key", "pointer", "click", "capture",
+            ];
+            if VERBS.contains(&name) || name.is_empty() {
+                continue;
+            }
+            answered.push(name.to_string());
+        }
+        assert!(
+            answered.len() > 20,
+            "the arm scan found only {} leaves — it has stopped matching the \
+             source shape and is now a vacuous gate",
+            answered.len()
+        );
+        let s = OmoyaIntrospect::default();
+        let advertised: Vec<&str> = s.schema().to_vec();
+        let missing: Vec<&String> = answered
+            .iter()
+            .filter(|a| !advertised.contains(&a.as_str()))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "these leaves are answered but not advertised in schema(), so no \
+             caller can discover them: {missing:?}"
+        );
     }
 
     #[test]

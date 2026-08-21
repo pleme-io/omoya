@@ -117,6 +117,41 @@ pub enum Transform {
     Flipped270,
 }
 
+/// What a [`Surface::blit`] call actually did, per arm.
+///
+/// ★ RETURNED RATHER THAN MIRRORED, AND THAT IS THE WHOLE POINT. The caller
+/// used to re-derive "did the fast path fire?" by restating nuri's outer
+/// precondition next to its own counter, with a comment promising the two
+/// would be kept in step. They could not be: there are **three** arms, and
+/// the second decision is made per-ROW inside the loop, where a caller cannot
+/// see it. An `Argb8888` client with one translucent pixel in each row sends
+/// every row down the blend path while a precondition-mirroring counter still
+/// reports "all fast" — a ~2 ms versus ~15 ms difference behind identical
+/// published numbers.
+///
+/// Counting here, in the code that branches, makes the drift unrepresentable
+/// instead of merely discouraged.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct BlitTally {
+    /// Rows taken wholesale by `copy_from_slice` — the fast path.
+    pub rows_copied: u64,
+    /// Rows that fell to per-pixel alpha blending because at least one pixel
+    /// in the row was not fully opaque.
+    pub rows_blended: u64,
+    /// Pixels handled by the general transform/scale path, which is entered
+    /// when the outer precondition fails at all.
+    pub pixels_general: u64,
+}
+
+impl BlitTally {
+    /// Fold another call's tally into this one.
+    pub fn add(&mut self, o: Self) {
+        self.rows_copied += o.rows_copied;
+        self.rows_blended += o.rows_blended;
+        self.pixels_general += o.pixels_general;
+    }
+}
+
 impl<'a> Surface<'a> {
     /// Describe a mapped buffer.
     ///
@@ -196,7 +231,8 @@ impl<'a> Surface<'a> {
         transform: Transform,
         alpha: f32,
         damage: &[Rect],
-    ) {
+    ) -> BlitTally {
+        let mut tally = BlitTally::default();
         // ★ THE FAST PATH IS THE WHOLE POINT, AND ITS ABSENCE WAS MEASURABLE.
         //
         // The general loop below computes, FOR EVERY PIXEL, a transform
@@ -252,11 +288,16 @@ impl<'a> Surface<'a> {
                     // the per-pixel address arithmetic.
                     let opaque = srow.chunks_exact(4).all(|px| px[3] == 0xff);
                     if opaque {
+                        tally.rows_copied += 1;
                         if let Some(drow) = self.data.get_mut(doff..doff + uw * 4) {
                             drow.copy_from_slice(srow);
                         }
                         continue;
                     }
+                    // Falls through to the per-pixel blend below. Counted
+                    // HERE, at the branch, because this is the decision the
+                    // caller structurally cannot observe.
+                    tally.rows_blended += 1;
                     for i in 0..uw {
                         let px = &srow[i * 4..i * 4 + 4];
                         let o = doff + i * 4;
@@ -282,6 +323,7 @@ impl<'a> Surface<'a> {
             }
             for y in clip.y..clip.y + clip.h {
                 for x in clip.x..clip.x + clip.w {
+                    tally.pixels_general += 1;
                     // Position within the destination, then mapped back
                     // through the transform into the source.
                     let u = x - dst_rect.x;
@@ -311,6 +353,7 @@ impl<'a> Surface<'a> {
                 }
             }
         }
+        tally
     }
 }
 
@@ -413,6 +456,96 @@ const fn scale(coord: i32, dst_extent: i32, src_extent: i32, _t: Transform) -> i
 
 #[cfg(test)]
 mod tests {
+
+    /// ★ THE LIE THE OLD COUNTER TOLD, PINNED.
+    ///
+    /// The caller used to decide "fast or slow" by restating nuri's OUTER
+    /// precondition beside its own counter. That precondition passes here —
+    /// same size, Normal transform, alpha 1.0 — so the old counter reported
+    /// every row as fast. Every row actually takes the per-pixel blend,
+    /// because each one contains a single translucent pixel.
+    ///
+    /// One non-opaque pixel per row is not a contrived input: it is what an
+    /// `Argb8888` client with an anti-aliased edge, a rounded corner or a
+    /// shadow produces on most of its rows.
+    #[test]
+    fn one_translucent_pixel_per_row_sends_the_whole_row_to_the_blend_path() {
+        const W: i32 = 8;
+        const H: i32 = 4;
+        let mut src = vec![0xffu8; (W * H * 4) as usize];
+        // Make pixel 3 of every row 50% alpha.
+        for y in 0..H as usize {
+            src[(y * W as usize + 3) * 4 + 3] = 0x80;
+        }
+        let sref = SurfaceRef::new(&src, W, H, (W * 4) as usize).unwrap();
+        let mut buf = vec![0u8; (W * H * 4) as usize];
+        let mut dst = Surface::new(&mut buf, W, H, (W * 4) as usize).unwrap();
+        let r = Rect { x: 0, y: 0, w: W, h: H };
+        let t = dst.blit(&sref, r, r, Transform::Normal, 1.0, &[r]);
+
+        assert_eq!(t.rows_copied, 0, "no row is wholly opaque");
+        assert_eq!(t.rows_blended, u64::from(H as u32), "every row blends");
+        assert_eq!(t.pixels_general, 0, "the outer fast precondition DID hold");
+    }
+
+    #[test]
+    fn a_fully_opaque_source_copies_every_row() {
+        const W: i32 = 8;
+        const H: i32 = 4;
+        let src = vec![0xffu8; (W * H * 4) as usize];
+        let sref = SurfaceRef::new(&src, W, H, (W * 4) as usize).unwrap();
+        let mut buf = vec![0u8; (W * H * 4) as usize];
+        let mut dst = Surface::new(&mut buf, W, H, (W * 4) as usize).unwrap();
+        let r = Rect { x: 0, y: 0, w: W, h: H };
+        let t = dst.blit(&sref, r, r, Transform::Normal, 1.0, &[r]);
+        assert_eq!(t.rows_copied, u64::from(H as u32));
+        assert_eq!(t.rows_blended, 0);
+        assert_eq!(t.pixels_general, 0);
+    }
+
+    #[test]
+    fn a_scaled_blit_reports_the_general_path_and_no_rows() {
+        // The outer precondition fails, so neither row arm is reachable and
+        // the tally must say so rather than reporting zeros that look like
+        // "nothing happened".
+        const W: i32 = 8;
+        const H: i32 = 4;
+        let src = vec![0xffu8; (W * H * 4) as usize];
+        let sref = SurfaceRef::new(&src, W, H, (W * 4) as usize).unwrap();
+        let mut buf = vec![0u8; (W * 2 * H * 2 * 4) as usize];
+        let mut dst = Surface::new(&mut buf, W * 2, H * 2, (W * 2 * 4) as usize).unwrap();
+        let s = Rect { x: 0, y: 0, w: W, h: H };
+        let d = Rect { x: 0, y: 0, w: W * 2, h: H * 2 };
+        let t = dst.blit(&sref, s, d, Transform::Normal, 1.0, &[d]);
+        assert_eq!(t.rows_copied, 0);
+        assert_eq!(t.rows_blended, 0);
+        assert!(t.pixels_general > 0, "the general path must be counted");
+    }
+
+    #[test]
+    fn the_tally_accounts_for_the_work_and_never_double_counts() {
+        // Each row lands in exactly one arm, so the two row counts sum to the
+        // damaged height. A row counted twice would overstate the fast path,
+        // which is the direction that hides a regression.
+        const W: i32 = 8;
+        const H: i32 = 6;
+        let mut src = vec![0xffu8; (W * H * 4) as usize];
+        for y in (0..H as usize).step_by(2) {
+            src[(y * W as usize + 1) * 4 + 3] = 0x40;
+        }
+        let sref = SurfaceRef::new(&src, W, H, (W * 4) as usize).unwrap();
+        let mut buf = vec![0u8; (W * H * 4) as usize];
+        let mut dst = Surface::new(&mut buf, W, H, (W * 4) as usize).unwrap();
+        let r = Rect { x: 0, y: 0, w: W, h: H };
+        let t = dst.blit(&sref, r, r, Transform::Normal, 1.0, &[r]);
+        assert_eq!(
+            t.rows_copied + t.rows_blended,
+            u64::from(H as u32),
+            "every damaged row lands in exactly one arm"
+        );
+        assert_eq!(t.rows_blended, 3, "the three rows with a translucent pixel");
+    }
+
     /// ★ THE FAST PATH MUST BE PIXEL-IDENTICAL TO THE GENERAL ONE.
     ///
     /// The 1:1 no-transform path skips the per-pixel map-back and scaling

@@ -596,6 +596,7 @@ where
     let mut blit_counters: Option<(
         std::sync::Arc<std::sync::atomic::AtomicU64>,
         std::sync::Arc<std::sync::atomic::AtomicU64>,
+        std::sync::Arc<std::sync::atomic::AtomicU64>,
     )> = None;
     let mut import_counters: Option<(
         std::sync::Arc<std::sync::atomic::AtomicU64>,
@@ -609,10 +610,12 @@ where
     }
     // Install the blit-path counters (see `nuri_renderer::BLIT_COUNTS`).
     {
-        let fast = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
-        let slow = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
-        let _ = crate::nuri_renderer::BLIT_COUNTS.set((fast.clone(), slow.clone()));
-        blit_counters = Some((fast, slow));
+        let copied = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let blended = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let general = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let _ = crate::nuri_renderer::BLIT_COUNTS
+            .set((copied.clone(), blended.clone(), general.clone()));
+        blit_counters = Some((copied, blended, general));
     }
 
     let mut damage_tracker = OutputDamageTracker::from_output(&output);
@@ -1171,13 +1174,17 @@ where
                         u64::try_from(frame_start.elapsed().as_micros()).unwrap_or(u64::MAX),
                         std::sync::atomic::Ordering::Relaxed,
                     );
-                    if let Some((f, sl)) = blit_counters.as_ref() {
+                    if let Some((cp, bl, gp)) = blit_counters.as_ref() {
                         introspect.blit_fast.store(
-                            f.load(std::sync::atomic::Ordering::Relaxed),
+                            cp.load(std::sync::atomic::Ordering::Relaxed),
                             std::sync::atomic::Ordering::Relaxed,
                         );
                         introspect.blit_slow.store(
-                            sl.load(std::sync::atomic::Ordering::Relaxed),
+                            bl.load(std::sync::atomic::Ordering::Relaxed),
+                            std::sync::atomic::Ordering::Relaxed,
+                        );
+                        introspect.blit_general.store(
+                            gp.load(std::sync::atomic::Ordering::Relaxed),
                             std::sync::atomic::Ordering::Relaxed,
                         );
                     }

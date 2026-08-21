@@ -406,25 +406,22 @@ impl Frame for NuriFrame<'_, '_> {
             })
             .collect();
 
-        // Count which path nuri will take, so a profile that only says
-        // "memmove" can be told apart from a fast path that is never
-        // entered. Mirrors nuri's own precondition exactly — if these drift,
-        // the counter lies, so they are written next to each other.
+        // ★ THE COUNTER IS NOW SOURCED FROM THE BRANCH, NOT MIRRORED.
+        //
+        // This used to restate nuri's OUTER precondition here, under a comment
+        // promising the two would be kept in step. They could not be. nuri
+        // makes a SECOND decision per ROW — `srow.chunks_exact(4).all(|px|
+        // px[3] == 0xff)` — and a caller cannot see it. An Argb8888 client
+        // with one translucent pixel per row (an antialiased edge, a rounded
+        // corner, a shadow) takes the blend path on every row while a
+        // precondition-mirroring counter reported every row as fast: a ~2 ms
+        // versus ~15 ms difference behind identical published numbers.
+        //
+        // `blit` returns a `BlitTally` counted at each branch, so the drift is
+        // unrepresentable rather than discouraged.
         let dst_r = to_rect(dst);
-        let fast = matches!(map_transform(src_transform), nuri::Transform::Normal)
-            && src_rect.w == dst_r.w
-            && src_rect.h == dst_r.h
-            && alpha >= 1.0;
-        let rows = u64::try_from(dst_r.h.max(0)).unwrap_or(0);
-        if let Some(c) = BLIT_COUNTS.get() {
-            if fast {
-                c.0.fetch_add(rows, std::sync::atomic::Ordering::Relaxed);
-            } else {
-                c.1.fetch_add(rows, std::sync::atomic::Ordering::Relaxed);
-            }
-        }
 
-        self.surface.blit(
+        let tally = self.surface.blit(
             &src_ref,
             src_rect,
             dst_r,
@@ -432,6 +429,13 @@ impl Frame for NuriFrame<'_, '_> {
             alpha,
             &dmg,
         );
+        // Published once per blit, never per row: a `fetch_add` in the inner
+        // loop would cost more than the branch it is measuring.
+        if let Some(c) = BLIT_COUNTS.get() {
+            c.0.fetch_add(tally.rows_copied, std::sync::atomic::Ordering::Relaxed);
+            c.1.fetch_add(tally.rows_blended, std::sync::atomic::Ordering::Relaxed);
+            c.2.fetch_add(tally.pixels_general, std::sync::atomic::Ordering::Relaxed);
+        }
         Ok(())
     }
 
@@ -484,7 +488,13 @@ pub static IMPORT_COUNTS: std::sync::OnceLock<(
     std::sync::Arc<std::sync::atomic::AtomicU64>,
 )> = std::sync::OnceLock::new();
 
+/// `(rows_copied, rows_blended, pixels_general)` — nuri's three blit arms.
+///
+/// ★ THREE, NOT TWO. It used to be a `fast`/`slow` pair derived from the
+/// outer precondition, which cannot see nuri's per-ROW opacity decision. The
+/// arms are now counted where they branch and folded in here.
 pub static BLIT_COUNTS: std::sync::OnceLock<(
+    std::sync::Arc<std::sync::atomic::AtomicU64>,
     std::sync::Arc<std::sync::atomic::AtomicU64>,
     std::sync::Arc<std::sync::atomic::AtomicU64>,
 )> = std::sync::OnceLock::new();

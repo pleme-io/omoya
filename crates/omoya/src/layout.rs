@@ -513,9 +513,7 @@ mod tests {
         }
     }
 
-    /// Gaps must not make windows overlap — the inset shrinks each parcel,
-    /// so disjointness is preserved by construction, and this pins it.
-    #[test]
+    /// The gap's floor is set by the border, not by taste.
     #[test]
     fn the_gap_is_at_least_two_borders_wide() {
         // ★ THE FLOOR IS THE BORDER, NOT TASTE. GAP is a per-window inset, so
@@ -536,6 +534,9 @@ mod tests {
         );
     }
 
+    /// Gaps must not make windows overlap — the inset shrinks each parcel,
+    /// so disjointness is preserved by construction, and this pins it.
+    #[test]
     fn the_gap_separates_rather_than_overlaps() {
         // Two 960-wide halves of a 1920 screen, each inset by GAP.
         let half = 960;
