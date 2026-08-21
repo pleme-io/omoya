@@ -593,7 +593,40 @@ where
     // Version 3, not feedback: feedback's `main_device` means "the device the
     // compositor renders on", and omoya renders on the CPU into dumb buffers.
     // Naming a render node would be a claim it cannot back.
-    {
+    //
+    // ── ★ WITHDRAWN 2026-08-21, AND THE REASON IS A MEASUREMENT ──────────
+    //
+    // Advertising this made the seat DRAMATICALLY slower, because omoya
+    // implements it badly and the client believed the advertisement.
+    //
+    // `import_dmabuf` maps the client's buffer and `to_vec`s it. For a GPU
+    // client that buffer lives in VRAM, so the copy is a CPU readback across
+    // PCIe — which runs at a few hundred MB/s, not memory speed. Measured on
+    // plo with mado (a wgpu terminal) at 1920x1080:
+    //
+    //     gather_us      693 952   <- 694 ms, the whole frame
+    //     frame_us         3 825   <- compositing is 4 ms and innocent
+    //     import_full          0   <- shm import never called AT ALL
+    //     import_partial       0
+    //
+    // Those last two are the finding. The client had switched to dmabuf
+    // BECAUSE we advertised it, and every frame was paying a VRAM readback.
+    // Before today the global did not exist and clients used `wl_shm` —
+    // system memory, which reads at memory speed and which the damage-only
+    // import path in `nuri_renderer` already makes nearly free.
+    //
+    // ★ ADVERTISING A CAPABILITY WE SERVE BADLY IS WORSE THAN NOT
+    // ADVERTISING IT. A protocol global is a PROMISE about what the
+    // compositor can do well; the client has no way to discover that our
+    // implementation is a CPU readback, and it optimises for the promise.
+    //
+    // This comes back when the buffer is no longer read: direct scanout onto
+    // a DRM plane, which never touches the pixels. plo exposes 12 planes, so
+    // the hardware is there — `pending-nuri-dmabuf-zerocopy` and
+    // `pending-omoya-planes` are the rows, and `docs/SMOOTHNESS.md` is the
+    // plan. The DmabufState and handler stay wired (MODULARIZE, DON'T
+    // DELETE); only the global is withheld.
+    if std::env::var_os("OMOYA_ADVERTISE_DMABUF").is_some() {
         let formats = renderer.dmabuf_formats();
         let count = formats.iter().count();
         let global = data
@@ -604,6 +637,12 @@ where
         tracing::info!(
             formats = count,
             "zwp_linux_dmabuf_v1 advertised — clients may deliver GPU buffers"
+        );
+    } else {
+        tracing::info!(
+            "zwp_linux_dmabuf_v1 WITHHELD — the import is a CPU readback of \
+             VRAM (694ms/frame measured); clients use wl_shm until direct \
+             scanout lands. Set OMOYA_ADVERTISE_DMABUF=1 to re-enable."
         );
     }
     data.state.space.map_output(&output, (0, 0));
