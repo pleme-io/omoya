@@ -47,6 +47,13 @@ impl Omoya {
     /// applies that offset in `KeyboardKeyEvent::key_code`; a caller
     /// synthesising a key must apply it too.
     pub fn key(&mut self, code: Keycode, state: KeyState, time: u32) {
+        // ★ REMAP FIRST, SO EVERYTHING DOWNSTREAM AGREES. CapsLock is Escape
+        // on this seat (see `crate::remap`, and why it cannot be an xkb
+        // option here). Doing it above the chord filter means `awase`, the
+        // deed dispatch and the client's own keymap all see a real Escape —
+        // remapping the keysym later would leave the chord layer still
+        // matching CapsLock, so bindings and fingers would disagree.
+        let code = crate::remap::apply(code);
         let serial = SERIAL_COUNTER.next_serial();
         let event_state = state;
         let Some(keyboard) = self.seat.get_keyboard() else {

@@ -30,6 +30,7 @@ mod input;
 mod layout;
 mod localtime;
 mod owed;
+mod remap;
 mod state;
 mod synth;
 mod theme;
