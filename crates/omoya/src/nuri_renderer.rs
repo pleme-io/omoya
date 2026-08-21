@@ -75,6 +75,30 @@ pub struct NuriTexture {
     height: u32,
     stride: usize,
     format: Fourcc,
+    /// Whether every pixel in `data` is fully opaque.
+    ///
+    /// ★ COMPUTED AT IMPORT, WHERE THE BYTES ARE ALREADY IN CACHE, so the
+    /// blitter can skip its own per-row scan. That scan is a FULL PASS over
+    /// the source on every frame — nuri tests
+    /// `srow.chunks_exact(4).all(|px| px[3] == 0xff)` for each row before
+    /// choosing `copy_from_slice` — and it reads the same bytes the copy is
+    /// about to read again.
+    ///
+    /// ★ NOT DERIVED FROM `format`. The obvious version is
+    /// `matches!(format, Xrgb8888)`, and it would be worth nothing: mado's
+    /// swapchain is `Bgra8UnormSrgb`, so a format gate answers "unknown" on
+    /// the one client whose frames actually cost anything.
+    ///
+    /// Conservative under partial import: a damage-only re-import can only
+    /// clear this, never set it, because the rows it did not touch were not
+    /// re-examined. A false negative costs the scan we were already paying;
+    /// a false positive would composite a translucent window as opaque.
+    ///
+    /// `Arc<AtomicBool>` for the same reason `data` is an `Arc<RwLock<..>>`:
+    /// smithay caches the texture per surface and holds a clone across
+    /// frames, so a damage-only re-import must be able to update the flag on
+    /// the instance the compositor already has.
+    opaque: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Force the padding byte opaque for `X`-formats.
@@ -91,12 +115,24 @@ pub struct NuriTexture {
 ///
 /// `NuriTexture` does carry `format`, which is exactly what made this easy to
 /// miss — the information was present and simply never consulted.
-fn normalise_opaque(bytes: &mut [u8], format: Fourcc) {
+/// Returns whether every pixel in `bytes` is fully opaque afterwards.
+///
+/// ★ THE RETURN IS THE POINT NOW. This function already walks every byte, and
+/// it walks them while they are hot in cache from the copy that just wrote
+/// them. nuri's blit then walked the SAME bytes again, per row, asking the
+/// same question, on a cold pass. Answering here and carrying the answer on
+/// the texture removes that second pass.
+///
+/// For `Xrgb8888` the answer is `true` by construction — we just wrote 0xff
+/// into every alpha byte. For everything else it is measured, not assumed.
+fn normalise_opaque(bytes: &mut [u8], format: Fourcc) -> bool {
     if matches!(format, Fourcc::Xrgb8888) {
         for px in bytes.chunks_exact_mut(4) {
             px[3] = 0xff;
         }
+        return true;
     }
+    bytes.chunks_exact(4).all(|px| px[3] == 0xff)
 }
 
 impl Texture for NuriTexture {
@@ -421,6 +457,17 @@ impl Frame for NuriFrame<'_, '_> {
         // unrepresentable rather than discouraged.
         let dst_r = to_rect(dst);
 
+        // ★ MEASURED AT IMPORT, NOT INFERRED FROM THE FORMAT. The tempting
+        // version is `matches!(texture.format, Xrgb8888)` and it would buy
+        // nothing: mado's swapchain is Bgra8UnormSrgb, so a format gate
+        // answers "unknown" on the one client whose frames actually cost
+        // anything. `opaque` is what `normalise_opaque` OBSERVED while the
+        // bytes were hot from the copy.
+        let hint = if texture.opaque.load(std::sync::atomic::Ordering::Relaxed) {
+            nuri::OpaqueHint::Opaque
+        } else {
+            nuri::OpaqueHint::Unknown
+        };
         let tally = self.surface.blit(
             &src_ref,
             src_rect,
@@ -428,6 +475,7 @@ impl Frame for NuriFrame<'_, '_> {
             map_transform(src_transform),
             alpha,
             &dmg,
+            hint,
         );
         // Published once per blit, never per row: a `fetch_add` in the inner
         // loop would cost more than the branch it is measuring.
@@ -511,13 +559,14 @@ impl ImportMem for NuriRenderer {
         let (w, h) = (size.w as u32, size.h as u32);
         let stride = (size.w as usize) * 4;
         let mut owned = data.to_vec();
-        normalise_opaque(&mut owned, format);
+        let opaque = normalise_opaque(&mut owned, format);
         Ok(NuriTexture {
             data: Arc::new(std::sync::RwLock::new(owned)),
             width: w,
             height: h,
             stride,
             format,
+            opaque: Arc::new(std::sync::atomic::AtomicBool::new(opaque)),
         })
     }
 
@@ -630,6 +679,7 @@ impl ImportMemWl for NuriRenderer {
                     .data
                     .write()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let mut range_opaque = true;
                 for d in damage {
                     let y0 = usize::try_from(d.loc.y.max(0)).unwrap_or(0).min(height);
                     let y1 = usize::try_from((d.loc.y + d.size.h).max(0))
@@ -648,8 +698,19 @@ impl ImportMemWl for NuriRenderer {
                             break;
                         }
                         buf[a..b].copy_from_slice(&bytes[a..b]);
-                        normalise_opaque(&mut buf[a..b], fourcc);
+                        // ★ AND, NEVER ASSIGN. This pass examined only the
+                        // DAMAGED rows; the rest were not re-read, so their
+                        // opacity is whatever it already was. A partial
+                        // import can therefore only ever CLEAR the flag.
+                        // Assigning would let one opaque damage rect declare
+                        // a translucent window opaque, and the failure would
+                        // be a window composited without its alpha.
+                        range_opaque &= normalise_opaque(&mut buf[a..b], fourcc);
                     }
+                }
+                if !range_opaque {
+                    tex.opaque
+                        .store(false, std::sync::atomic::Ordering::Relaxed);
                 }
                 Some(tex.clone())
             });
@@ -664,13 +725,14 @@ impl ImportMemWl for NuriRenderer {
             }
 
             let mut owned = bytes.to_vec();
-            normalise_opaque(&mut owned, fourcc);
+            let opaque = normalise_opaque(&mut owned, fourcc);
             let tex = NuriTexture {
                 data: Arc::new(std::sync::RwLock::new(owned)),
                 width: width_u32,
                 height: height_u32,
                 stride,
                 format: fourcc,
+                opaque: Arc::new(std::sync::atomic::AtomicBool::new(opaque)),
             };
             // Cached for the NEXT commit, which is the one that gets to copy
             // only its damage. Bounded by how many buffers a client cycles
@@ -795,7 +857,7 @@ impl ImportDma for NuriRenderer {
             .sync_plane(0, DmabufSyncFlags::END | DmabufSyncFlags::READ)
             .map_err(|e| Error::Map(format!("sync end: {e:?}")))?;
 
-        normalise_opaque(&mut bytes, format.code);
+        let opaque = normalise_opaque(&mut bytes, format.code);
 
         #[allow(clippy::cast_sign_loss)]
         Ok(NuriTexture {
@@ -804,6 +866,7 @@ impl ImportDma for NuriRenderer {
             height: size.h as u32,
             stride,
             format: format.code,
+            opaque: Arc::new(std::sync::atomic::AtomicBool::new(opaque)),
         })
     }
 }

@@ -131,6 +131,28 @@ pub enum Transform {
 ///
 /// Counting here, in the code that branches, makes the drift unrepresentable
 /// instead of merely discouraged.
+/// What the CALLER already knows about the source's alpha.
+///
+/// ★ The blitter's per-row `all(|px| px[3] == 0xff)` test is a FULL PASS over
+/// the source, re-reading the exact bytes the copy is about to read again.
+/// An importer that has just written those bytes knows the answer while they
+/// are still hot in cache, so it can hand it over and buy the pass back.
+///
+/// `Unknown` is always safe — it simply restores the scan.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum OpaqueHint {
+    /// The caller makes no claim. The blitter scans, as it always did.
+    #[default]
+    Unknown,
+    /// Every pixel of the source is fully opaque.
+    ///
+    /// ★ A WRONG `Opaque` IS A CORRECTNESS BUG, NOT A SLOW PATH — translucent
+    /// pixels would be copied over the destination instead of blended into
+    /// it, and a window would lose its alpha with nothing logged. Callers
+    /// must MEASURE this, never infer it from a pixel format.
+    Opaque,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct BlitTally {
     /// Rows taken wholesale by `copy_from_slice` — the fast path.
@@ -231,6 +253,7 @@ impl<'a> Surface<'a> {
         transform: Transform,
         alpha: f32,
         damage: &[Rect],
+        hint: OpaqueHint,
     ) -> BlitTally {
         let mut tally = BlitTally::default();
         // ★ THE FAST PATH IS THE WHOLE POINT, AND ITS ABSENCE WAS MEASURABLE.
@@ -286,7 +309,11 @@ impl<'a> Surface<'a> {
                     // Opaque rows copy wholesale; a row with any translucent
                     // pixel falls back to per-pixel blending, still without
                     // the per-pixel address arithmetic.
-                    let opaque = srow.chunks_exact(4).all(|px| px[3] == 0xff);
+                    // The scan, unless the importer already answered it.
+                    let opaque = match hint {
+                        OpaqueHint::Opaque => true,
+                        OpaqueHint::Unknown => srow.chunks_exact(4).all(|px| px[3] == 0xff),
+                    };
                     if opaque {
                         tally.rows_copied += 1;
                         if let Some(drow) = self.data.get_mut(doff..doff + uw * 4) {
@@ -468,6 +495,78 @@ mod tests {
     /// One non-opaque pixel per row is not a contrived input: it is what an
     /// `Argb8888` client with an anti-aliased edge, a rounded corner or a
     /// shadow produces on most of its rows.
+    /// ★ THE HINT IS A PROMISE, AND BREAKING IT IS A CORRECTNESS BUG.
+    ///
+    /// `Opaque` tells the blitter to skip its own check and copy wholesale.
+    /// If a caller says `Opaque` about a source that is not, translucent
+    /// pixels are COPIED over the destination instead of blended into it —
+    /// the window silently loses its alpha, with nothing logged.
+    ///
+    /// This pins that the two answers diverge for a translucent source, which
+    /// is what makes the hint load-bearing rather than advisory, and is why
+    /// `normalise_opaque` must MEASURE it rather than infer it from a format.
+    #[test]
+    fn a_false_opaque_hint_changes_the_pixels_and_that_is_why_it_must_be_measured() {
+        const W: i32 = 4;
+        const H: i32 = 1;
+        // A 50%-alpha white source over a black destination.
+        let mut src = vec![0xffu8; (W * H * 4) as usize];
+        for px in src.chunks_exact_mut(4) {
+            px[3] = 0x80;
+        }
+        let sref = SurfaceRef::new(&src, W, H, (W * 4) as usize).unwrap();
+        let r = Rect { x: 0, y: 0, w: W, h: H };
+
+        let mut honest_buf = vec![0u8; (W * H * 4) as usize];
+        let mut honest = Surface::new(&mut honest_buf, W, H, (W * 4) as usize).unwrap();
+        honest.blit(&sref, r, r, Transform::Normal, 1.0, &[r], OpaqueHint::Unknown);
+
+        let mut lying_buf = vec![0u8; (W * H * 4) as usize];
+        let mut lying = Surface::new(&mut lying_buf, W, H, (W * 4) as usize).unwrap();
+        lying.blit(&sref, r, r, Transform::Normal, 1.0, &[r], OpaqueHint::Opaque);
+
+        assert_ne!(
+            honest_buf, lying_buf,
+            "a false Opaque hint must be observable — if these agree the hint \
+             is inert and this test is proving nothing"
+        );
+        // And name which is right: blending 50% white over black gives ~128.
+        assert!(honest_buf[0] < 0xff, "the honest path blended");
+        assert_eq!(lying_buf[0], 0xff, "the lying path copied the source raw");
+    }
+
+    /// A TRUE `Opaque` hint must be indistinguishable from the scan.
+    ///
+    /// The other half of the promise: when the caller is right, taking the
+    /// shortcut must produce byte-identical output. Without this the hint
+    /// could be "fast and subtly different", which is worse than slow.
+    #[test]
+    fn a_true_opaque_hint_produces_identical_pixels_to_scanning() {
+        const W: i32 = 16;
+        const H: i32 = 8;
+        let mut src = vec![0u8; (W * H * 4) as usize];
+        for (i, px) in src.chunks_exact_mut(4).enumerate() {
+            px[0] = (i % 251) as u8;
+            px[1] = (i % 241) as u8;
+            px[2] = (i % 239) as u8;
+            px[3] = 0xff;
+        }
+        let sref = SurfaceRef::new(&src, W, H, (W * 4) as usize).unwrap();
+        let r = Rect { x: 0, y: 0, w: W, h: H };
+
+        let mut scanned_buf = vec![0u8; (W * H * 4) as usize];
+        let mut scanned = Surface::new(&mut scanned_buf, W, H, (W * 4) as usize).unwrap();
+        let a = scanned.blit(&sref, r, r, Transform::Normal, 1.0, &[r], OpaqueHint::Unknown);
+
+        let mut hinted_buf = vec![0u8; (W * H * 4) as usize];
+        let mut hinted = Surface::new(&mut hinted_buf, W, H, (W * 4) as usize).unwrap();
+        let b = hinted.blit(&sref, r, r, Transform::Normal, 1.0, &[r], OpaqueHint::Opaque);
+
+        assert_eq!(scanned_buf, hinted_buf, "the shortcut must not change pixels");
+        assert_eq!(a, b, "and both must report the same arms taken");
+        assert_eq!(a.rows_copied, u64::from(H as u32));
+    }
+
     #[test]
     fn one_translucent_pixel_per_row_sends_the_whole_row_to_the_blend_path() {
         const W: i32 = 8;
@@ -481,7 +580,7 @@ mod tests {
         let mut buf = vec![0u8; (W * H * 4) as usize];
         let mut dst = Surface::new(&mut buf, W, H, (W * 4) as usize).unwrap();
         let r = Rect { x: 0, y: 0, w: W, h: H };
-        let t = dst.blit(&sref, r, r, Transform::Normal, 1.0, &[r]);
+        let t = dst.blit(&sref, r, r, Transform::Normal, 1.0, &[r], OpaqueHint::Unknown);
 
         assert_eq!(t.rows_copied, 0, "no row is wholly opaque");
         assert_eq!(t.rows_blended, u64::from(H as u32), "every row blends");
@@ -497,7 +596,7 @@ mod tests {
         let mut buf = vec![0u8; (W * H * 4) as usize];
         let mut dst = Surface::new(&mut buf, W, H, (W * 4) as usize).unwrap();
         let r = Rect { x: 0, y: 0, w: W, h: H };
-        let t = dst.blit(&sref, r, r, Transform::Normal, 1.0, &[r]);
+        let t = dst.blit(&sref, r, r, Transform::Normal, 1.0, &[r], OpaqueHint::Unknown);
         assert_eq!(t.rows_copied, u64::from(H as u32));
         assert_eq!(t.rows_blended, 0);
         assert_eq!(t.pixels_general, 0);
@@ -516,7 +615,7 @@ mod tests {
         let mut dst = Surface::new(&mut buf, W * 2, H * 2, (W * 2 * 4) as usize).unwrap();
         let s = Rect { x: 0, y: 0, w: W, h: H };
         let d = Rect { x: 0, y: 0, w: W * 2, h: H * 2 };
-        let t = dst.blit(&sref, s, d, Transform::Normal, 1.0, &[d]);
+        let t = dst.blit(&sref, s, d, Transform::Normal, 1.0, &[d], OpaqueHint::Unknown);
         assert_eq!(t.rows_copied, 0);
         assert_eq!(t.rows_blended, 0);
         assert!(t.pixels_general > 0, "the general path must be counted");
@@ -537,7 +636,7 @@ mod tests {
         let mut buf = vec![0u8; (W * H * 4) as usize];
         let mut dst = Surface::new(&mut buf, W, H, (W * 4) as usize).unwrap();
         let r = Rect { x: 0, y: 0, w: W, h: H };
-        let t = dst.blit(&sref, r, r, Transform::Normal, 1.0, &[r]);
+        let t = dst.blit(&sref, r, r, Transform::Normal, 1.0, &[r], OpaqueHint::Unknown);
         assert_eq!(
             t.rows_copied + t.rows_blended,
             u64::from(H as u32),
@@ -582,7 +681,7 @@ mod tests {
         let mut fast_px = vec![0u8; stride * H as usize];
         {
             let mut dst = Surface::new(&mut fast_px, W, H, stride).expect("dst");
-            dst.blit(&src, whole, whole, Transform::Normal, 1.0, &[whole]);
+            dst.blit(&src, whole, whole, Transform::Normal, 1.0, &[whole], OpaqueHint::Unknown);
         }
 
         // The general path, reached by asking for a transform the fast path
@@ -596,7 +695,7 @@ mod tests {
             // alpha < 1.0 also declines the fast path; 1.0 exactly is what
             // the fast path requires, so use a hair under and accept that
             // the blend is a no-op against an opaque source.
-            dst.blit(&src, whole, whole, Transform::Normal, 0.999_999, &[whole]);
+            dst.blit(&src, whole, whole, Transform::Normal, 0.999_999, &[whole], OpaqueHint::Unknown);
         }
 
         assert_eq!(
@@ -688,6 +787,7 @@ mod tests {
             Transform::Normal,
             1.0,
             &[Rect::new(0, 0, 4, 4)],
+            OpaqueHint::Unknown,
         );
         let d = 3 * dstride + 2 * 4;
         assert_eq!(&dst_buf[d..d + 4], &[255, 255, 255, 255]);
@@ -709,6 +809,7 @@ mod tests {
             Transform::Normal,
             1.0,
             &[Rect::new(0, 0, 1, 1)],
+            OpaqueHint::Unknown,
         );
         assert_eq!(&dst_buf[0..4], &[255, 255, 255, 255]);
         assert_eq!(&dst_buf[4..8], &[0, 0, 0, 0], "outside damage stays untouched");
