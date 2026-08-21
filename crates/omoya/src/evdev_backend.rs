@@ -848,6 +848,17 @@ impl<S: Session> smithay::reexports::calloop::EventSource for EvdevBackend<S> {
         }
 
         self.last_active = self.session.is_active();
+        // ★ PUBLISH HERE TOO, NOT ONLY IN `reregister`.
+        //
+        // The first cut published at construction and from `reregister`, and
+        // `register` sets `polled` between them — so the leaf reported
+        // `polled=false` for every device forever unless calloop happened to
+        // reconcile. Caught within a minute of shipping it, by reading it: six
+        // devices claiming not to be polled while the pointer plainly worked.
+        //
+        // A status leaf that publishes a value it never refreshes is not a
+        // measurement, it is a snapshot wearing one's clothes.
+        self.publish();
         Ok(())
     }
 
