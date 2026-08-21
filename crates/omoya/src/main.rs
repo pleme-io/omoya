@@ -20,6 +20,7 @@ mod nuri_renderer;
 mod scanout;
 mod bar;
 mod chord;
+mod cursor;
 mod deed;
 #[cfg(target_os = "linux")]
 mod drm;

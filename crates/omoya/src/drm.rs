@@ -291,11 +291,11 @@ pub fn cursor() -> [f32; 4] {
 
 /// The pointer's size in physical pixels.
 ///
-/// A square, not an arrow, and that is the honest shape of what this is: omoya
-/// draws its OWN pointer because `cursor_image` discards the client's, so this
-/// is a position indicator rather than a themed cursor. Big enough to find on a
-/// 1080p panel, small enough not to hide what it is pointing at.
-/// `pending-omoya-client-cursor` is the row for honouring the client's surface.
+/// Retired: the pointer is `crate::cursor`'s arrow now, not a solid square.
+/// Kept as a named constant rather than deleted so the size the square used
+/// to be stays legible next to the arrow that replaced it — 12px was not a
+/// small cursor, it was an unfindable one.
+#[allow(dead_code)]
 const CURSOR_SIZE: i32 = 12;
 
 // ── ★ ONE ELEMENT SLICE, BECAUSE PARTIAL REPAINT OWNS THE WHOLE FRAME ────
@@ -514,6 +514,18 @@ where
     // An `OutputDamageTracker` was already being constructed in `prepare()`
     // and had zero callers, which is why the frame stayed full-screen: the
     // machinery was present, built, and never wired to anything.
+    // ★ START THE POINTER IN THE MIDDLE, NOT AT (0, 0).
+    //
+    // `Omoya::new` sets (0.0, 0.0) and says why: at construction there is no
+    // output, so a centre would be a guess. Here there IS one. Left at the
+    // origin the arrow sits in the corner underneath the bar, which is
+    // exactly where an operator does not look — and "I cannot find the
+    // mouse" is indistinguishable from "there is no mouse".
+    if data.state.pointer_location == (0.0, 0.0).into() {
+        data.state.pointer_location =
+            (f64::from(mode.size.w) / 2.0, f64::from(mode.size.h) / 2.0).into();
+    }
+
     let mut damage_tracker = OutputDamageTracker::from_output(&output);
     let cursor_id = smithay::backend::renderer::element::Id::new();
     // One stable id per border EDGE, for the same reason the cursor has one:
@@ -526,6 +538,11 @@ where
     // this buffer every frame would give the damage tracker a new commit each
     // time and undo the partial repaint the seat just gained — the bar alone
     // would put the desktop back to full-screen composites.
+    // The arrow bitmap. Built on first use and kept: the shape never
+    // changes, so rebuilding it per frame would hand the damage tracker a
+    // new commit each time — the same trap the bar's text comparison avoids.
+    let mut cursor_buffer: Option<smithay::backend::renderer::element::memory::MemoryRenderBuffer> =
+        None;
     let mut bar_text = crate::bar::BarText::default();
     let mut bar_buffer: Option<smithay::backend::renderer::element::memory::MemoryRenderBuffer> =
         None;
@@ -643,46 +660,53 @@ where
             .unwrap_or_default();
 
             let mut elements: Vec<SeatElements<R, _>> =
-                Vec::with_capacity(space_elements.len() + 1);
+                Vec::with_capacity(space_elements.len() + 6);
             {
-                // `CommitCounter` is re-exported from `renderer::utils`, NOT
-                // from `element` — `element` imports it privately for its own
-                // use, so the obvious path compiles to "private struct".
-                use smithay::backend::renderer::element::Kind;
-                use smithay::backend::renderer::utils::CommitCounter;
-                use smithay::backend::renderer::element::solid::SolidColorRenderElement;
+                // ── ★ THE POINTER, AS AN ARROW ──────────────────────────
+                //
+                // This was a 12x12 solid square, which the operator read
+                // first as "a white square in the top left hand corner" and
+                // later as "the mouse isn't on the screen". Both readings
+                // were right: a square has no tip to aim with and no
+                // orientation, so it does not signal "pointer" at all, and at
+                // 12px on a 1920x1080 panel it is findable only if you
+                // already know where it is.
+                //
+                // `cursor::rasterize` draws a real arrow with an outline, so
+                // it reads against a dark background AND a light one. Built
+                // once — the shape never changes, only its position.
+                let cur = cursor_buffer.get_or_insert_with(|| {
+                    smithay::backend::renderer::element::memory::MemoryRenderBuffer::from_slice(
+                        &crate::cursor::rasterize(),
+                        smithay::backend::allocator::Fourcc::Argb8888,
+                        (crate::cursor::width(), crate::cursor::height()),
+                        1,
+                        smithay::utils::Transform::Normal,
+                        None,
+                    )
+                });
                 let p = data.state.pointer_location;
-                let (cw, ch) = (CURSOR_SIZE, CURSOR_SIZE);
-                // Clamped so the cursor stays wholly on-screen: a rect
-                // extending past the framebuffer is a partial write at best
-                // and an out-of-bounds one at worst, and nuri gates every
-                // write on an intersect precisely because that class is easy
-                // to reach.
-                let x = (p.x.round() as i32).clamp(0, mode.size.w - cw);
-                let y = (p.y.round() as i32).clamp(0, mode.size.h - ch);
-                // ★ A STABLE ID AND A CONSTANT COMMIT, BOTH LOAD-BEARING.
-                //
-                // The damage tracker keys an element's history on its `Id`. A
-                // fresh `Id::new()` each frame reads as "the old element
-                // vanished and a new one appeared", which damages both rects
-                // every single frame — a partial repaint that repaints as much
-                // as a full one, and looks like the optimisation simply did
-                // not work. `cursor_id` is minted once, outside the loop.
-                //
-                // The `CommitCounter` is the other half: it means "the
-                // element's CONTENT changed in place". Our pointer is a fixed
-                // colour at a moving rectangle, so the content never changes
-                // and a constant commit is the truthful answer. Movement is
-                // seen through the geometry, which the tracker compares
-                // separately.
-                elements.push(SeatElements::Cursor(SolidColorRenderElement::new(
-                    cursor_id.clone(),
-                    smithay::utils::Rectangle::new((x, y).into(), (cw, ch).into()),
-                    CommitCounter::default(),
-                    smithay::backend::renderer::Color32F::from(cursor()),
+                // Clamped so the arrow stays wholly on-screen. The TIP is at
+                // (0,0) of the bitmap, so the clamp is against the full
+                // extent — letting the body run off the edge would make the
+                // pointer appear to shrink as it approaches a border.
+                let x = (p.x.round() as i32).clamp(0, mode.size.w - crate::cursor::width());
+                let y = (p.y.round() as i32).clamp(0, mode.size.h - crate::cursor::height());
+                use smithay::backend::renderer::element::Kind;
+                use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
+                if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
+                    &mut renderer,
+                    (f64::from(x), f64::from(y)),
+                    cur,
+                    None,
+                    None,
+                    None,
                     Kind::Cursor,
-                )));
+                ) {
+                    elements.push(SeatElements::Bar(el));
+                }
             }
+
             // ── ★ THE BAR ───────────────────────────────────────────────
             {
                 let now = std::time::SystemTime::now()
