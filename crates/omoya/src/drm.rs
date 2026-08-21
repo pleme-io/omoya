@@ -526,6 +526,10 @@ where
             (f64::from(mode.size.w) / 2.0, f64::from(mode.size.h) / 2.0).into();
     }
 
+    let mut blit_counters: Option<(
+        std::sync::Arc<std::sync::atomic::AtomicU64>,
+        std::sync::Arc<std::sync::atomic::AtomicU64>,
+    )> = None;
     // Install the blit-path counters (see `nuri_renderer::BLIT_COUNTS`).
     {
         let fast = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
@@ -549,10 +553,6 @@ where
     // The arrow bitmap. Built on first use and kept: the shape never
     // changes, so rebuilding it per frame would hand the damage tracker a
     // new commit each time — the same trap the bar's text comparison avoids.
-    let mut blit_counters: Option<(
-        std::sync::Arc<std::sync::atomic::AtomicU64>,
-        std::sync::Arc<std::sync::atomic::AtomicU64>,
-    )> = None;
     let mut cursor_buffer: Option<smithay::backend::renderer::element::memory::MemoryRenderBuffer> =
         None;
     let mut bar_text = crate::bar::BarText::default();
