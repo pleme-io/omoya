@@ -459,6 +459,13 @@ const fn map_transform(t: Transform) -> nuri::Transform {
 /// A global because `Frame` is constructed per frame by smithay and cannot
 /// carry a handle without changing the trait's shape. Installed once from
 /// the render loop; absent in tests, where the counters are simply not kept.
+/// Full-buffer versus damage-only shm imports. See
+/// `OmoyaIntrospect::import_full`.
+pub static IMPORT_COUNTS: std::sync::OnceLock<(
+    std::sync::Arc<std::sync::atomic::AtomicU64>,
+    std::sync::Arc<std::sync::atomic::AtomicU64>,
+)> = std::sync::OnceLock::new();
+
 pub static BLIT_COUNTS: std::sync::OnceLock<(
     std::sync::Arc<std::sync::atomic::AtomicU64>,
     std::sync::Arc<std::sync::atomic::AtomicU64>,
@@ -616,7 +623,13 @@ impl ImportMemWl for NuriRenderer {
                 Some(tex.clone())
             });
             if let Some(tex) = reused {
+                if let Some(c) = IMPORT_COUNTS.get() {
+                    c.1.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
                 return Ok(tex);
+            }
+            if let Some(c) = IMPORT_COUNTS.get() {
+                c.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
 
             let mut owned = bytes.to_vec();

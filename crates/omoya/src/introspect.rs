@@ -119,6 +119,22 @@ pub struct OmoyaIntrospect {
     /// which is invisible from a profile that only says "memmove".
     pub blit_fast: AtomicU64,
     pub blit_slow: AtomicU64,
+    /// Microseconds the last frame spent GATHERING elements — which is where
+    /// texture import happens, and therefore where a client's buffer is
+    /// copied.
+    ///
+    /// ★ SPLIT FROM `frame_us` BECAUSE `frame_us` EXONERATED THE WRONG HALF.
+    /// It measured `render_output` only and read 4 ms while the seat sat at
+    /// 99% CPU and 1.4 fps — conclusive proof that compositing was innocent
+    /// and equally conclusive that the instrumentation was pointed at the
+    /// wrong place.
+    pub gather_us: AtomicU64,
+    /// shm imports that copied the WHOLE buffer, versus only their damage.
+    /// `import_full` staying high means the incremental path's precondition
+    /// never holds — most likely `Arc::get_mut` failing because smithay is
+    /// holding the texture too.
+    pub import_full: AtomicU64,
+    pub import_partial: AtomicU64,
     /// Each render element's geometry, as the RENDERER sees it.
     ///
     /// ★ THE THIRD INDEPENDENT VIEW OF THE SAME QUESTION. `layout` is what
@@ -311,6 +327,9 @@ impl Introspect for OmoyaIntrospect {
             "frame_us" => Ok(n(&self.frame_us)),
             "blit_fast" => Ok(n(&self.blit_fast)),
             "blit_slow" => Ok(n(&self.blit_slow)),
+            "gather_us" => Ok(n(&self.gather_us)),
+            "import_full" => Ok(n(&self.import_full)),
+            "import_partial" => Ok(n(&self.import_partial)),
             "elements" => Ok(n(&self.elements)),
             "geometry" => Ok(serde_json::json!(
                 self.geometry
@@ -399,6 +418,9 @@ impl Introspect for OmoyaIntrospect {
             "frame_us",
             "blit_fast",
             "blit_slow",
+            "gather_us",
+            "import_full",
+            "import_partial",
             "elements",
             "geometry",
             "layout",

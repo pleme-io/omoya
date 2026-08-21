@@ -530,6 +530,16 @@ where
         std::sync::Arc<std::sync::atomic::AtomicU64>,
         std::sync::Arc<std::sync::atomic::AtomicU64>,
     )> = None;
+    let mut import_counters: Option<(
+        std::sync::Arc<std::sync::atomic::AtomicU64>,
+        std::sync::Arc<std::sync::atomic::AtomicU64>,
+    )> = None;
+    {
+        let full = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let part = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let _ = crate::nuri_renderer::IMPORT_COUNTS.set((full.clone(), part.clone()));
+        import_counters = Some((full, part));
+    }
     // Install the blit-path counters (see `nuri_renderer::BLIT_COUNTS`).
     {
         let fast = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
@@ -662,6 +672,7 @@ where
             // slice as "draw order" gets this exactly backwards and puts the
             // cursor underneath every window, where it is invisible in
             // precisely the case it matters.
+            let gather_start = std::time::Instant::now();
             let space_elements = smithay::desktop::space::space_render_elements(
                 &mut renderer,
                 [&data.state.space],
@@ -669,6 +680,22 @@ where
                 1.0,
             )
             .unwrap_or_default();
+            // Gathering is where texture import lives — see
+            // `OmoyaIntrospect::gather_us`.
+            introspect.gather_us.store(
+                u64::try_from(gather_start.elapsed().as_micros()).unwrap_or(u64::MAX),
+                std::sync::atomic::Ordering::Relaxed,
+            );
+            if let Some((full, part)) = import_counters.as_ref() {
+                introspect.import_full.store(
+                    full.load(std::sync::atomic::Ordering::Relaxed),
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+                introspect.import_partial.store(
+                    part.load(std::sync::atomic::Ordering::Relaxed),
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+            }
 
             let mut elements: Vec<SeatElements<R, _>> =
                 Vec::with_capacity(space_elements.len() + 6);
