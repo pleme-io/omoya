@@ -47,12 +47,15 @@ fn font_bytes() -> Option<&'static [u8]> {
         // monospace, so a seat without Nerd Fonts still gets a bar.
         const ROOTS: &[&str] = &[
             "/run/current-system/sw/share/fonts",
+            // NixOS `fonts.packages` also lands faces here.
+            "/run/current-system/sw/share/X11/fonts",
             "/usr/share/fonts",
         ];
         const WANTED: &[&str] = &[
             "JetBrainsMonoNerdFont-Regular.ttf",
             "JetBrainsMonoNLNerdFontMono-Regular.ttf",
             "DejaVuSansMono.ttf",
+            "DejaVuSans.ttf",
         ];
         for root in ROOTS {
             for want in WANTED {

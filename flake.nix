@@ -403,6 +403,20 @@
                   # still in place, and their removal is the proof that it is
                   # gone.
                 };
+                # ★ A FONT, OR THE BAR ASSERTION BELOW PROVES NOTHING.
+                #
+                # `bar::rasterize` returns None when it finds no font, and the
+                # compositor then draws no bar — deliberately, because a blank
+                # stripe looks like a rendering bug while absence looks like
+                # absence. The consequence for THIS test is that a machine
+                # with no fonts passes every assertion while never exercising
+                # a line of the bar, which is the vacuous-gate shape: green
+                # over an empty subject set.
+                #
+                # Measured before this was added: two windows reported 62644
+                # and 67396 content pixels, where a 1024x28 bar would have put
+                # ~14336 in EACH half. The gap is what says the bar was absent.
+                fonts.packages = [ pkgs.dejavu_fonts ];
                 environment.systemPackages = [
                   wrapped
                   pkgs.libinput
@@ -686,6 +700,33 @@
                   "is not reaching the framebuffer. Check "
                   "NuriRenderer::context_id stability and the Xrgb alpha "
                   "normalisation."
+              )
+
+              # ── ★ DID THE BAR DRAW? ─────────────────────────────────────
+              #
+              # The bar is `bar::HEIGHT` tall and spans the full width, in
+              # polar_night[1] with a frost[2] line along its bottom edge —
+              # all of which differ from the Nord0 background, so a drawn bar
+              # is a near-solid block of non-background pixels across the top
+              # strip. An ABSENT bar leaves that strip pure background.
+              #
+              # This exists because the bar degrades to nothing when it finds
+              # no font, which is the right behaviour and also means the whole
+              # feature can vanish while every other assertion here stays
+              # green.
+              bar_px, bar_total = (
+                  int(v) for v in
+                  machine.succeed(
+                      f"ppm-region /tmp/seat.ppm 0 0 1024 28 {nord0}"
+                  ).split()
+              )
+              print(f"bar strip: {bar_px}/{bar_total} non-background px")
+              assert bar_total > 0, "the bar sample rectangle is off the image"
+              assert bar_px > bar_total // 2, (
+                  f"only {bar_px} of {bar_total} pixels in the top strip differ "
+                  "from the background — the bar did not draw. Most likely no "
+                  "font was found (bar::rasterize returns None), which the "
+                  "compositor turns into no bar at all."
               )
 
               # ── ★ DO TWO WINDOWS TILE, OR JUST STACK? ───────────────────
