@@ -201,6 +201,17 @@ pub struct OmoyaIntrospect {
     pub capture_request: std::sync::Mutex<Option<String>>,
     /// What became of the last capture: the path written, or the error.
     pub capture_result: std::sync::Mutex<Option<String>>,
+    /// The input device table: what the backend opened, what it believes
+    /// about each one, and whether it is in the poll set.
+    ///
+    /// ★ EXISTS BECAUSE THE ALTERNATIVE WAS INFERENCE. A keyboard that is
+    /// open but silent is indistinguishable from one that is polled and
+    /// simply not being typed on — from outside the process there is no way
+    /// to tell, and the fds in `/proc/<pid>/fd` look identical either way.
+    /// `armed` is the bit that matters: the backend clears it on ENODEV,
+    /// which the kernel returns BOTH for an unplug and for a device logind
+    /// revoked, and a disarmed device is invisible for the rest of the run.
+    pub input_devices: std::sync::Mutex<String>,
     /// Every mode the connector offers, and which one we took —
     /// `"1920x1080@60 1920x1080@360* …"`, the star marking the selection.
     ///
@@ -394,6 +405,12 @@ impl Introspect for OmoyaIntrospect {
             // render loop actually acted on, not from a re-read of the
             // ledger — a re-read would be a different question (what is owed
             // NOW) wearing this one's name.
+            "input_devices" => Ok(serde_json::json!(
+                self.input_devices
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone()
+            )),
             "modes" => Ok(serde_json::json!(
                 self.modes
                     .lock()

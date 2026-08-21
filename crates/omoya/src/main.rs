@@ -549,7 +549,7 @@ fn attach_session<S, N>(
     // switch — see the ActivateSession arm below.
     let mut input_token: Option<smithay::reexports::calloop::RegistrationToken> = None;
     let attached = match kind {
-        InputBackendKind::Evdev => crate::evdev_backend::EvdevBackend::new(session.clone())
+        InputBackendKind::Evdev => crate::evdev_backend::EvdevBackend::new(session.clone(), Some(introspect.clone()))
             .map_err(|e| format!("{e}"))
             .and_then(|backend| {
                 event_loop

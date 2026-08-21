@@ -266,6 +266,9 @@ struct Entry {
 
 /// Input devices, read straight from the kernel.
 pub struct EvdevBackend<S: Session> {
+    /// Where to publish the device table. Optional so the type stays usable
+    /// in tests and in the nested backend without a sidecar.
+    introspect: Option<std::sync::Arc<crate::introspect::OmoyaIntrospect>>,
     /// ★ THE SESSION, HELD — not borrowed for the constructor and dropped.
     /// Hotplug means opening a device long after start-up, and `Session::open`
     /// (logind `TakeDevice`) is the only sanctioned way to do that. Opening a
@@ -330,7 +333,10 @@ impl<S: Session> EvdevBackend<S> {
     /// is SKIPPED with a warning rather than fatal: one unreadable node must
     /// not cost the seat its keyboard. A monitor that fails to bind is also
     /// not fatal — see `monitor`.
-    pub fn new(mut session: S) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(
+        mut session: S,
+        introspect: Option<std::sync::Arc<crate::introspect::OmoyaIntrospect>>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let monitor = match crate::uevent::UeventMonitor::new() {
             Ok(m) => Some(m),
             Err(e) => {
@@ -376,7 +382,8 @@ impl<S: Session> EvdevBackend<S> {
             hotplug = monitor.is_some(),
             "evdev devices opened through the session"
         );
-        Ok(Self {
+        let me = Self {
+            introspect,
             session,
             devices,
             pending: HashMap::new(),
@@ -386,7 +393,42 @@ impl<S: Session> EvdevBackend<S> {
             graveyard: Vec::new(),
             last_active: false,
             dirty: false,
-        })
+        };
+        me.publish();
+        Ok(me)
+    }
+
+    /// Publish the device table so an operator can ASK instead of infer.
+    ///
+    /// Called after enumeration and after every arm/disarm transition, which
+    /// are the only moments the answer changes.
+    fn publish(&self) {
+        let Some(i) = &self.introspect else { return };
+        let mut out = String::new();
+        for e in &self.devices {
+            if !out.is_empty() {
+                out.push_str(" | ");
+            }
+            let kb = e.meta.caps & EvdevDevice::CAP_KEYBOARD != 0;
+            let pt = e.meta.caps & EvdevDevice::CAP_POINTER != 0;
+            out.push_str(&format!(
+                "{} [{}{}] armed={} polled={} gone={}",
+                e.meta.path.display(),
+                if kb { "k" } else { "" },
+                if pt { "p" } else { "" },
+                e.armed,
+                e.polled,
+                e.gone
+            ));
+        }
+        if out.is_empty() {
+            // ★ THE DENOMINATOR. An empty table and a healthy one must not
+            // render the same — "no devices" is a finding, not a blank.
+            out.push_str("NONE OPENED");
+        }
+        *i.input_devices
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = out;
     }
 
     fn open_one(
@@ -832,6 +874,7 @@ impl<S: Session> smithay::reexports::calloop::EventSource for EvdevBackend<S> {
                     e.armed = true;
                 }
             }
+            self.publish();
         }
         self.last_active = active;
 
@@ -884,6 +927,10 @@ impl<S: Session> smithay::reexports::calloop::EventSource for EvdevBackend<S> {
         if let Some(m) = &self.monitor {
             poll.reregister(m.as_fd(), Interest::READ, Mode::Level, monitor_token)?;
         }
+        // The table changed if anything armed, disarmed or left. Publishing
+        // here covers every transition with one call, and `reregister` is
+        // exactly when calloop asks us to reconcile the poll set with it.
+        self.publish();
         Ok(())
     }
 
