@@ -821,6 +821,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    event_loop.run(None, &mut data, |_| {})?;
+    // ── ★ FLUSH AFTER EVERY DISPATCH. THIS IS WHERE TYPING WAS LOST. ────
+    //
+    // calloop calls this once per dispatch cycle, after every source has been
+    // serviced. It is where a Wayland compositor flushes its clients, and it
+    // was `|_| {}`.
+    //
+    // The whole crate had exactly TWO `flush_clients` calls: one in `winit.rs`
+    // (the nested backend, unused on a real seat) and one at the bottom of the
+    // DRM frame path — which sits BELOW the mekuri damage gate. So the only
+    // flush on a real seat ran as a side effect of compositing a frame.
+    //
+    // A keystroke owes no frame. It is forwarded to the focused client, the
+    // gate finds nothing owed, no frame is composed, no flush happens, the
+    // client never receives the bytes sitting in its socket buffer, so it
+    // changes nothing, so it commits nothing, so still no frame is owed. A
+    // self-sustaining deadlock, and typing simply did nothing.
+    //
+    // The pointer escaped it for a reason that made the bug look like a
+    // keyboard bug: pointer motion marks `Owed::Pointer` — omoya draws the
+    // cursor itself — so it always composes a frame and drags a flush along
+    // behind it. Mouse perfect, keyboard dead, one missing line.
+    //
+    // ★ It belongs HERE and not in the frame path. Flushing only when we draw
+    // makes client delivery a function of whether the screen changed, which is
+    // exactly backwards: a client that needs to be woken in order to change
+    // anything must be flushed BEFORE the frame, not after one we only compose
+    // if it already changed something.
+    event_loop.run(None, &mut data, |data| {
+        if let Err(e) = data.display_handle.flush_clients() {
+            // Never fatal: one wedged client must not take the seat down. But
+            // never silent either — a persistent failure here presents as
+            // "input does nothing", which is the hardest symptom to trace back
+            // to its cause.
+            tracing::warn!(error = %e, "flushing clients failed");
+        }
+    })?;
     Ok(())
 }
