@@ -320,10 +320,25 @@ fn linear_to_srgb(v: f32) -> u8 {
 /// be absent, not a blank stripe that looks like a rendering bug.
 #[must_use]
 pub fn rasterize(state: &BarState, width: i32) -> Option<Vec<u8>> {
+    rasterize_h(state, width, HEIGHT)
+}
+
+/// Rasterize at a CONFIGURED height.
+///
+/// ★ Split from [`rasterize`] because the tiler and the painter must agree.
+/// `apply_layout` reserves `config.bar.height`; if the painter kept using the
+/// const, an operator raising the bar would get a reserved strip taller than
+/// the thing drawn in it — a band of stale pixels along the top that reads as
+/// a rendering bug and is actually two numbers disagreeing.
+///
+/// Measured on plo: with `bar.height: 34` in yaml, the content area correctly
+/// moved to `4,38 1912x1038` while the bar still painted `1920x28`.
+#[must_use]
+pub fn rasterize_h(state: &BarState, width: i32, height: i32) -> Option<Vec<u8>> {
     let font = font()?;
 
     let w = usize::try_from(width).ok()?;
-    let h = usize::try_from(HEIGHT).ok()?;
+    let h = usize::try_from(height).ok()?;
     let bg = role_surface();
 
     // ARGB8888 little-endian is B,G,R,A in memory order.

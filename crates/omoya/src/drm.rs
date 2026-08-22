@@ -960,12 +960,13 @@ where
                     .collect();
                 let wanted = crate::bar::BarState { parcels, clock };
                 if wanted != bar_text || bar_buffer.is_none() {
-                    if let Some(px) = crate::bar::rasterize(&wanted, mode.size.w) {
+                    let bar_h = data.state.config.bar.height;
+                    if let Some(px) = crate::bar::rasterize_h(&wanted, mode.size.w, bar_h) {
                         bar_buffer = Some(
                             smithay::backend::renderer::element::memory::MemoryRenderBuffer::from_slice(
                                 &px,
                                 smithay::backend::allocator::Fourcc::Argb8888,
-                                (mode.size.w, crate::bar::HEIGHT),
+                                (mode.size.w, bar_h),
                                 1,
                                 smithay::utils::Transform::Normal,
                                 None,
