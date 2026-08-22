@@ -24,6 +24,7 @@ use std::collections::HashMap;
 
 use kukaku::{Direction, LayoutNode, LeafRemoval, Rect, SplitOrientation};
 use smithay::desktop::Window;
+use crate::placement::Placement;
 use smithay::utils::{Logical, Rectangle};
 
 /// The space left between tiled windows, and between a window and the screen
@@ -361,6 +362,26 @@ impl crate::state::Omoya {
             )
         };
 
+        // ── ★ FLOAT WHAT SHOULD FLOAT, RE-DERIVED EACH PASS ──────────────
+        //
+        // `app_id` arrives in a request AFTER the toplevel exists, so a
+        // decision made once at `new_toplevel` sees `None` and tiles the
+        // launcher. Re-deriving here is idempotent and self-corrects the
+        // moment the identity lands — see `crate::placement`.
+        let floats: Vec<smithay::desktop::Window> = self
+            .space
+            .elements()
+            .filter(|w| {
+                crate::placement::for_app_id(app_id_of(w).as_deref()).is_floating()
+            })
+            .cloned()
+            .collect();
+        for w in &floats {
+            // Idempotent: `unmap` returns false for a window the tree does not
+            // hold, so a launcher that is already floating costs a lookup.
+            self.tiling.unmap(w);
+        }
+
         let arranged = self.tiling.arrange(usable);
         // Publish what the TREE asked for, before anything is applied. See
         // `OmoyaIntrospect::layout` — a screenshot says where windows ended
@@ -382,6 +403,28 @@ impl crate::state::Omoya {
                 t.send_pending_configure();
             }
             self.space.map_element(window.clone(), rect.loc, false);
+        }
+
+        // ★ MAPPED LAST, SO THEY ARE ON TOP. `Space` stacks in map order, and
+        // an overlay behind the windows it overlays is worse than no overlay:
+        // it takes the keyboard while showing nothing.
+        for w in &floats {
+            let Placement::Floating { width, height } =
+                crate::placement::for_app_id(app_id_of(w).as_deref())
+            else {
+                continue;
+            };
+            let rect = crate::placement::centred(usable, width, height);
+            if let Some(t) = w.toplevel() {
+                t.with_pending_state(|state| {
+                    state.size = Some(rect.size);
+                });
+                t.send_pending_configure();
+            }
+            // `true` — activate. A launcher that appears without focus is a
+            // launcher you have to click before you can type into, which
+            // defeats summoning it from the keyboard.
+            self.space.map_element(w.clone(), rect.loc, true);
         }
 
         // Where focus is, for the border the render loop draws and for anyone
@@ -560,4 +603,25 @@ mod tests {
         assert!(Tiling::default().arrange_ids(SCREEN).is_empty());
         assert!(Tiling::default().is_empty());
     }
+}
+
+/// A window's `app_id`, if the client has set one yet.
+///
+/// ★ Returns `None` rather than an empty string for "not set", because those
+/// are different facts: a client that has not yet sent `set_app_id` will send
+/// one, and a client that sent `""` has told us it has no identity. Only the
+/// second is stable enough to make a placement decision on, and
+/// `placement::for_app_id` treats both as tiled anyway — but a future rule
+/// that wants to distinguish them can.
+fn app_id_of(w: &smithay::desktop::Window) -> Option<String> {
+    use smithay::wayland::compositor::with_states;
+    use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
+    let t = w.toplevel()?;
+    with_states(t.wl_surface(), |states| {
+        states
+            .data_map
+            .get::<XdgToplevelSurfaceData>()
+            .and_then(|d| d.lock().ok())
+            .and_then(|d| d.app_id.clone())
+    })
 }
