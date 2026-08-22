@@ -224,14 +224,55 @@ impl<'a> Surface<'a> {
         let opaque = ca >= 1.0;
         let src = [to_u8(cb), to_u8(cg), to_u8(cr), to_u8(ca)];
 
+        // ★ THE OPAQUE ARM WRITES WHOLE ROWS, NOT PIXELS, AND THE REASON IS
+        // THE MEMORY IT IS WRITING INTO.
+        //
+        // `self.data` on the scanout path is an mmap of a DRM dumb buffer,
+        // which the kernel maps **write-combining**. WC memory has one rule:
+        // fill whole 64-byte cache lines, sequentially, with no gaps. The CPU
+        // buffers writes and flushes a line at a time; a loop of independent
+        // 4-byte stores gives it repeated *partial* lines to flush, and each
+        // partial flush is a separate bus transaction.
+        //
+        // The kernel says so itself, under `DRM_CAP_DUMB_PREFER_SHADOW`:
+        // *"userspace should do streaming ordered memory copies into the dumb
+        // buffer and never read from it."* Measured on plo: a write into this
+        // mapping is ~3.5x the cost of a write into ordinary RAM, and a READ
+        // is ~1000x. `clear()` calls this every single frame over the whole
+        // output, so it is the largest single writer in the compositor.
+        //
+        // A row-at-a-time `copy_from_slice` lowers to `memcpy`, which is
+        // exactly the "streaming ordered copy" the kernel asks for. The blit
+        // path already learned this — its `one_to_one` arm was hoisted to a
+        // whole-row copy for the same reason — and this is the same fix
+        // applied to the other big writer.
+        //
+        // The translucent arm keeps the per-pixel loop: it must READ the
+        // destination to blend, so there is no bulk form, and it is also not
+        // the hot path (a full-screen clear is opaque).
+        if opaque {
+            // Build one row of the fill colour, then stamp it per row. The
+            // scratch row is the width of the CLIPPED rect, so a partial-width
+            // fill still writes one contiguous run per row rather than a
+            // strided scatter.
+            let Ok(w) = usize::try_from(r.w) else { return };
+            let mut row = Vec::with_capacity(w * 4);
+            for _ in 0..w {
+                row.extend_from_slice(&src);
+            }
+            for y in r.y..r.y + r.h {
+                let o = self.offset(r.x, y);
+                if let Some(dst) = self.data.get_mut(o..o + w * 4) {
+                    dst.copy_from_slice(&row);
+                }
+            }
+            return;
+        }
+
         for y in r.y..r.y + r.h {
             for x in r.x..r.x + r.w {
                 let o = self.offset(x, y);
-                if opaque {
-                    self.data[o..o + 4].copy_from_slice(&src);
-                } else {
-                    blend_over(&mut self.data[o..o + 4], src, ca);
-                }
+                blend_over(&mut self.data[o..o + 4], src, ca);
             }
         }
     }
