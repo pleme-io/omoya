@@ -384,6 +384,18 @@ impl smithay::wayland::shell::wlr_layer::WlrLayerShellHandler for Omoya {
         // recomputed — this is the line that makes a bar actually reserve
         // space instead of being drawn over the windows.
         self.apply_layout();
+
+        // ★ AND HAND OVER THE KEYBOARD IF IT ASKED FOR IT. A launcher or lock
+        // screen requests `keyboard_interactivity = Exclusive`; until this
+        // call existed the field was never read anywhere in the tree, so such
+        // a surface appeared, was visible, and accepted no keystrokes — which
+        // from outside is indistinguishable from a hung client, and on a lock
+        // screen is the difference between locked and merely opaque.
+        //
+        // No-op for a bar or wallpaper, which ask for `None`.
+        if self.focus_exclusive_layer() {
+            tracing::info!("a layer surface took the keyboard (exclusive)");
+        }
     }
 
     fn layer_destroyed(&mut self, surface: smithay::wayland::shell::wlr_layer::LayerSurface) {

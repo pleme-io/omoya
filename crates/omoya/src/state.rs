@@ -433,15 +433,110 @@ impl Omoya {
         socket_name
     }
 
+    /// What is under the pointer, in STACKING order.
+    ///
+    /// ★ LAYER SURFACES WERE NOT CONSULTED AT ALL, so every click passed
+    /// THROUGH a bar, a launcher or a lock screen into the window beneath it.
+    /// That is not a cosmetic gap on a lock screen: the thing covering the
+    /// screen would take no clicks while the session behind it took them all.
+    ///
+    /// The order is the one the protocol defines and the one `space_render_elements`
+    /// already draws in — Overlay and Top above the windows, Bottom and
+    /// Background below — so what you can click is what you can see. Getting
+    /// this order wrong is worse than omitting it, because a click would land
+    /// on something that is not visibly there.
     pub fn surface_under(
         &self,
         pos: Point<f64, Logical>,
     ) -> Option<(WlSurface, Point<f64, Logical>)> {
-        self.space.element_under(pos).and_then(|(window, location)| {
-            window
-                .surface_under(pos - location.to_f64(), WindowSurfaceType::ALL)
-                .map(|(s, p)| (s, (p + location).to_f64()))
-        })
+        use smithay::desktop::{WindowSurfaceType as Wst, layer_map_for_output};
+        use smithay::wayland::shell::wlr_layer::Layer;
+
+        let Some(output) = self.space.outputs().next() else {
+            // No output means no layer map to consult; fall back to windows.
+            return self.space.element_under(pos).and_then(|(window, location)| {
+                window
+                    .surface_under(pos - location.to_f64(), Wst::ALL)
+                    .map(|(s, p)| (s, (p + location).to_f64()))
+            });
+        };
+        let output_geo = self.space.output_geometry(output).unwrap_or_default();
+        let map = layer_map_for_output(output);
+
+        // Above the windows.
+        for layer in [Layer::Overlay, Layer::Top] {
+            if let Some(l) = map.layer_under(layer, pos)
+                && let Some(geo) = map.layer_geometry(l)
+            {
+                let loc = geo.loc + output_geo.loc;
+                if let Some((s, p)) = l.surface_under(pos - loc.to_f64(), Wst::ALL) {
+                    return Some((s, (p + loc).to_f64()));
+                }
+            }
+        }
+
+        if let Some((window, location)) = self.space.element_under(pos)
+            && let Some((s, p)) = window.surface_under(pos - location.to_f64(), Wst::ALL)
+        {
+            return Some((s, (p + location).to_f64()));
+        }
+
+        // Below the windows.
+        for layer in [Layer::Bottom, Layer::Background] {
+            if let Some(l) = map.layer_under(layer, pos)
+                && let Some(geo) = map.layer_geometry(l)
+            {
+                let loc = geo.loc + output_geo.loc;
+                if let Some((s, p)) = l.surface_under(pos - loc.to_f64(), Wst::ALL) {
+                    return Some((s, (p + loc).to_f64()));
+                }
+            }
+        }
+        None
+    }
+
+    /// Give keyboard focus to a layer surface that asked for it.
+    ///
+    /// ★ `keyboard_interactivity` WAS NEVER READ — zero occurrences in the
+    /// tree before this. A launcher or lock screen would appear, be visible,
+    /// and accept no keystrokes, which is indistinguishable from a hung
+    /// client and is the exact failure a lock screen must not have.
+    ///
+    /// `Exclusive` on the Top or Overlay layer is the protocol's way of
+    /// saying "I am taking the keyboard" — it is what fuzzel, wofi and anyrun
+    /// all request. `OnDemand` and `None` are deliberately NOT honoured here:
+    /// on-demand focus follows the pointer and belongs in the click path, and
+    /// granting it on map would let a background wallpaper steal the keyboard.
+    ///
+    /// Returns whether focus moved, so a caller can tell "nothing asked" from
+    /// "something asked and was refused".
+    pub fn focus_exclusive_layer(&mut self) -> bool {
+        use smithay::wayland::shell::wlr_layer::{KeyboardInteractivity, Layer};
+        let Some(output) = self.space.outputs().next().cloned() else {
+            return false;
+        };
+        let found = {
+            let map = smithay::desktop::layer_map_for_output(&output);
+            // Reverse order: the most recently mapped exclusive surface wins,
+            // which is what an operator means by "the thing I just opened".
+            map.layers()
+                .rev()
+                .find(|l| {
+                    let st = l.cached_state();
+                    matches!(st.keyboard_interactivity, KeyboardInteractivity::Exclusive)
+                        && matches!(st.layer, Layer::Top | Layer::Overlay)
+                })
+                .map(|l| l.wl_surface().clone())
+        };
+        let Some(surface) = found else {
+            return false;
+        };
+        if let Some(kb) = self.seat.get_keyboard() {
+            let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+            kb.set_focus(self, Some(surface), serial);
+            return true;
+        }
+        false
     }
 }
 
