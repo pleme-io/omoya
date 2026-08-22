@@ -154,6 +154,13 @@ pub struct OmoyaIntrospect {
     /// 0 = off, 1 = on, 2 = verify. Stored rather than re-read from the env
     /// so the published value is what the RUNNING seat resolved, not what an
     /// environment happens to say now.
+    /// Every mapped window's `app_id`, in the order the space holds them.
+    ///
+    /// Published from `apply_layout`, which is the one place that already
+    /// walks every window and asks this exact question for the placement
+    /// rule — so the published value is BY CONSTRUCTION the value the rule
+    /// saw, not a second lookup that could disagree with it.
+    pub window_app_ids: std::sync::Mutex<Vec<Option<String>>>,
     pub td_mode: AtomicU64,
     pub td_refined: AtomicU64,
     pub td_refused: AtomicU64,
@@ -554,6 +561,23 @@ impl Introspect for OmoyaIntrospect {
                     Err(e) => Err(QueryError::unknown_field(e)),
                 }
             }
+            // ★ WHO IS ON THE SEAT, BY THE NAME THE RULES MATCH ON.
+            //
+            // Added because the floating rule silently did not fire and there
+            // was no way to ask why: `layout` publishes the tiled tree and
+            // `geometry` publishes rectangles, and neither says which window
+            // is which. A placement rule keyed on `app_id` that cannot be
+            // asked "what app_id did you see?" is a rule that can only be
+            // debugged by rebuilding the compositor.
+            //
+            // `null` for a window that has not set one — distinct from the
+            // empty string, which is a client that set one and chose nothing.
+            "window_app_ids" => Ok(serde_json::json!(
+                self.window_app_ids
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone()
+            )),
             "td_refined" => Ok(n(&self.td_refined)),
             "td_refused" => Ok(n(&self.td_refused)),
             "td_rows_dirty" => Ok(n(&self.td_rows_dirty)),
@@ -712,6 +736,7 @@ impl Introspect for OmoyaIntrospect {
             "blit_general",
             "blit_slow",
             "gather_us",
+            "window_app_ids",
             "td_mode",
             "td_refined",
             "td_refused",

@@ -368,13 +368,24 @@ impl crate::state::Omoya {
         // decision made once at `new_toplevel` sees `None` and tiles the
         // launcher. Re-deriving here is idempotent and self-corrects the
         // moment the identity lands — see `crate::placement`.
-        let floats: Vec<smithay::desktop::Window> = self
+        // Walk once, publish what we saw, then filter on it — so
+        // `window_app_ids` is BY CONSTRUCTION the value the rule matched on
+        // rather than a second lookup that could disagree.
+        let seen: Vec<(smithay::desktop::Window, Option<String>)> = self
             .space
             .elements()
-            .filter(|w| {
-                crate::placement::for_app_id(app_id_of(w).as_deref()).is_floating()
-            })
-            .cloned()
+            .map(|w| (w.clone(), app_id_of(w)))
+            .collect();
+        *self
+            .introspect
+            .window_app_ids
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) =
+            seen.iter().map(|(_, id)| id.clone()).collect();
+        let floats: Vec<smithay::desktop::Window> = seen
+            .iter()
+            .filter(|(_, id)| crate::placement::for_app_id(id.as_deref()).is_floating())
+            .map(|(w, _)| w.clone())
             .collect();
         for w in &floats {
             // Idempotent: `unmap` returns false for a window the tree does not
