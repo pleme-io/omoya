@@ -338,10 +338,36 @@ impl NuriFramebuffer<'_> {
             let y1 = usize::try_from((d.loc.y + d.size.h).max(0))
                 .unwrap_or(0)
                 .min(h);
+
+            // ★ CLIP HORIZONTALLY TOO, SNAPPED OUT TO CACHE LINES.
+            //
+            // This wrote whole stride-wide rows at first, justified by "WC
+            // memory wants contiguous full lines". Measured on plo: that made
+            // a pointer-only frame 294 us -> 626 us, because a 20-pixel cursor
+            // was writing 7,648 bytes per row instead of 80. The cache-line
+            // argument is real but it is about ALIGNMENT, not about writing
+            // the whole row — a rect narrower than ~2 lines is not worth
+            // splitting, and a rect 1/100th of the row is not worth widening.
+            //
+            // So: clip to the damage, then round the start DOWN and the end UP
+            // to 64-byte boundaries. Every write is still whole-cache-line and
+            // contiguous, and it is proportional to what changed.
+            const LINE: usize = 64;
+            let x0 = usize::try_from(d.loc.x.max(0)).unwrap_or(0).saturating_mul(4);
+            let x1 = usize::try_from((d.loc.x + d.size.w).max(0))
+                .unwrap_or(0)
+                .saturating_mul(4)
+                .min(self.stride);
+            if x1 <= x0 {
+                continue;
+            }
+            let x0 = x0 - x0 % LINE;
+            let x1 = x1.div_ceil(LINE).saturating_mul(LINE).min(self.stride);
+
             for y in y0..y1 {
-                let a = y * self.stride;
-                let b = (a + self.stride).min(len);
-                if b > a {
+                let a = y * self.stride + x0;
+                let b = (y * self.stride + x1).min(len);
+                if b > a && b <= self.shadow.len() && b <= self.data.len() {
                     self.data[a..b].copy_from_slice(&self.shadow[a..b]);
                 }
             }
