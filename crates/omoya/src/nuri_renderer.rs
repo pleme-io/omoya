@@ -233,13 +233,131 @@ impl Texture for NuriTexture {
 /// at an unmapped page the moment the mapping dropped, and the write would go
 /// to whatever the kernel put there next.
 pub struct NuriFramebuffer<'a> {
+    /// The SCANOUT mapping. Written exactly once per frame, by
+    /// [`NuriFramebuffer::flush_damage`], and never read.
     data: &'a mut [u8],
+    /// ── ★ THE SHADOW: WHERE COMPOSITING ACTUALLY HAPPENS ────────────────
+    ///
+    /// Ordinary heap RAM. Every draw — clear, fill, blit, blend — lands here,
+    /// and one damage-clipped streaming copy moves the result to `data`.
+    ///
+    /// **Why:** `data` is an mmap of a DRM dumb buffer, which the kernel maps
+    /// WRITE-COMBINING. Measured on plo: a write into it costs ~3.5x a write
+    /// into RAM, and a READ costs ~1000x. Compositing reads the destination
+    /// on every translucent pixel (`blend_over`), so compositing *directly*
+    /// into the mapping pays that 1000x read for every antialiased edge, every
+    /// shadow, every rounded corner on the seat.
+    ///
+    /// The kernel documents the required shape itself, under
+    /// `DRM_CAP_DUMB_PREFER_SHADOW`: *"the driver prefers userspace to render
+    /// to a shadow buffer instead of directly rendering to a dumb buffer. For
+    /// best speed, userspace should do streaming ordered memory copies into
+    /// the dumb buffer and **never read from it**."* amdgpu, radeon and
+    /// nouveau all set that capability to 1.
+    ///
+    /// ★ **Weston does exactly this and defaults it ON** (`pixman-shadow`,
+    /// "Defaults to true"): it composites into `shadow_image` and then makes
+    /// ONE `PIXMAN_OP_SRC` damage-clipped copy to the hardware buffer — a pure
+    /// write with no destination read. wlroots, smithay's own pixman renderer,
+    /// and Mutter all composite straight into the mapping instead. On this
+    /// point Weston is right and the others carry the cost.
+    ///
+    /// ★ **ONE shadow across both scanout slots, deliberately.** The shadow
+    /// holds "the last frame composed", which is a property of the OUTPUT, not
+    /// of whichever buffer it was flipped into. smithay's damage tracker asks
+    /// for `back_buffer_age`, so the damage it hands us always covers
+    /// everything stale in THIS slot — a superset of what changed since the
+    /// last compose. Compositing that superset into the shadow and copying the
+    /// same region out leaves every untouched scanout pixel holding a value
+    /// that is still correct.
+    shadow: Vec<u8>,
+    /// Where `shadow` goes when this framebuffer dies, so the next frame does
+    /// not allocate and zero 8 MB. See `Drop`.
+    pool: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
     width: i32,
     height: i32,
     stride: usize,
     format: Fourcc,
     /// Dropped last, after `data` is gone. Never read.
     _mapping: smithay::backend::allocator::dmabuf::DmabufMapping,
+}
+
+/// A framebuffer that composites somewhere else and must be told when to put
+/// the result on the display.
+///
+/// ★ **A TRAIT, NOT A DOWNCAST, AND THAT IS THE POINT.** The render loop is
+/// generic over `R: Renderer` so it can be driven by nuri today and by
+/// something else later. A shadow-buffer renderer that is never flushed
+/// composites perfectly and shows nothing — the worst possible failure, since
+/// every counter reports a healthy frame rate at a black screen. Making the
+/// flush a BOUND means a renderer that cannot flush cannot drive the loop at
+/// all, so the mistake is a compile error rather than a dark display.
+///
+/// A renderer that composites directly into scanout memory implements this as
+/// a no-op and says so.
+pub trait ScanoutFlush {
+    /// Put everything drawn since the last flush onto the display, clipped to
+    /// `damage`. An empty slice means "everything".
+    fn flush_damage(&mut self, damage: &[Rectangle<i32, Physical>]);
+}
+
+impl ScanoutFlush for NuriFramebuffer<'_> {
+    fn flush_damage(&mut self, damage: &[Rectangle<i32, Physical>]) {
+        NuriFramebuffer::flush_damage(self, damage);
+    }
+}
+
+impl NuriFramebuffer<'_> {
+    /// Copy the composed shadow into the scanout mapping, damage-clipped.
+    ///
+    /// ★ **THE ONLY WRITE TO WRITE-COMBINING MEMORY IN THE WHOLE FRAME**, and
+    /// it is row-at-a-time `copy_from_slice`, which lowers to `memcpy` — the
+    /// "streaming ordered memory copy" the kernel asks for. No read of `data`
+    /// happens anywhere.
+    ///
+    /// Rows rather than rectangles: a damage rect narrower than ~2 cache lines
+    /// (~32 px at 32bpp) costs MORE to skip than to write through, because
+    /// stopping and restarting mid-line forces two partial-line flushes. Full
+    /// rows keep every write contiguous and cache-line aligned at both ends.
+    pub fn flush_damage(&mut self, damage: &[Rectangle<i32, Physical>]) {
+        let h = usize::try_from(self.height).unwrap_or(0);
+        let full = self.stride.saturating_mul(h);
+        let len = full.min(self.data.len()).min(self.shadow.len());
+        if len == 0 {
+            return;
+        }
+        // No damage at all means a full repaint was requested (age 0) or the
+        // caller could not say — copy everything rather than leave the screen
+        // holding a stale frame.
+        if damage.is_empty() {
+            self.data[..len].copy_from_slice(&self.shadow[..len]);
+            return;
+        }
+        for d in damage {
+            let y0 = usize::try_from(d.loc.y.max(0)).unwrap_or(0).min(h);
+            let y1 = usize::try_from((d.loc.y + d.size.h).max(0))
+                .unwrap_or(0)
+                .min(h);
+            for y in y0..y1 {
+                let a = y * self.stride;
+                let b = (a + self.stride).min(len);
+                if b > a {
+                    self.data[a..b].copy_from_slice(&self.shadow[a..b]);
+                }
+            }
+        }
+    }
+}
+
+impl Drop for NuriFramebuffer<'_> {
+    fn drop(&mut self) {
+        // Hand the allocation back so the next bind reuses it. Without this
+        // every frame allocates and zeroes ~8 MB, which would cost more than
+        // the write-combining traffic the shadow exists to remove.
+        if let Ok(mut slot) = self.pool.lock() {
+            *slot = std::mem::take(&mut self.shadow);
+        }
+    }
 }
 
 impl std::fmt::Debug for NuriFramebuffer<'_> {
@@ -285,6 +403,10 @@ pub struct NuriRenderer {
     /// Keyed by the buffer's `ObjectId`, because a client cycles a small set
     /// of buffers and re-uses them; keying on anything derived from the
     /// CONTENTS would defeat the point.
+    /// The recycled shadow allocation. See `NuriFramebuffer::shadow` — one
+    /// buffer, handed out at `bind` and returned on drop, so a frame costs no
+    /// allocation and no 8 MB zeroing.
+    shadow_pool: Arc<std::sync::Mutex<Vec<u8>>>,
     shm_cache: std::collections::HashMap<
         smithay::reexports::wayland_server::backend::ObjectId,
         NuriTexture,
@@ -323,6 +445,7 @@ impl NuriRenderer {
         // `DebugFlags` has no Default impl — spelled out rather than derived.
         Self {
             debug: DebugFlags::empty(),
+            shadow_pool: Arc::new(std::sync::Mutex::new(Vec::new())),
             shm_cache: std::collections::HashMap::new(),
             context: smithay::backend::renderer::ContextId::new(),
         }
@@ -386,8 +509,11 @@ impl Renderer for NuriRenderer {
         'buffer: 'frame,
     {
         Ok(NuriFrame {
+            // ★ THE SHADOW, NOT THE MAPPING. This one substitution is the
+            // whole change: every draw the frame performs now lands in cached
+            // RAM, and `flush_damage` makes the single streaming write out.
             surface: nuri::Surface::new(
-                framebuffer.data,
+                &mut framebuffer.shadow,
                 framebuffer.width,
                 framebuffer.height,
                 framebuffer.stride,
@@ -1008,8 +1134,26 @@ impl Bind<Dmabuf> for NuriRenderer {
             std::slice::from_raw_parts_mut(mapping.ptr().cast::<u8>(), mapping.length())
         };
 
+        // ★ TAKE THE POOLED SHADOW AND SIZE IT TO THIS BUFFER.
+        //
+        // `resize` only ever grows here, and it zero-fills the growth — which
+        // is correct for a first frame (age 0 forces a full repaint, so every
+        // byte is written before it is read) and free thereafter, because a
+        // steady-state seat reuses the same allocation untouched.
+        let need = stride.saturating_mul(usize::try_from(size.h).unwrap_or(0));
+        let mut shadow = self
+            .shadow_pool
+            .lock()
+            .map(|mut g| std::mem::take(&mut *g))
+            .unwrap_or_default();
+        if shadow.len() < need {
+            shadow.resize(need, 0);
+        }
+
         Ok(NuriFramebuffer {
             data,
+            shadow,
+            pool: self.shadow_pool.clone(),
             width: size.w,
             height: size.h,
             stride,

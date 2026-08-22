@@ -559,6 +559,11 @@ where
     // be movable between threads even though this loop never does.
     R::TextureId: Clone + Send + smithay::backend::renderer::Texture + 'static,
     R::Error: Send + Sync + 'static,
+    // ★ THE FLUSH IS A BOUND, so a renderer that composites into a shadow and
+    // is never told to present it cannot be wired into this loop by accident.
+    // See `ScanoutFlush` — the failure it prevents is a black screen behind
+    // perfectly healthy frame counters, which is the hardest kind to diagnose.
+    for<'fb> R::Framebuffer<'fb>: crate::nuri_renderer::ScanoutFlush,
 {
     let surface = device.create_surface(target.crtc, target.mode, &[target.connector])?;
     let (output, mode) = output_for(target);
@@ -1133,6 +1138,26 @@ where
                         &elements,
                         smithay::backend::renderer::Color32F::from(clear),
                     )?;
+
+                    // ── ★ THE ONE WRITE TO SCANOUT MEMORY IN THE FRAME ──
+                    //
+                    // Everything above composited into a RAM shadow (see
+                    // `NuriFramebuffer::shadow`). Nothing has reached the
+                    // display yet. This is the damage-clipped streaming copy
+                    // that puts it there, and WITHOUT THIS LINE the screen
+                    // never changes — the compositor would run, report frames,
+                    // and paint nothing.
+                    //
+                    // `result.damage` is what `render_output` actually drew,
+                    // already unioned with whatever was stale in THIS buffer
+                    // for its age — so copying exactly it is both sufficient
+                    // and minimal. `None` means "no usable history", which is
+                    // the full-repaint case, and `flush_damage` copies
+                    // everything for an empty slice.
+                    {
+                        use crate::nuri_renderer::ScanoutFlush as _;
+                        fb.flush_damage(result.damage.map_or(&[], |d| d.as_slice()));
+                    }
 
                     // ★ CAPTURE HERE, WHERE THE FRAMEBUFFER IS STILL BOUND.
                     //
