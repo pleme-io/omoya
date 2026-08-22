@@ -129,12 +129,6 @@ pub struct Omoya {
     /// cannot declare damage, so the compositor measures it instead of
     /// believing "the whole surface changed" 360 times a second.
     pub shadows: crate::truedamage::Shadows,
-    /// How much authority `truedamage` has. `OMOYA_TRUEDAMAGE=off` reverts to
-    /// the pre-refinement behaviour without a rebuild; `=verify` pays for the
-    /// measurement and changes nothing on screen, which is the only way to
-    /// tell an artifact that IS this module's from one that merely appeared
-    /// at the same time.
-    pub truedamage_mode: crate::truedamage::Mode,
     /// How the windows are arranged. See `layout.rs` — the algebra is
     /// `kukaku`'s, and only "a leaf is a Window" and "a rect is pixels" are
     /// omoya's.
@@ -325,6 +319,16 @@ impl Omoya {
             tracing::error!("the introspect sidecar already had a mekuri ledger installed");
         }
 
+        // ★ SEED THE LIVE KNOB FROM THE ENVIRONMENT, ONCE.
+        // `OMOYA_TRUEDAMAGE` chooses the STARTING mode; `td_mode_set` over
+        // kanshou changes it afterwards with no rebuild and no relogin. From
+        // here the atomic is the single source of truth, so there is no second
+        // copy to drift out of step with what the hot path reads.
+        introspect.td_mode.store(
+            crate::truedamage::Mode::from_env().to_u64(),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+
         Self {
             start_time,
             display_handle: dh,
@@ -337,6 +341,7 @@ impl Omoya {
             reserved,
             owed_vt_switches: 0,
             space,
+
             introspect,
             owed,
             tiling: crate::layout::Tiling::default(),
@@ -354,7 +359,6 @@ impl Omoya {
             session_command: None,
             launcher_command: None,
             shadows: crate::truedamage::Shadows::default(),
-            truedamage_mode: crate::truedamage::Mode::from_env(),
             loop_signal,
             socket_name,
             layer_shell_state,

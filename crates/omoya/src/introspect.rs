@@ -532,6 +532,28 @@ impl Introspect for OmoyaIntrospect {
                     _ => "on",
                 }
             )),
+            // ★ THE LIVE KNOB. Flipping the mode without a rebuild or a
+            // relogin is what makes an A/B possible AT ALL on a seat whose
+            // console is the machine's only local access — the alternative is
+            // a rebuild-and-log-back-in cycle per experiment, which nobody
+            // runs twice, so the question stays open instead.
+            "td_mode_set" => {
+                let Some(name) = q.args.first().and_then(serde_json::Value::as_str) else {
+                    return Err(QueryError::unknown_field(
+                        "td_mode_set needs a mode: off | on | verify",
+                    ));
+                };
+                match crate::truedamage::Mode::parse(name) {
+                    Ok(m) => {
+                        let was = self.td_mode.swap(m.to_u64(), std::sync::atomic::Ordering::Relaxed);
+                        Ok(serde_json::json!({
+                            "was": crate::truedamage::Mode::from_u64(was).name(),
+                            "now": m.name(),
+                        }))
+                    }
+                    Err(e) => Err(QueryError::unknown_field(e)),
+                }
+            }
             "td_refined" => Ok(n(&self.td_refined)),
             "td_refused" => Ok(n(&self.td_refused)),
             "td_rows_dirty" => Ok(n(&self.td_rows_dirty)),
@@ -773,8 +795,11 @@ mod tests {
             let t = line.trim();
             // Match arms of the form `"name" => ...`, which is how every leaf
             // is written. Methods that take arguments (`do`, `type`, `key`,
-            // `pointer`, `click`, `capture`) are excluded: they are verbs, not
-            // readable fields, and `schema()` advertises fields.
+            // `pointer`, `click`, `capture`, `td_mode_set`) are excluded: they
+            // are verbs, not readable fields, and `schema()` advertises fields.
+            // Every one of them has a READ counterpart that IS advertised —
+            // `td_mode_set` writes what `td_mode` reads back — so excluding
+            // the verb never hides state from an agent enumerating the seat.
             let Some(rest) = t.strip_prefix('"') else { continue };
             let Some((name, after)) = rest.split_once('"') else { continue };
             if !after.trim_start().starts_with("=>") {
@@ -782,6 +807,8 @@ mod tests {
             }
             const VERBS: &[&str] = &[
                 "do", "type", "key", "pointer", "click", "capture",
+                // A live-tuning SETTER, not a field. `td_mode` reads it back.
+                "td_mode_set",
             ];
             if VERBS.contains(&name) || name.is_empty() {
                 continue;
@@ -845,17 +872,8 @@ impl OmoyaIntrospect {
         &self,
         shadows: &crate::truedamage::Shadows,
         _verdict: &crate::truedamage::Verdict,
-        _mode: crate::truedamage::Mode,
     ) {
         use std::sync::atomic::Ordering::Relaxed;
-        self.td_mode.store(
-            match _mode {
-                crate::truedamage::Mode::Off => 0,
-                crate::truedamage::Mode::On => 1,
-                crate::truedamage::Mode::Verify => 2,
-            },
-            Relaxed,
-        );
         self.td_refined.store(shadows.refined, Relaxed);
         self.td_refused.store(shadows.refused, Relaxed);
         self.td_rows_dirty.store(shadows.rows_dirty, Relaxed);

@@ -291,6 +291,26 @@ mod tests {
     }
 
     #[test]
+    fn the_wire_encoding_round_trips_every_mode() {
+        // ★ The atomic is the SINGLE source of truth for the live knob, so a
+        // lossy encoding would flip the seat into a mode nobody selected.
+        for m in [Mode::Off, Mode::On, Mode::Verify] {
+            assert_eq!(Mode::from_u64(m.to_u64()), m, "{m:?} must round-trip");
+        }
+        // And an out-of-range value is ON, never a silent Off.
+        assert_eq!(Mode::from_u64(99), Mode::On);
+    }
+
+    #[test]
+    fn an_unknown_mode_name_is_refused_with_the_accepted_set() {
+        assert_eq!(Mode::parse("on"), Ok(Mode::On));
+        assert_eq!(Mode::parse("verify"), Ok(Mode::Verify));
+        assert_eq!(Mode::parse("off"), Ok(Mode::Off));
+        let e = Mode::parse("ON").unwrap_err();
+        assert!(e.contains("off, on, verify"), "the refusal must name the set: {e}");
+    }
+
+    #[test]
     fn only_on_is_allowed_to_replace_the_declaration() {
         // ★ The whole point of `Verify`: it pays for the measurement and
         // changes nothing on screen. If this ever returned true, the A/B would
@@ -527,6 +547,59 @@ impl Mode {
                 );
                 Self::On
             }
+        }
+    }
+
+    /// The wire encoding shared with `OmoyaIntrospect::td_mode`.
+    ///
+    /// ★ ONE VALUE, NOT TWO. The atomic IS the mode — `Omoya` reads it at each
+    /// commit rather than holding its own copy — so "what the seat is doing"
+    /// and "what the seat reports" cannot disagree. A cached second copy is
+    /// exactly how a live-tunable knob ends up published as flipped while the
+    /// hot path still reads the old value.
+    #[must_use]
+    pub fn to_u64(self) -> u64 {
+        match self {
+            Self::Off => 0,
+            Self::On => 1,
+            Self::Verify => 2,
+        }
+    }
+
+    /// Decode the wire value. Anything unrecognised is `On`, matching
+    /// `from_env`'s reasoning: a bad value must not silently disable an
+    /// optimization nobody can then find.
+    #[must_use]
+    pub fn from_u64(v: u64) -> Self {
+        match v {
+            0 => Self::Off,
+            2 => Self::Verify,
+            _ => Self::On,
+        }
+    }
+
+    /// Parse an operator-supplied name, for the live setter.
+    ///
+    /// # Errors
+    /// Returns the accepted set when the name is not one of them — a typed
+    /// refusal, so a typo cannot silently select a mode the operator did not
+    /// ask for while they watch for an effect that never comes.
+    pub fn parse(s: &str) -> Result<Self, &'static str> {
+        match s {
+            "off" => Ok(Self::Off),
+            "on" => Ok(Self::On),
+            "verify" => Ok(Self::Verify),
+            _ => Err("td_mode must be one of: off, on, verify"),
+        }
+    }
+
+    /// The operator-facing name, for anything that reports the mode.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::On => "on",
+            Self::Verify => "verify",
         }
     }
 
