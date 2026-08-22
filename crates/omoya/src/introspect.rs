@@ -205,6 +205,14 @@ pub struct OmoyaIntrospect {
     /// sourced numbers that can disagree. A caller polls it to learn the deed
     /// LANDED rather than that it was accepted.
     pub deeds_performed: AtomicU64,
+    /// Deeds performed from a CHORD — the keyboard path.
+    ///
+    /// ★ Separate from `deeds_performed` on purpose, and the separation is the
+    /// point. That counter is incremented only where kanshou-requested deeds
+    /// are drained, so it can sit at zero forever while the operator types.
+    /// Two paths reaching one action need two counters, or the quiet one is
+    /// invisible.
+    pub chord_deeds: AtomicU64,
     /// Wakes the compositor's event loop after an enqueue.
     ///
     /// ★ THE PING IS LOAD-BEARING, AND MORE SO SINCE DAMAGE TRACKING LANDED.
@@ -500,6 +508,7 @@ impl Introspect for OmoyaIntrospect {
             "synth_performed" => Ok(n(&self.synth_performed)),
             "verbs" => Ok(serde_json::json!(crate::deed::Deed::VERBS)),
             "deeds_performed" => Ok(n(&self.deeds_performed)),
+            "chord_deeds" => Ok(n(&self.chord_deeds)),
             "focus_rect" => Ok(serde_json::json!(
                 self.focus_rect
                     .lock()
@@ -674,6 +683,7 @@ impl Introspect for OmoyaIntrospect {
             "presented",
             "verbs",
             "deeds_performed",
+            "chord_deeds",
             "focus_rect",
             "frame_us",
             "blit_fast",

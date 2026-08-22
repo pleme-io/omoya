@@ -175,6 +175,22 @@ impl Omoya {
             },
         );
         if let Some(d) = deed {
+            // ★ COUNTED HERE, AND THE ABSENCE OF THIS COUNTER IS WHY A DEAD
+            // KEYMAP SURVIVED FOR DAYS.
+            //
+            // `deeds_performed` counts only deeds requested over kanshou — its
+            // own increment site says "requested over kanshou" — so the
+            // KEYBOARD path had no counter at all. When `chord::key_from`
+            // translated none of the seat's own keys, every chord silently
+            // stopped working and every published number stayed exactly as it
+            // had been. There was nothing to look at.
+            //
+            // `chord_deeds` is the number that would have said so on day one:
+            // a seat whose operator is typing and whose chord counter never
+            // moves is a seat whose keymap is not connected.
+            self.introspect
+                .chord_deeds
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             self.perform(d);
         }
         if let Some(vt) = switched {

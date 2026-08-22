@@ -66,7 +66,15 @@ pub fn modifiers_from(state: &ModifiersState) -> Modifiers {
 /// in this table**, so every one of them translated to `None` and never
 /// reached `BindingMap` at all.
 ///
-/// The seat had been up for days with `deeds_performed == 0`. Both halves were
+/// ★ CORRECTED — the evidence, stated honestly. This first read "the seat had
+/// been up for days with `deeds_performed == 0`". That was TRUE and it was not
+/// evidence: `deeds_performed` is incremented only where KANSHOU-requested
+/// deeds are drained, so it would have read zero whether the keymap worked or
+/// not. The real evidence was behavioural — Logo+Return produced no window on
+/// a live seat while `do/spawn-terminal` over kanshou opened one in a second,
+/// which splits the fault cleanly on the near side of `BindingMap`. The
+/// keyboard path having no counter AT ALL is the second defect here, and
+/// `chord_deeds` now closes it. Both halves were
 /// individually correct and individually tested — `default_bindings()` builds
 /// a collision-free map with passing tests, and this function returns exactly
 /// what it promises — because **`deed.rs`'s tests construct `Hotkey::new(LOGO,
@@ -224,9 +232,10 @@ mod tests {
         // keys was in `key_from`. Every one translated to `None`, so
         // `BindingMap` was never consulted at all.
         //
-        // Measured on plo 2026-08-21: a seat up for days with
-        // `deeds_performed == 0`, while `do/spawn-terminal` over kanshou opened
-        // a window in one second. The deeds worked; nothing could reach them.
+        // Measured on plo 2026-08-21: Logo+Return produced no window on a
+        // live seat, while `do/spawn-terminal` over kanshou opened one in a
+        // second. The deeds worked; nothing could reach them. (The keyboard
+        // path had no counter of its own to notice with — see `chord_deeds`.)
         //
         // This walks the LIVE binding map, so a future binding on an
         // untranslatable key fails here instead of going quiet on the seat.
