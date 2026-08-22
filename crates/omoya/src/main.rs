@@ -858,6 +858,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     data.state.session_command = cfg.terminal.clone();
     data.state.launcher_command = cfg.launcher.clone();
     data.state.remaps = cfg.remap_pairs();
+    data.state.config = cfg;
 
     if let Some(cmd) = args.spawn
         && let Some((program, rest)) = cmd.split_first()

@@ -79,6 +79,23 @@ const FLOAT_W: f64 = 0.46;
 const FLOAT_H: f64 = 0.52;
 
 /// Decide where a window with this `app_id` belongs.
+/// Decide placement against a CONFIGURED rule set.
+///
+/// ★ Split from [`for_app_id`] so the const remains the default and the thing
+/// the tests are written against, while an operator can add an `app_id` in
+/// yaml without a recompile. A config field nothing reads is decoration, and
+/// this is the function that stops `placement.floating_app_ids` from being it.
+#[must_use]
+pub fn for_app_id_in(app_id: Option<&str>, cfg: &crate::config::PlacementConfig) -> Placement {
+    match app_id {
+        Some(id) if cfg.floating_app_ids.iter().any(|f| f == id) => Placement::Floating {
+            width: cfg.float_width,
+            height: cfg.float_height,
+        },
+        _ => Placement::Tiled,
+    }
+}
+
 #[must_use]
 pub fn for_app_id(app_id: Option<&str>) -> Placement {
     match app_id {
@@ -125,6 +142,32 @@ pub fn centred(
 mod tests {
     use super::*;
     use smithay::utils::Rectangle;
+
+    #[test]
+    fn a_configured_rule_set_is_honoured_and_an_empty_one_floats_nothing() {
+        // ★ An EMPTY list must float NOTHING, not fall back to the default.
+        // An operator writing `floating_app_ids: []` is saying "tile
+        // everything"; silently reinstating tobira would ignore them while
+        // looking like it worked.
+        let empty = crate::config::PlacementConfig {
+            floating_app_ids: vec![],
+            float_width: 0.5,
+            float_height: 0.5,
+        };
+        assert_eq!(for_app_id_in(Some("tobira"), &empty), Placement::Tiled);
+
+        // And an arbitrary configured app floats, not just the built-in one.
+        let custom = crate::config::PlacementConfig {
+            floating_app_ids: vec!["my-dialog".into()],
+            float_width: 0.3,
+            float_height: 0.4,
+        };
+        assert_eq!(
+            for_app_id_in(Some("my-dialog"), &custom),
+            Placement::Floating { width: 0.3, height: 0.4 }
+        );
+        assert_eq!(for_app_id_in(Some("tobira"), &custom), Placement::Tiled);
+    }
 
     #[test]
     fn the_launcher_floats_and_everything_else_tiles() {

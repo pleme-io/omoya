@@ -142,7 +142,9 @@ impl CompositorHandler for Omoya {
             .space
             .elements()
             .find(|w| w.toplevel().is_some_and(|t| t.wl_surface() == surface))
-            .is_some_and(|w| crate::layout::placement_changed(w, &self.floating_ids));
+            .is_some_and(|w| {
+                crate::layout::placement_changed(w, &self.floating_ids, &self.config.placement)
+            });
         if needs_relayout {
             self.apply_layout();
         }

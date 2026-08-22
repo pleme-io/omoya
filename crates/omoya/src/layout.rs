@@ -349,8 +349,12 @@ impl crate::state::Omoya {
             // than by the tiler knowing a bar exists. That keeps one rule:
             // windows fill whatever is left.
             let zone = smithay::utils::Rectangle::new(
-                (zone.loc.x, zone.loc.y + crate::bar::HEIGHT).into(),
-                (zone.size.w, (zone.size.h - crate::bar::HEIGHT).max(1)).into(),
+                // ★ FROM CONFIG, not the const. `bar::HEIGHT` is still the
+                // DEFAULT — `BarConfig::default()` derives from it — but an
+                // operator who sets `bar.height` must see the tiler move, or
+                // the field is decoration.
+                (zone.loc.x, zone.loc.y + self.config.bar.height).into(),
+                (zone.size.w, (zone.size.h - self.config.bar.height).max(1)).into(),
             );
             // `non_exclusive_zone` is relative to the output; `arrange` wants
             // absolute coordinates, and on a single output at (0,0) those
@@ -384,7 +388,10 @@ impl crate::state::Omoya {
             seen.iter().map(|(_, id)| id.clone()).collect();
         let floats: Vec<smithay::desktop::Window> = seen
             .iter()
-            .filter(|(_, id)| crate::placement::for_app_id(id.as_deref()).is_floating())
+            .filter(|(_, id)| {
+                crate::placement::for_app_id_in(id.as_deref(), &self.config.placement)
+                    .is_floating()
+            })
             .map(|(w, _)| w.clone())
             .collect();
         // Record what this pass decided, so `commit` can notice when a
@@ -424,7 +431,7 @@ impl crate::state::Omoya {
         // it takes the keyboard while showing nothing.
         for w in &floats {
             let Placement::Floating { width, height } =
-                crate::placement::for_app_id(app_id_of(w).as_deref())
+                crate::placement::for_app_id_in(app_id_of(w).as_deref(), &self.config.placement)
             else {
                 continue;
             };
@@ -659,10 +666,12 @@ pub fn surface_id_of(w: &smithay::desktop::Window) -> Option<u32> {
 pub fn placement_changed(
     w: &smithay::desktop::Window,
     floating_ids: &std::collections::HashSet<u32>,
+    placement: &crate::config::PlacementConfig,
 ) -> bool {
     let Some(id) = surface_id_of(w) else {
         return false;
     };
-    let should_float = crate::placement::for_app_id(app_id_of(w).as_deref()).is_floating();
+    let should_float =
+        crate::placement::for_app_id_in(app_id_of(w).as_deref(), placement).is_floating();
     should_float != floating_ids.contains(&id)
 }

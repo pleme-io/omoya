@@ -152,6 +152,13 @@ pub struct Omoya {
     /// parse — but an operator can now change it without a recompile, which
     /// was the operator's whole point about shikumi configurability.
     pub remaps: Vec<(u32, u32)>,
+    /// The resolved seat configuration.
+    ///
+    /// ★ HELD WHOLE, not decomposed into scattered fields, so that "what did
+    /// the config say?" has one answer. Every consumer reads it from here;
+    /// nothing reads the `const`s directly any more, which is what makes the
+    /// surface real rather than declared.
+    pub config: crate::config::OmoyaConfig,
     /// How the windows are arranged. See `layout.rs` — the algebra is
     /// `kukaku`'s, and only "a leaf is a Window" and "a rect is pixels" are
     /// omoya's.
@@ -384,6 +391,7 @@ impl Omoya {
             shadows: crate::truedamage::Shadows::default(),
             floating_ids: std::collections::HashSet::new(),
             remaps: crate::remap::DEFAULT_REMAPS.to_vec(),
+            config: crate::config::OmoyaConfig::prescribed(),
             loop_signal,
             socket_name,
             layer_shell_state,
