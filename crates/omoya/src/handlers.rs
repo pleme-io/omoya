@@ -86,9 +86,10 @@ impl CompositorHandler for Omoya {
         // leaves stale pixels on a screen. Skipping costs nothing on this seat:
         // the clients whose frames are expensive are toplevels.
         if !is_sync_subsurface(surface)
-            && let Some(v) = crate::truedamage::refine_commit(surface, &mut self.shadows)
+            && let Some(v) = crate::truedamage::refine_commit(surface, &mut self.shadows, self.truedamage_mode)
         {
-            self.introspect.publish_truedamage(&self.shadows, &v);
+            self.introspect
+                .publish_truedamage(&self.shadows, &v, self.truedamage_mode);
         }
         on_commit_buffer_handler::<Self>(surface);
         // ★ THE ORDINARY REASON A FRAME EXISTS. Every pixel a client changes

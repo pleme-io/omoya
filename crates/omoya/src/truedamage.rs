@@ -291,6 +291,24 @@ mod tests {
     }
 
     #[test]
+    fn only_on_is_allowed_to_replace_the_declaration() {
+        // ★ The whole point of `Verify`: it pays for the measurement and
+        // changes nothing on screen. If this ever returned true, the A/B would
+        // be comparing a mode against itself and would exonerate a real bug.
+        assert!(Mode::On.replaces_declaration());
+        assert!(!Mode::Verify.replaces_declaration());
+        assert!(!Mode::Off.replaces_declaration());
+    }
+
+    #[test]
+    fn verify_computes_but_off_does_not() {
+        // `Verify` must still run the comparison or its counters are fiction.
+        assert!(Mode::Verify.computes());
+        assert!(Mode::On.computes());
+        assert!(!Mode::Off.computes());
+    }
+
+    #[test]
     fn an_identical_buffer_has_no_damage() {
         // ★ THE WHOLE POINT. mado re-renders and re-commits its entire surface
         // for a cursor blink; if the pixels did not change, nothing should
@@ -460,6 +478,71 @@ mod tests {
 
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 
+/// How much authority the refinement is given over what reaches the screen.
+///
+/// ★ **THIS EXISTS BECAUSE THE SEAT IS THE OPERATOR'S ONLY LOCAL CONSOLE.**
+/// The refinement is correct as far as 99 tests and a whole-stack VM run can
+/// establish, and "as far as tests can establish" is not the same as "on the
+/// machine you are sitting at". A change that can only be evaluated by
+/// rebuilding and logging back in is a change nobody can A/B, and an
+/// optimization nobody can turn off is one that gets reverted wholesale the
+/// first time anything looks wrong.
+///
+/// Selected once from `OMOYA_TRUEDAMAGE` at startup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    /// Compute nothing. Byte-for-byte the behaviour that shipped before this
+    /// module existed — the client's declaration reaches the renderer intact.
+    Off,
+    /// Compute, and REPLACE the client's declaration. The fast path.
+    On,
+    /// ★ Compute, publish the counters, and **throw the answer away** — the
+    /// client's declaration still reaches the renderer untouched.
+    ///
+    /// This is the honest A/B: it pays the comparison so `td_dirty_pct` is a
+    /// real measurement of what the refinement *would* have saved, while what
+    /// reaches the screen is identical to `Off`. If an artifact persists in
+    /// `Verify` it was never this module's, and that is a conclusion no amount
+    /// of reading the diff can reach.
+    Verify,
+}
+
+impl Mode {
+    /// Resolve once, from `OMOYA_TRUEDAMAGE`.
+    ///
+    /// Unknown values fall back to `On` **with a warning** rather than to
+    /// `Off`: a typo'd kill-switch that silently disables an optimization is a
+    /// performance regression nobody can find, and one that silently enables it
+    /// is at least the state the operator was already in.
+    #[must_use]
+    pub fn from_env() -> Self {
+        match std::env::var("OMOYA_TRUEDAMAGE").as_deref() {
+            Ok("off" | "0" | "false") => Self::Off,
+            Ok("verify") => Self::Verify,
+            Ok("on" | "1" | "true") | Err(_) => Self::On,
+            Ok(other) => {
+                tracing::warn!(
+                    value = other,
+                    "OMOYA_TRUEDAMAGE is not off|on|verify — defaulting to on"
+                );
+                Self::On
+            }
+        }
+    }
+
+    /// Whether the refined damage is allowed to reach the renderer.
+    #[must_use]
+    pub fn replaces_declaration(self) -> bool {
+        matches!(self, Self::On)
+    }
+
+    /// Whether to run the comparison at all.
+    #[must_use]
+    pub fn computes(self) -> bool {
+        !matches!(self, Self::Off)
+    }
+}
+
 /// Replace a surface's declared damage with what actually changed.
 ///
 /// ★ **MUST RUN BEFORE `on_commit_buffer_handler`.** That is what drains
@@ -471,7 +554,14 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 /// Returns the verdict for the counters, or `None` when there was nothing to
 /// decide — no new buffer, not shm, or the client already declared honest
 /// damage.
-pub fn refine_commit(surface: &WlSurface, shadows: &mut Shadows) -> Option<Verdict> {
+pub fn refine_commit(
+    surface: &WlSurface,
+    shadows: &mut Shadows,
+    mode: Mode,
+) -> Option<Verdict> {
+    if !mode.computes() {
+        return None;
+    }
     use smithay::reexports::wayland_server::Resource as _;
     use smithay::utils::{Rectangle, Size};
     use smithay::wayland::compositor::{BufferAssignment, Damage, SurfaceAttributes, with_states};
@@ -541,7 +631,9 @@ pub fn refine_commit(surface: &WlSurface, shadows: &mut Shadows) -> Option<Verdi
         // Only ever SHRINK, and only on a verdict that actually compared
         // something. A refusal leaves the client's declaration exactly as it
         // was — see this module's header on why that direction is the safe one.
-        if let Verdict::Refined { spans, .. } = &verdict {
+        if mode.replaces_declaration()
+            && let Verdict::Refined { spans, .. } = &verdict
+        {
             #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
             let w = shm::with_buffer_contents(buffer, |_, _, d| d.width).unwrap_or(0);
             attrs.damage = spans

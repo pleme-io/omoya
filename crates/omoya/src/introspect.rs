@@ -151,6 +151,10 @@ pub struct OmoyaIntrospect {
     /// this optimization is working at all. `td_rows_examined` is the
     /// denominator; `td_refused` is how often the comparison declined and the
     /// frame paid full price.
+    /// 0 = off, 1 = on, 2 = verify. Stored rather than re-read from the env
+    /// so the published value is what the RUNNING seat resolved, not what an
+    /// environment happens to say now.
+    pub td_mode: AtomicU64,
     pub td_refined: AtomicU64,
     pub td_refused: AtomicU64,
     pub td_rows_dirty: AtomicU64,
@@ -509,6 +513,16 @@ impl Introspect for OmoyaIntrospect {
             "blit_slow" => Ok(n(&self.blit_slow)),
             "blit_general" => Ok(n(&self.blit_general)),
             "gather_us" => Ok(n(&self.gather_us)),
+            // ★ WHICH MODE IS LIVE. Reading `td_dirty_pct` without this is a
+            // measurement with no idea whether it changed anything: `verify`
+            // publishes identical counters while leaving the screen untouched.
+            "td_mode" => Ok(serde_json::json!(
+                match self.td_mode.load(std::sync::atomic::Ordering::Relaxed) {
+                    0 => "off",
+                    2 => "verify",
+                    _ => "on",
+                }
+            )),
             "td_refined" => Ok(n(&self.td_refined)),
             "td_refused" => Ok(n(&self.td_refused)),
             "td_rows_dirty" => Ok(n(&self.td_rows_dirty)),
@@ -666,6 +680,7 @@ impl Introspect for OmoyaIntrospect {
             "blit_general",
             "blit_slow",
             "gather_us",
+            "td_mode",
             "td_refined",
             "td_refused",
             "td_rows_dirty",
@@ -820,8 +835,17 @@ impl OmoyaIntrospect {
         &self,
         shadows: &crate::truedamage::Shadows,
         _verdict: &crate::truedamage::Verdict,
+        _mode: crate::truedamage::Mode,
     ) {
         use std::sync::atomic::Ordering::Relaxed;
+        self.td_mode.store(
+            match _mode {
+                crate::truedamage::Mode::Off => 0,
+                crate::truedamage::Mode::On => 1,
+                crate::truedamage::Mode::Verify => 2,
+            },
+            Relaxed,
+        );
         self.td_refined.store(shadows.refined, Relaxed);
         self.td_refused.store(shadows.refused, Relaxed);
         self.td_rows_dirty.store(shadows.rows_dirty, Relaxed);

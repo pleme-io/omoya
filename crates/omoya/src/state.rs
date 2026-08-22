@@ -129,6 +129,12 @@ pub struct Omoya {
     /// cannot declare damage, so the compositor measures it instead of
     /// believing "the whole surface changed" 360 times a second.
     pub shadows: crate::truedamage::Shadows,
+    /// How much authority `truedamage` has. `OMOYA_TRUEDAMAGE=off` reverts to
+    /// the pre-refinement behaviour without a rebuild; `=verify` pays for the
+    /// measurement and changes nothing on screen, which is the only way to
+    /// tell an artifact that IS this module's from one that merely appeared
+    /// at the same time.
+    pub truedamage_mode: crate::truedamage::Mode,
     /// How the windows are arranged. See `layout.rs` — the algebra is
     /// `kukaku`'s, and only "a leaf is a Window" and "a rect is pixels" are
     /// omoya's.
@@ -348,6 +354,7 @@ impl Omoya {
             session_command: None,
             launcher_command: None,
             shadows: crate::truedamage::Shadows::default(),
+            truedamage_mode: crate::truedamage::Mode::from_env(),
             loop_signal,
             socket_name,
             layer_shell_state,
