@@ -129,6 +129,21 @@ pub struct Omoya {
     /// cannot declare damage, so the compositor measures it instead of
     /// believing "the whole surface changed" 360 times a second.
     pub shadows: crate::truedamage::Shadows,
+    /// Windows the last layout pass decided should float.
+    ///
+    /// ★ EXISTS TO DETECT A CHANGE, NOT TO CACHE THE ANSWER. `app_id` arrives
+    /// in a request AFTER the toplevel is created, so the first layout pass
+    /// sees `None` and tiles everything — and nothing re-runs the pass when
+    /// the identity finally lands. Measured on plo 2026-08-22: the seat
+    /// published `window_app_ids: ["mado", null]` for a tobira that had
+    /// demonstrably sent `set_app_id("tobira")`, because the only pass that
+    /// ever asked ran before it.
+    ///
+    /// Comparing against this set is what makes `commit` able to say "the
+    /// answer changed" cheaply. Re-running the layout on every commit instead
+    /// would mark `Owed::Windows` on every frame and defeat the damage gate
+    /// outright — the one thing that must not happen.
+    pub floating_ids: std::collections::HashSet<u32>,
     /// How the windows are arranged. See `layout.rs` — the algebra is
     /// `kukaku`'s, and only "a leaf is a Window" and "a rect is pixels" are
     /// omoya's.
@@ -359,6 +374,7 @@ impl Omoya {
             session_command: None,
             launcher_command: None,
             shadows: crate::truedamage::Shadows::default(),
+            floating_ids: std::collections::HashSet::new(),
             loop_signal,
             socket_name,
             layer_shell_state,

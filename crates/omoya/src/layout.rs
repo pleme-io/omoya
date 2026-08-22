@@ -387,6 +387,9 @@ impl crate::state::Omoya {
             .filter(|(_, id)| crate::placement::for_app_id(id.as_deref()).is_floating())
             .map(|(w, _)| w.clone())
             .collect();
+        // Record what this pass decided, so `commit` can notice when a
+        // late-arriving `app_id` changes the answer. See `Omoya::floating_ids`.
+        self.floating_ids = floats.iter().filter_map(surface_id_of).collect();
         for w in &floats {
             // Idempotent: `unmap` returns false for a window the tree does not
             // hold, so a launcher that is already floating costs a lookup.
@@ -635,4 +638,31 @@ fn app_id_of(w: &smithay::desktop::Window) -> Option<String> {
             .and_then(|d| d.lock().ok())
             .and_then(|d| d.app_id.clone())
     })
+}
+
+/// A window's wl_surface protocol id — a stable per-window key.
+///
+/// Used only to compare "what floated last pass" against "what should float
+/// now"; never to look a window up, so a stale id is harmless rather than a
+/// dangling reference.
+pub fn surface_id_of(w: &smithay::desktop::Window) -> Option<u32> {
+    use smithay::reexports::wayland_server::Resource as _;
+    Some(w.toplevel()?.wl_surface().id().protocol_id())
+}
+
+/// Should this window float, and does that DISAGREE with the last layout pass?
+///
+/// The cheap question `commit` asks on every toplevel commit. Cheap because it
+/// is one `app_id` read and one hash lookup — no tree walk, no arrangement —
+/// so the common answer (`false`) costs nothing on the frame path.
+#[must_use]
+pub fn placement_changed(
+    w: &smithay::desktop::Window,
+    floating_ids: &std::collections::HashSet<u32>,
+) -> bool {
+    let Some(id) = surface_id_of(w) else {
+        return false;
+    };
+    let should_float = crate::placement::for_app_id(app_id_of(w).as_deref()).is_floating();
+    should_float != floating_ids.contains(&id)
 }

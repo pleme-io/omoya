@@ -121,6 +121,32 @@ impl CompositorHandler for Omoya {
                 window.on_commit();
             }
         }
+        // ★ RE-LAYOUT WHEN A LATE `app_id` CHANGES THE ANSWER — and ONLY then.
+        //
+        // `set_app_id` is a separate request that arrives after the toplevel
+        // exists, so the layout pass at `new_toplevel` sees `None` and tiles
+        // a launcher that should float. Nothing else re-runs the pass, so the
+        // rule looked dead: measured on plo, the seat published
+        // `window_app_ids: ["mado", null]` for a tobira that had provably sent
+        // `set_app_id("tobira")`.
+        //
+        // Guarded by `placement_changed` rather than calling `apply_layout`
+        // unconditionally, because `apply_layout` marks `Owed::Windows` — an
+        // unguarded call here would owe a frame on EVERY commit of every
+        // window and defeat the damage gate entirely, turning a placement fix
+        // into a 20x performance regression.
+        // The window is resolved and the predicate evaluated in their own
+        // scope so the immutable borrow of `self.space` ends before
+        // `apply_layout` takes `&mut self`.
+        let needs_relayout = self
+            .space
+            .elements()
+            .find(|w| w.toplevel().is_some_and(|t| t.wl_surface() == surface))
+            .is_some_and(|w| crate::layout::placement_changed(w, &self.floating_ids));
+        if needs_relayout {
+            self.apply_layout();
+        }
+
         handle_commit(&mut self.popups, &self.space, surface);
     }
 
