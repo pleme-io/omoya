@@ -1436,8 +1436,20 @@ impl smithay::backend::renderer::ExportMem for NuriRenderer {
         // ★ Nearly a memcpy, and that is the point: nuri's framebuffer IS
         // memory. A GPU renderer has to schedule a readback and wait on a
         // fence; the software path already has the pixels.
+        //
+        // ★ READ THE SHADOW, NOT THE MAPPING — the last write-combining read
+        // in the codebase, removed. `target.data` is the scanout mmap, where a
+        // read costs ~1000x a read from RAM (measured on plo); `target.shadow`
+        // holds the same bytes in ordinary cached memory.
+        //
+        // They are identical here and not merely usually-identical: `capture`
+        // deliberately passes age 0, which forces a full repaint, so
+        // `flush_damage` has just copied the entire shadow into the mapping.
+        // Reading the mapping would re-fetch, uncached, bytes that are already
+        // hot in cache one buffer over — which for a 1920x1080 frame was
+        // measured elsewhere at several SECONDS.
         copy_region(
-            target.data,
+            &target.shadow,
             target.stride,
             target.width,
             target.height,
