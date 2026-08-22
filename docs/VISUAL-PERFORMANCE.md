@@ -89,21 +89,59 @@ sustains against cold cache, that is ~4 ms — which is the 4,099 µs measured,
 to within the noise. **The arithmetic closes.** Nothing here is mysterious and
 nothing here needs a profiler to find.
 
-### II.3 ★ The root cause is upstream of all three: **mado does not send buffer damage**
+### II.2b ★ CORRECTED — the split says the cost is the WRITE, not the copies
+
+§II.2's three-pass reading was measured further and is **wrong about where the
+time goes**. Splitting a text-commit frame on the live seat:
+
+| stage | cost | share |
+|---|---|---|
+| `gather_us` (the shm import lives here) | 938 µs | 22.3% |
+| `render_output` → `nuri::blit` | **3,270 µs** | **77.7%** |
+
+Both stages move ~16 MB (an 8 MB read and an 8 MB write). The import does it
+at **~17 GB/s**; the blit at **~4.9 GB/s**. Same read on both sides, so the
+difference is the destination: **writing into the mapped DRM dumb buffer is
+~3.5× slower than writing into ordinary RAM.** That mapping is uncached or
+write-combining memory, where the CPU's usual tricks do not apply.
+
+Two consequences, and they reorder the plan:
+
+1. **Counting passes was the wrong model.** Fusing the import's second walk
+   (landed as `copy_normalising`) is a real deletion on the whole-buffer paths
+   and close to free on the hot one, because that walk was already
+   row-interleaved and landing in L1. Passes are a *proxy* for bytes-moved and
+   the proxy broke here.
+2. **The only thing that matters is how many bytes reach scanout memory**, and
+   that number is set by the damage rectangle, by nothing else.
+
+### II.3 ★ The damage is a lie, and the client structurally cannot fix it
 
 `mado/src/grid_damage.rs:33` says it outright — *"`wl_surface.damage_buffer` —
 presentation goes through wgpu"*. wgpu's `present()` takes no damage argument,
 so winit's Wayland backend commits **full-surface damage every frame**.
 
 So mado computes a perfectly good damage rect, uses it for its own draw, and
-then tells the compositor the whole window changed. Every stage in §II.2 is
-proportional to that lie. **They are not three problems. They are one problem
-counted three times**, and it is a client-side problem being paid for by the
-compositor.
+then tells the compositor the whole window changed. Every byte that reaches
+scanout memory is proportional to that lie.
 
-This is the correction that matters most in this document: an earlier reading
-of the same gap blamed the compositor's pass count. The passes are fine. The
-damage is wrong.
+**And it is not mado's failing** — it is true of every wgpu client, which on
+this seat is every graphical client we ship. Waiting for the client to fix it
+is waiting for a Vulkan extension to surface through wgpu's API.
+
+**So the compositor measures it instead.** We are already about to read the
+client's buffer; comparing it against what that surface last committed costs
+one more read of ordinary RAM (~470 µs) and can remove almost all of a
+3,270 µs write into slow memory. For a keystroke the truth is a handful of text
+rows, not 1,044.
+
+That is `crates/omoya/src/truedamage.rs`, and it runs **at commit** — before
+`on_commit_buffer_handler` drains the declaration — so every union above it
+(buffer age, elements, output) stays correct by construction rather than by our
+care. The obvious alternative, skipping unchanged rows at the *blit*, is wrong
+and would leave stale pixels: the blit's damage is what the client changed
+UNION what is stale in *this* back buffer, and a row can be unchanged since the
+last commit while still being wrong in a buffer last drawn two frames ago.
 
 ### II.4 The counters that are already healthy — do not "optimize" these
 
@@ -159,15 +197,23 @@ over kanshou, with `sampled=n/offered` so the sampling denominator is inside
 the value.
 **Done:** a p50/p99 for keystroke→photon exists and is queryable remotely.
 
-### Round 1 — **make the damage true** *(the 68×)*
-The whole of §II.3. mado sends real `wl_surface.damage_buffer` rects derived
-from the `grid_damage` it already computes. wgpu will not do it, so the
-surface must be damaged beside the present — which means reaching the
-`wl_surface` under winit, or presenting through a path that admits damage.
-All three compositor passes then shrink to the damaged rect *for free*,
-because all three are already written against `damage`.
-**Done:** a one-character text commit costs **< 500 µs** median (from 4,099),
-i.e. comfortably inside one 2,778 µs interval, with `blit_fast` still ≥ 95%.
+### Round 1 — **make the damage true, in the COMPOSITOR** *(the 68×)*
+★ **Re-scoped by measurement.** This first read "mado sends real
+`wl_surface.damage_buffer` rects", and mado *cannot* — §II.3. The fix moved to
+where it is actually available: `truedamage.rs` diffs the committed pixels
+against a per-surface shadow and replaces the client's declaration with the
+truth, before smithay drains it.
+
+Four guards ship with it, because under-damage is the one direction that leaves
+stale pixels on a screen: it can only ever **shrink** what the client declared;
+it **refuses** outright on a first commit, a stride/height/format change, or a
+non-shm buffer; it skips **sync subsurfaces**, whose `current()` is not the
+generation that will be shown; and it engages only when the client declared
+**≥50%** of its surface, so a well-behaved client is never taxed with the
+comparison it does not need.
+**Done:** a one-character text commit costs **< 500 µs** median (from 4,207),
+`td_dirty_pct` reports a small single-digit percentage, and the vkms
+whole-stack VM test still passes.
 
 ### Round 2 — **event-driven scheduling** *(the autoloss)*
 Retire the calloop frame Timer for `DrmDeviceNotifier` vblank events, and

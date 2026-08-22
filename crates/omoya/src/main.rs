@@ -33,6 +33,7 @@ mod owed;
 mod remap;
 mod state;
 mod synth;
+mod truedamage;
 mod theme;
 /// The nested development backend. Off by default — it drags in winit, which
 /// `dlopen`s libxkbcommon behind `ldd`'s back. See `Cargo.toml`'s `[features]`.

@@ -124,6 +124,11 @@ pub struct Omoya {
     /// defaulted: a seat with no launcher configured must say so, not quietly
     /// open something else.
     pub launcher_command: Option<Vec<String>>,
+    /// Per-surface shadows of the last committed pixels, used to compute
+    /// TRUE damage at commit. See [`crate::truedamage`] — a wgpu client
+    /// cannot declare damage, so the compositor measures it instead of
+    /// believing "the whole surface changed" 360 times a second.
+    pub shadows: crate::truedamage::Shadows,
     /// How the windows are arranged. See `layout.rs` — the algebra is
     /// `kukaku`'s, and only "a leaf is a Window" and "a rect is pixels" are
     /// omoya's.
@@ -342,6 +347,7 @@ impl Omoya {
             },
             session_command: None,
             launcher_command: None,
+            shadows: crate::truedamage::Shadows::default(),
             loop_signal,
             socket_name,
             layer_shell_state,

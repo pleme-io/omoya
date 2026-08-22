@@ -66,6 +66,30 @@ impl CompositorHandler for Omoya {
     }
 
     fn commit(&mut self, surface: &WlSurface) {
+        // ★ BEFORE `on_commit_buffer_handler`, AND THAT ORDER IS THE WHOLE
+        // MECHANISM. That call DRAINS `SurfaceAttributes::damage` into the
+        // renderer state; refining afterwards would edit a field nothing
+        // reads and look exactly like working.
+        //
+        // A wgpu client cannot declare damage — `present()` takes no damage
+        // argument — so every one of them says "the whole surface changed" on
+        // every frame. Measured on plo: that turned one keystroke into a
+        // 4,207 us frame against a 2,778 us vblank interval. This compares the
+        // committed pixels against what the surface last committed and
+        // replaces the declaration with the truth. It can only ever SHRINK,
+        // and it refuses outright whenever the comparison is not meaningful.
+        //
+        // ★ TOPLEVELS AND ASYNC SUBSURFACES ONLY. A SYNC subsurface's state is
+        // cached and applied on its PARENT's commit, so `current()` here is not
+        // the generation that will be shown — refining it would compare the
+        // wrong pixels and could under-damage, which is the one direction that
+        // leaves stale pixels on a screen. Skipping costs nothing on this seat:
+        // the clients whose frames are expensive are toplevels.
+        if !is_sync_subsurface(surface)
+            && let Some(v) = crate::truedamage::refine_commit(surface, &mut self.shadows)
+        {
+            self.introspect.publish_truedamage(&self.shadows, &v);
+        }
         on_commit_buffer_handler::<Self>(surface);
         // ★ THE ORDINARY REASON A FRAME EXISTS. Every pixel a client changes
         // arrives through here, so this one line is what keeps the seat
@@ -86,6 +110,19 @@ impl CompositorHandler for Omoya {
             }
         }
         handle_commit(&mut self.popups, &self.space, surface);
+    }
+
+    /// ★ RELEASE THE SHADOW. `truedamage` keeps a full copy of each surface's
+    /// last committed pixels — ~8 MB for a fullscreen window — and a shadow
+    /// that outlives its surface is a leak whose only symptom is RSS growth on
+    /// a seat that stays up for weeks. `td_shadows` publishes the count so the
+    /// leak would be observable, but not leaking is better than observing it.
+    fn destroyed(&mut self, surface: &WlSurface) {
+        use smithay::reexports::wayland_server::Resource as _;
+        self.shadows.forget(surface.id().protocol_id());
+        self.introspect
+            .td_shadows
+            .store(self.shadows.len() as u64, std::sync::atomic::Ordering::Relaxed);
     }
 }
 

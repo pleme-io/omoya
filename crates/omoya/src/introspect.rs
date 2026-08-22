@@ -145,6 +145,19 @@ pub struct OmoyaIntrospect {
     /// `import_full` staying high means the incremental path's precondition
     /// never holds — most likely `Arc::get_mut` failing because smithay is
     /// holding the texture too.
+    /// ── ★ TRUE-DAMAGE COUNTERS, AND EVERY ONE CARRIES ITS DENOMINATOR ──
+    /// `td_rows_dirty` alone cannot distinguish "nothing is changing" from
+    /// "nothing is being compared", and those are opposite facts about whether
+    /// this optimization is working at all. `td_rows_examined` is the
+    /// denominator; `td_refused` is how often the comparison declined and the
+    /// frame paid full price.
+    pub td_refined: AtomicU64,
+    pub td_refused: AtomicU64,
+    pub td_rows_dirty: AtomicU64,
+    pub td_rows_examined: AtomicU64,
+    /// Shadows held. One per live surface; a number that only grows is a leak
+    /// of ~8 MB per window, which otherwise shows up only as RSS.
+    pub td_shadows: AtomicU64,
     pub import_full: AtomicU64,
     pub import_partial: AtomicU64,
     /// Each render element's geometry, as the RENDERER sees it.
@@ -496,6 +509,27 @@ impl Introspect for OmoyaIntrospect {
             "blit_slow" => Ok(n(&self.blit_slow)),
             "blit_general" => Ok(n(&self.blit_general)),
             "gather_us" => Ok(n(&self.gather_us)),
+            "td_refined" => Ok(n(&self.td_refined)),
+            "td_refused" => Ok(n(&self.td_refused)),
+            "td_rows_dirty" => Ok(n(&self.td_rows_dirty)),
+            "td_rows_examined" => Ok(n(&self.td_rows_examined)),
+            "td_shadows" => Ok(n(&self.td_shadows)),
+            // The one number an operator actually wants: what fraction of the
+            // surface a commit really changes. Derived here rather than left
+            // to the caller so the denominator cannot be dropped on the way.
+            "td_dirty_pct" => {
+                let ex = self.td_rows_examined.load(std::sync::atomic::Ordering::Relaxed);
+                let di = self.td_rows_dirty.load(std::sync::atomic::Ordering::Relaxed);
+                Ok(if ex == 0 {
+                    // ★ NOT 0.0. Zero examined means the refinement never ran,
+                    // which would render as "0% dirty" — a perfect score for a
+                    // broken feature.
+                    serde_json::json!("no rows examined")
+                } else {
+                    #[allow(clippy::cast_precision_loss)]
+                    serde_json::json!(format!("{:.2}%", 100.0 * di as f64 / ex as f64))
+                })
+            }
             "import_full" => Ok(n(&self.import_full)),
             "import_partial" => Ok(n(&self.import_partial)),
             "elements" => Ok(n(&self.elements)),
@@ -632,6 +666,12 @@ impl Introspect for OmoyaIntrospect {
             "blit_general",
             "blit_slow",
             "gather_us",
+            "td_refined",
+            "td_refused",
+            "td_rows_dirty",
+            "td_rows_examined",
+            "td_shadows",
+            "td_dirty_pct",
             "import_full",
             "import_partial",
             "elements",
@@ -766,5 +806,26 @@ mod tests {
         assert_eq!(v["output"]["width"], 1024);
         assert_eq!(v["windows"], 3);
         assert_eq!(v["frames"], 1);
+    }
+}
+
+impl OmoyaIntrospect {
+    /// Publish the true-damage counters after a commit.
+    ///
+    /// Takes the whole `Shadows` rather than individual numbers so the counts
+    /// and their denominator can only ever be published together — a caller
+    /// cannot accidentally ship `rows_dirty` without `rows_examined`, which is
+    /// the shape that makes a broken refinement read as a perfect one.
+    pub fn publish_truedamage(
+        &self,
+        shadows: &crate::truedamage::Shadows,
+        _verdict: &crate::truedamage::Verdict,
+    ) {
+        use std::sync::atomic::Ordering::Relaxed;
+        self.td_refined.store(shadows.refined, Relaxed);
+        self.td_refused.store(shadows.refused, Relaxed);
+        self.td_rows_dirty.store(shadows.rows_dirty, Relaxed);
+        self.td_rows_examined.store(shadows.rows_examined, Relaxed);
+        self.td_shadows.store(shadows.len() as u64, Relaxed);
     }
 }
