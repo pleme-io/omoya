@@ -749,6 +749,13 @@ where
     );
     tracing::info!(hz = refresh_hz(&target.mode), "frame pacing");
 
+    // Captured as a VALUE, not read from `target` inside the loop: the closure
+    // is `'static` and `target` is a borrow that cannot escape into it. The
+    // refresh interval is also exactly what `wp_presentation` feedback must
+    // report, so it is derived once here rather than twice with two chances to
+    // disagree.
+    let refresh_interval = interval;
+
     // A TIMER, not vblank, and that is an honest shortcut rather than a design.
     // The correct pacing source is the DRM device's own vblank event, which is
     // what `DrmDeviceNotifier` exists for; driving from a timer means a frame
@@ -1222,14 +1229,91 @@ where
             // Tell clients their buffers were consumed, or they will never draw
             // a second frame. A compositor that renders once and then appears
             // frozen is usually this line missing.
+            let now = data.state.start_time.elapsed();
             data.state.space.elements().for_each(|w| {
                 w.send_frame(
                     &output,
-                    data.state.start_time.elapsed(),
+                    now,
                     Some(std::time::Duration::ZERO),
                     |_, _| Some(output.clone()),
                 );
             });
+            // ★ LAYER SURFACES GET THEM TOO — AND THIS LINE IS WHY A BAR OR A
+            // LAUNCHER WOULD HAVE FROZEN AFTER EXACTLY ONE FRAME.
+            //
+            // The loop above walks `space.elements()`, which holds toplevels
+            // and nothing else. A `zwlr_layer_shell_v1` client — every bar,
+            // every launcher, every notification daemon, every lock screen —
+            // lives in the output's `LayerMap`, never in the space, so it
+            // received no frame callback at all. It would map, draw once,
+            // wait for a callback that no code path sends, and hang there
+            // looking alive.
+            //
+            // omoya advertises layer-shell v5, so a client is entitled to
+            // assume this works. Advertising a protocol and then withholding
+            // the callback it depends on is worse than not advertising it.
+            {
+                let map = smithay::desktop::layer_map_for_output(&output);
+                for layer in map.layers() {
+                    layer.send_frame(
+                        &output,
+                        now,
+                        Some(std::time::Duration::ZERO),
+                        |_, _| Some(output.clone()),
+                    );
+                }
+            }
+
+            // ── ★ ANSWER `wp_presentation`, HONESTLY ────────────────────
+            //
+            // The global has been advertised since this file was written and
+            // NOTHING ever answered it. That is worse than not advertising it,
+            // and not by a little: Mesa's Wayland WSI keeps a `frame_fallback`
+            // path commented "Fallback when wp_presentation is not supported",
+            // and binding the global is what DISABLES that fallback. So a
+            // Vulkan client asking for presentation timing got a compositor
+            // that promised to answer, never did, and had already switched
+            // off the client's own workaround.
+            //
+            // ★ `Kind::Vsync` AND NOTHING ELSE, while the loop is a timer.
+            // The protocol's own wording is normative and rules the other
+            // flags out by construction:
+            //   hw_clock      "Sampling a clock in software is not acceptable"
+            //   hw_completion "The opposite of this is e.g. a timer being used
+            //                  to guess when the display hardware has switched"
+            // This loop IS that timer. Claiming `HwClock | HwCompletion` here
+            // would hand every client a confidently wrong number, which is
+            // strictly worse than the silence it replaces. When the loop moves
+            // to `DrmDeviceNotifier` vblank events, the event's own `time` and
+            // `sequence` are exactly what upgrade this — one wire, not two.
+            {
+                use smithay::wayland::presentation::Refresh;
+                let mut feedback =
+                    smithay::desktop::utils::OutputPresentationFeedback::new(&output);
+                for w in data.state.space.elements() {
+                    w.take_presentation_feedback(
+                        &mut feedback,
+                        smithay::desktop::utils::surface_primary_scanout_output,
+                        // ★ A CONSTANT `Vsync`, not
+                        // `surface_presentation_feedback_flags_from_states`.
+                        // That helper derives ZeroCopy from the render states,
+                        // and this compositor can never earn it — the protocol
+                        // says "Compositing with OpenGL counts as copying", and
+                        // nuri copies on the CPU. Deriving a flag we are
+                        // structurally unable to set would be a more elaborate
+                        // way of publishing the same wrong answer.
+                        |_surface, _| {
+                            smithay::reexports::wayland_protocols::wp::presentation_time::server::wp_presentation_feedback::Kind::Vsync
+                        },
+                    );
+                }
+                feedback.presented::<_, smithay::utils::Monotonic>(
+                    now,
+                    Refresh::Variable(refresh_interval),
+                    0,
+                    smithay::reexports::wayland_protocols::wp::presentation_time::server::wp_presentation_feedback::Kind::Vsync,
+                );
+            }
             // ★ Capture is handled INSIDE the frame closure above, where the
             // framebuffer is still bound, and is triggered by a kanshou
             // request rather than an env var. It sat here originally and could
