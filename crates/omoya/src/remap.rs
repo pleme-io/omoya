@@ -67,8 +67,20 @@ pub const DEFAULT_REMAPS: &[(u32, u32)] = &[(EVDEV_CAPSLOCK, EVDEV_ESC)];
 /// backend AND in the synthetic path, i.e. two places that can disagree.
 #[must_use]
 pub fn apply(code: Keycode) -> Keycode {
+    apply_table(code, DEFAULT_REMAPS)
+}
+
+/// Apply a CONFIGURED remap table.
+///
+/// ★ Split from [`apply`] so the seat can read its table from config while the
+/// const remains the default and the thing every test is written against. The
+/// arithmetic — evdev + [`XKB_OFFSET`] — lives in exactly one place either
+/// way, which is the property that matters: a mismatch between the two would
+/// produce the wrong letter rather than an error.
+#[must_use]
+pub fn apply_table(code: Keycode, table: &[(u32, u32)]) -> Keycode {
     let raw = code.raw();
-    for (from, to) in DEFAULT_REMAPS {
+    for (from, to) in table {
         if raw == from + XKB_OFFSET {
             return Keycode::new(to + XKB_OFFSET);
         }
@@ -133,6 +145,21 @@ mod tests {
                 "evdev {to} is both a target and a source — the table chains"
             );
         }
+    }
+
+    #[test]
+    fn a_configured_table_is_honoured_and_an_empty_one_is_a_pass_through() {
+        // ★ An EMPTY table must be a no-op, not a fallback to the default.
+        // An operator who writes `remaps: []` is saying "I want CapsLock to be
+        // CapsLock"; silently reinstating the default would ignore them while
+        // looking like it worked — the same inert-config shape this whole
+        // config surface exists to avoid.
+        let caps = Keycode::new(EVDEV_CAPSLOCK + XKB_OFFSET);
+        assert_eq!(apply_table(caps, &[]).raw(), caps.raw(), "empty means none");
+
+        // And an arbitrary configured pair works, not just the built-in one.
+        let a = Keycode::new(30 + XKB_OFFSET); // KEY_A
+        assert_eq!(apply_table(a, &[(30, 44)]).raw(), 44 + XKB_OFFSET);
     }
 
     #[test]

@@ -53,7 +53,7 @@ impl Omoya {
         // deed dispatch and the client's own keymap all see a real Escape —
         // remapping the keysym later would leave the chord layer still
         // matching CapsLock, so bindings and fingers would disagree.
-        let code = crate::remap::apply(code);
+        let code = crate::remap::apply_table(code, &self.remaps);
         let serial = SERIAL_COUNTER.next_serial();
         let event_state = state;
         let Some(keyboard) = self.seat.get_keyboard() else {

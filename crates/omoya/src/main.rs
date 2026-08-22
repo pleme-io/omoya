@@ -20,6 +20,7 @@ mod nuri_renderer;
 mod scanout;
 mod bar;
 mod chord;
+mod config;
 mod cursor;
 mod deed;
 #[cfg(target_os = "linux")]
@@ -835,8 +836,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // rather than re-read from args at chord time because `args` is consumed
     // below, and because the seat's terminal is state the compositor should be
     // able to answer about, not an argument it happens to still be holding.
-    data.state.session_command = args.spawn.clone();
-    data.state.launcher_command = args.launcher.clone();
+    // ── ★ THE CONFIG FILE, WITH FLAGS STILL WINNING ─────────────────────
+    //
+    // omoya had NO configuration surface until this: a hand-rolled
+    // `std::env::args()` loop and 46 operator-visible values as Rust `const`s.
+    // A non-US operator could not use this seat, and no key could be rebound,
+    // without a recompile.
+    //
+    // Flags override the file rather than the other way round, and for a
+    // compositor that ordering is not a preference: greetd launches omoya with
+    // a command line, so a flag is the escape hatch that exists even when the
+    // yaml is wrong. A bad file that could only be fixed from inside a seat it
+    // prevented from starting would be a trap.
+    let cfg = crate::config::load().with_cli_overrides(args.spawn.clone(), args.launcher.clone());
+    tracing::info!(
+        terminal = ?cfg.terminal,
+        launcher = ?cfg.launcher,
+        remaps = cfg.remaps.len(),
+        "seat configuration resolved"
+    );
+    data.state.session_command = cfg.terminal.clone();
+    data.state.launcher_command = cfg.launcher.clone();
+    data.state.remaps = cfg.remap_pairs();
 
     if let Some(cmd) = args.spawn
         && let Some((program, rest)) = cmd.split_first()

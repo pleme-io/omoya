@@ -29,6 +29,8 @@ default = []
 nested = ["smithay/backend_winit"]
 
 [dependencies]
+shikumi = "0.1"
+serde_yaml = "0.9"
 # The frame-necessity decision. Its own repo and its own crate as of
 # 2026-08-21 — it lived at `crates/mekuri` for exactly as long as it took to
 # unpark the shard that owns it, because `gen` refuses a sibling path dep

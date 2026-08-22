@@ -144,6 +144,14 @@ pub struct Omoya {
     /// would mark `Owed::Windows` on every frame and defeat the damage gate
     /// outright — the one thing that must not happen.
     pub floating_ids: std::collections::HashSet<u32>,
+    /// The keycode remaps in force, resolved from config at startup.
+    ///
+    /// ★ A FIELD, not the `remap::DEFAULT_REMAPS` const the code used to read
+    /// directly. The const is still the DEFAULT — `OmoyaConfig::bare()`
+    /// derives from it, so CapsLock stays Escape even when a config fails to
+    /// parse — but an operator can now change it without a recompile, which
+    /// was the operator's whole point about shikumi configurability.
+    pub remaps: Vec<(u32, u32)>,
     /// How the windows are arranged. See `layout.rs` — the algebra is
     /// `kukaku`'s, and only "a leaf is a Window" and "a rect is pixels" are
     /// omoya's.
@@ -375,6 +383,7 @@ impl Omoya {
             launcher_command: None,
             shadows: crate::truedamage::Shadows::default(),
             floating_ids: std::collections::HashSet::new(),
+            remaps: crate::remap::DEFAULT_REMAPS.to_vec(),
             loop_signal,
             socket_name,
             layer_shell_state,
