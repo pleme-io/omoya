@@ -5,6 +5,19 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+# ★ NOT PUBLISHED — the name `nuri` on crates.io is NOT ours. It is
+# `nuri-ui/nuri` 0.1.0, registered by a stranger, so every release since
+# 0.1.2 died here with "name conflict on 'nuri'". The workflow's own
+# auto-rename (rename-prefix = "pleme-io-") cannot rescue it: it looks for
+# `nuri/Cargo.toml` at the REPO ROOT while this tree is `crates/nuri`, so it
+# logs "no crate dir for 'nuri'" and gives up. Zero `pleme-io-*` crates exist
+# on crates.io, so that path has never once fired fleet-wide.
+#
+# Adopting `pleme-io-nuri` is the destination, but minting a crates.io name is
+# PERMANENT and outward-facing, so it is the operator's call — not a side
+# effect of turning CI green. Until then this crate is local-only.
+# `pending-nuri-publish: needs a crates.io name we own`
+publish = false
 description = "nuri (塗り) — the pleme-io software rasterizer. Blit, fill and composite into a mapped buffer, in pure Rust."
 
 [dependencies]

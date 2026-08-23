@@ -6,6 +6,21 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+# ★ NOT PUBLISHED, for two independent reasons.
+#
+# 1. It is an APP. Fleet doctrine (★★ AUTO-RELEASE) is explicit that a
+#    service/app ships as an IMAGE, not a crate. omoya is a compositor
+#    binary; nothing consumes it as a library.
+# 2. Publishing it today emits a WRONG dependency — verified by unpacking the
+#    generated .crate, not by reading the source:
+#        [dependencies.nuri]
+#        version = "0.1.0"
+#    `path` is stripped on publish, so that row resolves against crates.io,
+#    where `nuri` is `nuri-ui/nuri` — a stranger's crate. omoya 0.1.1 is
+#    already published carrying exactly that row.
+#
+# Reason 2 clears when nuri gets a name we own; reason 1 does not.
+publish = false
 
 [[bin]]
 name = "omoya"
@@ -64,14 +79,17 @@ fontdue = "0.9"
 # Its 49 tests are tear's own cases run against a leaf id it invented, which
 # is the evidence the extraction was sound rather than a rename.
 #
-# ★ A GIT DEP, NOT A VERSION, AND THAT IS A KNOWN INTERIM. `kukaku` is not on
-# crates.io because tear's GitHub Actions are DECLARED off in
-# pangea-architectures' org.yaml (`actions_enabled: false`, a deliberate
-# CI-cost posture on 14 of ~860 records), so ★★ AUTO-RELEASE cannot publish
-# it and no automated path can. Pinned by rev rather than branch so this
-# repo's build is reproducible while that holds.
-# `pending-kukaku-publish: crates.io, gated on tear's actions_enabled`
-kukaku = { git = "https://github.com/pleme-io/tear", rev = "8b270155535015531396626022b8d31ddc35455b" }
+# ★ CONSUMED BY VERSION. The interim note that used to sit here said
+# `kukaku` could not be on crates.io because tear's GitHub Actions were
+# declared off. That is no longer true: tear's auto-release runs, and
+# kukaku is published. The source at the rev this used to pin
+# (8b27015) and the source behind 0.1.20 are IDENTICAL — `git log
+# 8b27015..origin/main -- crates/kukaku` is empty — so this is a
+# same-bytes move off a git dep, not a version bump.
+#
+# Consuming by version also takes a github.com fetch off the build's
+# critical path: a git dep needs a credential, a registry dep does not.
+kukaku = "0.1.20"
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 # ── ★ D-Bus, pure Rust ────────────────────────────────────────────────────

@@ -1096,8 +1096,9 @@ dependencies = [
 
 [[package]]
 name = "kukaku"
-version = "0.1.19"
-source = "git+https://github.com/pleme-io/tear?rev=8b270155535015531396626022b8d31ddc35455b#8b270155535015531396626022b8d31ddc35455b"
+version = "0.1.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b94d8a42a7c6e1e60d99192d5e94ddf76321222fec3ff56aa950d8dbd7d7d35"
 dependencies = [
  "serde",
 ]

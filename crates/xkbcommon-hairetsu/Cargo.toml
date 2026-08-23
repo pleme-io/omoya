@@ -4,6 +4,14 @@
 # what it actually is.
 [package]
 name = "xkbcommon"
+# ★ NOT PUBLISHED, and this one is a hazard rather than a preference. This
+# crate exists only as the [patch.crates-io] stand-in for the real
+# `xkbcommon` (rust-x-bindings/xkbcommon-rs, 0.9.0). Uploading it under that
+# name would be hijacking a live upstream crate. It has been passing only
+# because the publisher matched the FOREIGN crate and logged "already
+# published — treating as success": a false green against someone else's
+# package.
+publish = false
 version = "0.8.0"
 edition = "2024"
 license = "MIT"

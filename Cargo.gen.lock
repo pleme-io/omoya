@@ -1,13 +1,13 @@
 {
   "schema_version": 2,
-  "cargo_lock_sha256": "38b68d2a632dbc1092c1febf8aef8ba05e2b97eb12c9c432a5edb32e91769aa0",
+  "cargo_lock_sha256": "9f680a6e76e64bfa0fd587219a96118dbb5202e3373a86406e1a72ef66eb442f",
   "manifest_sha256": {
     "Cargo.toml": "683c0a3d750677a0ab66e3dc317053f31caaa59637780c391de17f2e91d3675a",
     "crates/hairetsu/Cargo.toml": "67a784b3f0dc716e74f9257bed09bef7c637618269586ecf20b1ff223114b0da",
-    "crates/nuri/Cargo.toml": "c5c860abe8b16241d437c1bc3c202378eb59ea1da2a485154fdd6099e1452d41",
+    "crates/nuri/Cargo.toml": "3116435ecbd4619097d2879f5a26924834f5550aa4c732e667c3617e28d2865d",
     "crates/omoya-spec/Cargo.toml": "75cd6d31f2ef617df89556610445abab8cf9cddb49d7bbf04c28ac5b7fc89031",
-    "crates/omoya/Cargo.toml": "c153bdde42646269aa689a37ce90eaab31848a8947c273f47fb1e7e05a9b2c6d",
-    "crates/xkbcommon-hairetsu/Cargo.toml": "b4b77d51ae78f642dfaad99896a1bc6202e897ca25311d1296610e0d4435e8fd"
+    "crates/omoya/Cargo.toml": "239b3d5d2f4ca95e60ee1bfd23fabdd7a70b17939c5579e28ed90965dc094392",
+    "crates/xkbcommon-hairetsu/Cargo.toml": "47e976fa1c8c185b17a5c2ced9fcec14a3fa5521a7bc9c046f3d23cf94af19b2"
   },
   "target_resolves": {
     "base": {
@@ -1909,7 +1909,7 @@
         "build_dependencies": [],
         "features": []
       },
-      "kukaku-0.1.19-8b270155535015531396626022b8d31ddc35455b": {
+      "kukaku-0.1.20": {
         "runtime_dependencies": [
           {
             "name": "serde",
@@ -2194,7 +2194,7 @@
           },
           {
             "name": "kukaku",
-            "package_key": "kukaku-0.1.19-8b270155535015531396626022b8d31ddc35455b",
+            "package_key": "kukaku-0.1.20",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -8929,7 +8929,7 @@
       "edition": "2024",
       "proc_macro": true
     },
-    "kukaku-0.1.19-8b270155535015531396626022b8d31ddc35455b": {
+    "kukaku-0.1.20": {
       "edition": "2024"
     },
     "lazy_static-1.5.0": {
@@ -9354,8 +9354,6 @@
       "edition": "2024"
     }
   },
-  "git_nar_sha256": {
-    "kukaku-0.1.19-8b270155535015531396626022b8d31ddc35455b": "sha256-M5JZXEZVRKXDDKUgnu/vhe2MR49/2KpyveMX6Qam/zA="
-  },
+  "git_nar_sha256": {},
   "flake_metadata": {}
 }
