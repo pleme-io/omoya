@@ -1,12 +1,12 @@
 {
   "schema_version": 2,
-  "cargo_lock_sha256": "a937b2b661248518cdeb4b76b3b8dc92cab8e3388a07a299909488f0b68b1293",
+  "cargo_lock_sha256": "6fa5987bdaef476afb9da8bdd6217b93bcf414e7123e771931fc6d224c8b305d",
   "manifest_sha256": {
-    "Cargo.toml": "39ecf84b7634e3f435c55a440f7c82a17c93b5721b2c8d03e67d88f1fc2b6ba2",
+    "Cargo.toml": "425b74ee278155f903d94a826b80de967cf7d5b0223730c809bd2ada598874bc",
     "crates/hairetsu/Cargo.toml": "67a784b3f0dc716e74f9257bed09bef7c637618269586ecf20b1ff223114b0da",
     "crates/nuri/Cargo.toml": "3116435ecbd4619097d2879f5a26924834f5550aa4c732e667c3617e28d2865d",
     "crates/omoya-spec/Cargo.toml": "75cd6d31f2ef617df89556610445abab8cf9cddb49d7bbf04c28ac5b7fc89031",
-    "crates/omoya/Cargo.toml": "239b3d5d2f4ca95e60ee1bfd23fabdd7a70b17939c5579e28ed90965dc094392",
+    "crates/omoya/Cargo.toml": "1973ee3e2700caeb9138576835669b5658d1f971c650ef202b9f780313718403",
     "crates/xkbcommon-hairetsu/Cargo.toml": "47e976fa1c8c185b17a5c2ced9fcec14a3fa5521a7bc9c046f3d23cf94af19b2"
   },
   "target_resolves": {
@@ -252,6 +252,15 @@
         ],
         "build_dependencies": [],
         "features": []
+      },
+      "base64-0.22.1": {
+        "runtime_dependencies": [],
+        "build_dependencies": [],
+        "features": [
+          "alloc",
+          "default",
+          "std"
+        ]
       },
       "bitflags-2.13.1": {
         "runtime_dependencies": [],
@@ -630,6 +639,133 @@
           "std"
         ]
       },
+      "darling-0.23.0": {
+        "runtime_dependencies": [
+          {
+            "name": "darling_core",
+            "package_key": "darling_core-0.23.0",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "darling_macro",
+            "package_key": "darling_macro-0.23.0",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "host"
+          }
+        ],
+        "build_dependencies": [],
+        "features": [
+          "default",
+          "suggestions"
+        ]
+      },
+      "darling_core-0.23.0": {
+        "runtime_dependencies": [
+          {
+            "name": "ident_case",
+            "package_key": "ident_case-1.0.1",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "proc_macro2",
+            "package_key": "proc-macro2-1.0.107",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "quote",
+            "package_key": "quote-1.0.47",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "strsim",
+            "package_key": "strsim-0.11.1",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": true,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "syn",
+            "package_key": "syn-2.0.119",
+            "kind": "normal",
+            "features": [
+              "extra-traits",
+              "full"
+            ],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": [
+          "strsim",
+          "suggestions"
+        ]
+      },
+      "darling_macro-0.23.0": {
+        "runtime_dependencies": [
+          {
+            "name": "darling_core",
+            "package_key": "darling_core-0.23.0",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "quote",
+            "package_key": "quote-1.0.47",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "syn",
+            "package_key": "syn-2.0.119",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": []
+      },
       "digest-0.10.7": {
         "runtime_dependencies": [
           {
@@ -765,6 +901,11 @@
           "default",
           "std"
         ]
+      },
+      "dyn-clone-1.0.20": {
+        "runtime_dependencies": [],
+        "build_dependencies": [],
+        "features": []
       },
       "endi-1.1.1": {
         "runtime_dependencies": [],
@@ -1129,12 +1270,168 @@
         "build_dependencies": [],
         "features": []
       },
+      "futures-0.3.34": {
+        "runtime_dependencies": [
+          {
+            "name": "futures_channel",
+            "package_key": "futures-channel-0.3.34",
+            "kind": "normal",
+            "features": [
+              "sink"
+            ],
+            "uses_default_features": false,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "futures_core",
+            "package_key": "futures-core-0.3.34",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": false,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "futures_executor",
+            "package_key": "futures-executor-0.3.34",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": false,
+            "optional": true,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "futures_io",
+            "package_key": "futures-io-0.3.34",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": false,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "futures_sink",
+            "package_key": "futures-sink-0.3.34",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": false,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "futures_task",
+            "package_key": "futures-task-0.3.34",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": false,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "futures_util",
+            "package_key": "futures-util-0.3.34",
+            "kind": "normal",
+            "features": [
+              "sink"
+            ],
+            "uses_default_features": false,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": [
+          "alloc",
+          "async-await",
+          "default",
+          "executor",
+          "futures-executor",
+          "std"
+        ]
+      },
+      "futures-channel-0.3.34": {
+        "runtime_dependencies": [
+          {
+            "name": "futures_core",
+            "package_key": "futures-core-0.3.34",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": false,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "futures_sink",
+            "package_key": "futures-sink-0.3.34",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": false,
+            "optional": true,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": [
+          "alloc",
+          "futures-sink",
+          "sink",
+          "std"
+        ]
+      },
       "futures-core-0.3.34": {
         "runtime_dependencies": [],
         "build_dependencies": [],
         "features": [
           "alloc",
           "default",
+          "std"
+        ]
+      },
+      "futures-executor-0.3.34": {
+        "runtime_dependencies": [
+          {
+            "name": "futures_core",
+            "package_key": "futures-core-0.3.34",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": false,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "futures_task",
+            "package_key": "futures-task-0.3.34",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": false,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "futures_util",
+            "package_key": "futures-util-0.3.34",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": false,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": [
           "std"
         ]
       },
@@ -1205,6 +1502,175 @@
           "fastrand",
           "futures-io",
           "parking",
+          "std"
+        ]
+      },
+      "futures-macro-0.3.34": {
+        "runtime_dependencies": [
+          {
+            "name": "proc_macro2",
+            "package_key": "proc-macro2-1.0.107",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "quote",
+            "package_key": "quote-1.0.47",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "syn",
+            "package_key": "syn-3.0.3",
+            "kind": "normal",
+            "features": [
+              "full"
+            ],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": []
+      },
+      "futures-sink-0.3.34": {
+        "runtime_dependencies": [],
+        "build_dependencies": [],
+        "features": [
+          "alloc",
+          "default",
+          "std"
+        ]
+      },
+      "futures-task-0.3.34": {
+        "runtime_dependencies": [],
+        "build_dependencies": [],
+        "features": [
+          "alloc",
+          "std"
+        ]
+      },
+      "futures-util-0.3.34": {
+        "runtime_dependencies": [
+          {
+            "name": "futures_channel",
+            "package_key": "futures-channel-0.3.34",
+            "kind": "normal",
+            "features": [
+              "std"
+            ],
+            "uses_default_features": false,
+            "optional": true,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "futures_core",
+            "package_key": "futures-core-0.3.34",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": false,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "futures_io",
+            "package_key": "futures-io-0.3.34",
+            "kind": "normal",
+            "features": [
+              "std"
+            ],
+            "uses_default_features": false,
+            "optional": true,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "futures_macro",
+            "package_key": "futures-macro-0.3.34",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": false,
+            "optional": true,
+            "target": null,
+            "tree": "host"
+          },
+          {
+            "name": "futures_sink",
+            "package_key": "futures-sink-0.3.34",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": false,
+            "optional": true,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "futures_task",
+            "package_key": "futures-task-0.3.34",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": false,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "memchr",
+            "package_key": "memchr-2.8.3",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": true,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "pin_project_lite",
+            "package_key": "pin-project-lite-0.2.17",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "slab",
+            "package_key": "slab-0.4.12",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": false,
+            "optional": true,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": [
+          "alloc",
+          "async-await",
+          "async-await-macro",
+          "channel",
+          "futures-channel",
+          "futures-io",
+          "futures-macro",
+          "futures-sink",
+          "io",
+          "memchr",
+          "sink",
+          "slab",
           "std"
         ]
       },
@@ -1700,6 +2166,11 @@
           "std"
         ]
       },
+      "ident_case-1.0.1": {
+        "runtime_dependencies": [],
+        "build_dependencies": [],
+        "features": []
+      },
       "indexmap-2.14.0": {
         "runtime_dependencies": [
           {
@@ -2119,7 +2590,7 @@
           "std"
         ]
       },
-      "nuri-0.1.49": {
+      "nuri-0.1.50": {
         "runtime_dependencies": [
           {
             "name": "thiserror",
@@ -2140,7 +2611,7 @@
         "build_dependencies": [],
         "features": []
       },
-      "omoya-0.1.49": {
+      "omoya-0.1.50": {
         "runtime_dependencies": [
           {
             "name": "awase",
@@ -2214,7 +2685,7 @@
           },
           {
             "name": "nuri",
-            "package_key": "nuri-0.1.49",
+            "package_key": "nuri-0.1.50",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -2224,7 +2695,30 @@
           },
           {
             "name": "omoya_spec",
-            "package_key": "omoya-spec-0.1.49",
+            "package_key": "omoya-spec-0.1.50",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "rmcp",
+            "package_key": "rmcp-0.15.0",
+            "kind": "normal",
+            "features": [
+              "server",
+              "transport-io"
+            ],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "schemars",
+            "package_key": "schemars-1.2.2",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -2300,6 +2794,22 @@
             "tree": "target"
           },
           {
+            "name": "tokio",
+            "package_key": "tokio-1.53.1",
+            "kind": "normal",
+            "features": [
+              "io-util",
+              "macros",
+              "rt",
+              "sync",
+              "time"
+            ],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
             "name": "tracing",
             "package_key": "tracing-0.1.44",
             "kind": "normal",
@@ -2350,7 +2860,7 @@
           "default"
         ]
       },
-      "omoya-spec-0.1.49": {
+      "omoya-spec-0.1.50": {
         "runtime_dependencies": [
           {
             "name": "thiserror",
@@ -2413,6 +2923,11 @@
         "features": []
       },
       "parking-2.2.1": {
+        "runtime_dependencies": [],
+        "build_dependencies": [],
+        "features": []
+      },
+      "pastey-0.2.3": {
         "runtime_dependencies": [],
         "build_dependencies": [],
         "features": []
@@ -2842,6 +3357,58 @@
           "std"
         ]
       },
+      "ref-cast-1.0.27": {
+        "runtime_dependencies": [
+          {
+            "name": "ref_cast_impl",
+            "package_key": "ref-cast-impl-1.0.27",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "host"
+          }
+        ],
+        "build_dependencies": [],
+        "features": []
+      },
+      "ref-cast-impl-1.0.27": {
+        "runtime_dependencies": [
+          {
+            "name": "proc_macro2",
+            "package_key": "proc-macro2-1.0.107",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "quote",
+            "package_key": "quote-1.0.47",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "syn",
+            "package_key": "syn-3.0.3",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": []
+      },
       "regex-automata-0.4.18": {
         "runtime_dependencies": [
           {
@@ -2872,6 +3439,244 @@
           "std"
         ]
       },
+      "rmcp-0.15.0": {
+        "runtime_dependencies": [
+          {
+            "name": "async_trait",
+            "package_key": "async-trait-0.1.92",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "host"
+          },
+          {
+            "name": "base64",
+            "package_key": "base64-0.22.1",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": true,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "chrono",
+            "package_key": "chrono-0.4.45",
+            "kind": "normal",
+            "features": [
+              "clock",
+              "oldtime",
+              "serde",
+              "std"
+            ],
+            "uses_default_features": false,
+            "optional": false,
+            "target": "cfg(all(target_family = \"wasm\", target_os = \"unknown\"))",
+            "tree": "target"
+          },
+          {
+            "name": "chrono",
+            "package_key": "chrono-0.4.45",
+            "kind": "normal",
+            "features": [
+              "serde"
+            ],
+            "uses_default_features": true,
+            "optional": false,
+            "target": "cfg(not(all(target_family = \"wasm\", target_os = \"unknown\")))",
+            "tree": "target"
+          },
+          {
+            "name": "futures",
+            "package_key": "futures-0.3.34",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "pastey",
+            "package_key": "pastey-0.2.3",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": true,
+            "target": null,
+            "tree": "host"
+          },
+          {
+            "name": "pin_project_lite",
+            "package_key": "pin-project-lite-0.2.17",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "rmcp_macros",
+            "package_key": "rmcp-macros-0.15.0",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": true,
+            "target": null,
+            "tree": "host"
+          },
+          {
+            "name": "schemars",
+            "package_key": "schemars-1.2.2",
+            "kind": "normal",
+            "features": [
+              "chrono04"
+            ],
+            "uses_default_features": true,
+            "optional": true,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "serde",
+            "package_key": "serde-1.0.229",
+            "kind": "normal",
+            "features": [
+              "derive",
+              "rc"
+            ],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "serde_json",
+            "package_key": "serde_json-1.0.151",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "thiserror",
+            "package_key": "thiserror-2.0.20",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "tokio",
+            "package_key": "tokio-1.53.1",
+            "kind": "normal",
+            "features": [
+              "macros",
+              "rt",
+              "sync",
+              "time"
+            ],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "tokio_util",
+            "package_key": "tokio-util-0.7.19",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "tracing",
+            "package_key": "tracing-0.1.44",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": [
+          "base64",
+          "default",
+          "macros",
+          "server",
+          "transport-async-rw",
+          "transport-io"
+        ]
+      },
+      "rmcp-macros-0.15.0": {
+        "runtime_dependencies": [
+          {
+            "name": "darling",
+            "package_key": "darling-0.23.0",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "proc_macro2",
+            "package_key": "proc-macro2-1.0.107",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "quote",
+            "package_key": "quote-1.0.47",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "serde_json",
+            "package_key": "serde_json-1.0.151",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "syn",
+            "package_key": "syn-2.0.119",
+            "kind": "normal",
+            "features": [
+              "full"
+            ],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": []
+      },
       "rustversion-1.0.23": {
         "runtime_dependencies": [],
         "build_dependencies": [],
@@ -2884,6 +3689,128 @@
       },
       "same-file-1.0.6": {
         "runtime_dependencies": [],
+        "build_dependencies": [],
+        "features": []
+      },
+      "schemars-1.2.2": {
+        "runtime_dependencies": [
+          {
+            "name": "chrono04",
+            "package_key": "chrono-0.4.45",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": false,
+            "optional": true,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "dyn_clone",
+            "package_key": "dyn-clone-1.0.20",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "ref_cast",
+            "package_key": "ref-cast-1.0.27",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "schemars_derive",
+            "package_key": "schemars_derive-1.2.2",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": true,
+            "target": null,
+            "tree": "host"
+          },
+          {
+            "name": "serde",
+            "package_key": "serde-1.0.229",
+            "kind": "normal",
+            "features": [
+              "alloc"
+            ],
+            "uses_default_features": false,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "serde_json",
+            "package_key": "serde_json-1.0.151",
+            "kind": "normal",
+            "features": [
+              "alloc"
+            ],
+            "uses_default_features": false,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": [
+          "chrono04",
+          "default",
+          "derive",
+          "schemars_derive",
+          "std"
+        ]
+      },
+      "schemars_derive-1.2.2": {
+        "runtime_dependencies": [
+          {
+            "name": "proc_macro2",
+            "package_key": "proc-macro2-1.0.107",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "quote",
+            "package_key": "quote-1.0.47",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "serde_derive_internals",
+            "package_key": "serde_derive_internals-0.30.0",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "syn",
+            "package_key": "syn-3.0.3",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          }
+        ],
         "build_dependencies": [],
         "features": []
       },
@@ -2914,8 +3841,10 @@
         ],
         "build_dependencies": [],
         "features": [
+          "alloc",
           "default",
           "derive",
+          "rc",
           "serde_derive",
           "std"
         ]
@@ -2925,6 +3854,7 @@
         "build_dependencies": [],
         "features": [
           "alloc",
+          "rc",
           "result",
           "std"
         ]
@@ -2977,6 +3907,47 @@
           "default"
         ]
       },
+      "serde_derive_internals-0.30.0": {
+        "runtime_dependencies": [
+          {
+            "name": "proc_macro2",
+            "package_key": "proc-macro2-1.0.107",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": false,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "quote",
+            "package_key": "quote-1.0.47",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": false,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "syn",
+            "package_key": "syn-3.0.3",
+            "kind": "normal",
+            "features": [
+              "clone-impls",
+              "derive",
+              "parsing",
+              "printing"
+            ],
+            "uses_default_features": false,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": []
+      },
       "serde_json-1.0.151": {
         "runtime_dependencies": [
           {
@@ -3022,6 +3993,7 @@
         ],
         "build_dependencies": [],
         "features": [
+          "alloc",
           "default",
           "std"
         ]
@@ -3713,6 +4685,11 @@
           "all"
         ]
       },
+      "strsim-0.11.1": {
+        "runtime_dependencies": [],
+        "build_dependencies": [],
+        "features": []
+      },
       "syn-2.0.119": {
         "runtime_dependencies": [
           {
@@ -4059,6 +5036,7 @@
           "bytes",
           "default",
           "fs",
+          "io-std",
           "io-util",
           "libc",
           "macros",
@@ -4113,6 +5091,78 @@
         ],
         "build_dependencies": [],
         "features": []
+      },
+      "tokio-util-0.7.19": {
+        "runtime_dependencies": [
+          {
+            "name": "bytes",
+            "package_key": "bytes-1.12.1",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "futures_core",
+            "package_key": "futures-core-0.3.34",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "futures_sink",
+            "package_key": "futures-sink-0.3.34",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "libc",
+            "package_key": "libc-0.2.189",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": true,
+            "target": "cfg(unix)",
+            "tree": "target"
+          },
+          {
+            "name": "pin_project_lite",
+            "package_key": "pin-project-lite-0.2.17",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "tokio",
+            "package_key": "tokio-1.53.1",
+            "kind": "normal",
+            "features": [
+              "sync"
+            ],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": [
+          "codec",
+          "default",
+          "libc"
+        ]
       },
       "toml-0.8.23": {
         "runtime_dependencies": [
@@ -8717,6 +9767,9 @@
     "awase-0.1.10": {
       "edition": "2024"
     },
+    "base64-0.22.1": {
+      "edition": "2018"
+    },
     "bitflags-2.13.1": {
       "edition": "2021"
     },
@@ -8780,6 +9833,16 @@
     "cursor-icon-1.2.0": {
       "edition": "2021"
     },
+    "darling-0.23.0": {
+      "edition": "2021"
+    },
+    "darling_core-0.23.0": {
+      "edition": "2021"
+    },
+    "darling_macro-0.23.0": {
+      "edition": "2021",
+      "proc_macro": true
+    },
     "digest-0.10.7": {
       "edition": "2018"
     },
@@ -8799,6 +9862,9 @@
     "drm-sys-0.8.1": {
       "edition": "2021",
       "build_script": "build.rs"
+    },
+    "dyn-clone-1.0.20": {
+      "edition": "2018"
     },
     "endi-1.1.1": {
       "edition": "2021"
@@ -8847,7 +9913,16 @@
     "funty-2.0.0": {
       "edition": "2018"
     },
+    "futures-0.3.34": {
+      "edition": "2018"
+    },
+    "futures-channel-0.3.34": {
+      "edition": "2018"
+    },
     "futures-core-0.3.34": {
+      "edition": "2018"
+    },
+    "futures-executor-0.3.34": {
       "edition": "2018"
     },
     "futures-io-0.3.34": {
@@ -8855,6 +9930,19 @@
     },
     "futures-lite-2.6.1": {
       "edition": "2021"
+    },
+    "futures-macro-0.3.34": {
+      "edition": "2018",
+      "proc_macro": true
+    },
+    "futures-sink-0.3.34": {
+      "edition": "2018"
+    },
+    "futures-task-0.3.34": {
+      "edition": "2018"
+    },
+    "futures-util-0.3.34": {
+      "edition": "2018"
     },
     "gen-macros-0.1.34": {
       "edition": "2024",
@@ -8899,6 +9987,9 @@
     },
     "iana-time-zone-0.1.65": {
       "edition": "2021"
+    },
+    "ident_case-1.0.1": {
+      "edition": "2015"
     },
     "indexmap-2.14.0": {
       "edition": "2024"
@@ -8984,7 +10075,7 @@
       "edition": "2021",
       "build_script": "build.rs"
     },
-    "nuri-0.1.49": {
+    "nuri-0.1.50": {
       "edition": "2024",
       "lib_target": {
         "name": "nuri",
@@ -8994,7 +10085,7 @@
     "okiba-0.2.1": {
       "edition": "2024"
     },
-    "omoya-0.1.49": {
+    "omoya-0.1.50": {
       "edition": "2024",
       "binaries": [
         {
@@ -9003,7 +10094,7 @@
         }
       ]
     },
-    "omoya-spec-0.1.49": {
+    "omoya-spec-0.1.50": {
       "edition": "2024",
       "lib_target": {
         "name": "omoya_spec",
@@ -9018,6 +10109,10 @@
     },
     "parking-2.2.1": {
       "edition": "2018"
+    },
+    "pastey-0.2.3": {
+      "edition": "2018",
+      "proc_macro": true
     },
     "pear-0.2.9": {
       "edition": "2018"
@@ -9076,11 +10171,27 @@
     "rand_core-0.9.5": {
       "edition": "2021"
     },
+    "ref-cast-1.0.27": {
+      "edition": "2021",
+      "build_script": "build.rs"
+    },
+    "ref-cast-impl-1.0.27": {
+      "edition": "2021",
+      "proc_macro": true
+    },
     "regex-automata-0.4.18": {
       "edition": "2021"
     },
     "regex-syntax-0.8.11": {
       "edition": "2021"
+    },
+    "rmcp-0.15.0": {
+      "edition": "2024",
+      "build_script": "build.rs"
+    },
+    "rmcp-macros-0.15.0": {
+      "edition": "2024",
+      "proc_macro": true
     },
     "rustix-0.38.44": {
       "edition": "2021",
@@ -9101,6 +10212,13 @@
     "same-file-1.0.6": {
       "edition": "2018"
     },
+    "schemars-1.2.2": {
+      "edition": "2021"
+    },
+    "schemars_derive-1.2.2": {
+      "edition": "2021",
+      "proc_macro": true
+    },
     "serde-1.0.229": {
       "edition": "2021",
       "build_script": "build.rs"
@@ -9112,6 +10230,13 @@
     "serde_derive-1.0.229": {
       "edition": "2021",
       "proc_macro": true
+    },
+    "serde_derive_internals-0.30.0": {
+      "edition": "2021",
+      "lib_target": {
+        "name": "serde_derive_internals",
+        "path": "lib.rs"
+      }
     },
     "serde_json-1.0.151": {
       "edition": "2021",
@@ -9158,6 +10283,9 @@
     "socket2-0.6.5": {
       "edition": "2021"
     },
+    "strsim-0.11.1": {
+      "edition": "2015"
+    },
     "syn-2.0.119": {
       "edition": "2021"
     },
@@ -9194,6 +10322,9 @@
     "tokio-macros-2.7.2": {
       "edition": "2021",
       "proc_macro": true
+    },
+    "tokio-util-0.7.19": {
+      "edition": "2021"
     },
     "toml-0.8.23": {
       "edition": "2021"
