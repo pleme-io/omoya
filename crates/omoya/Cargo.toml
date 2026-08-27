@@ -110,6 +110,16 @@ thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+# ── MCP face (see src/mcp.rs) ────────────────────────────────────────────
+# rmcp at the version the fleet standardised on (kaname re-exports the same
+# 0.15). tokio is pulled in ONLY for the stdio MCP sidecar — the compositor
+# proper is calloop-driven and takes no async runtime, so this is a
+# current-thread runtime built inside the `mcp` branch and never on the
+# seat path.
+rmcp = { version = "0.15", features = ["server", "transport-io"] }
+tokio = { version = "1", features = ["rt", "io-util", "macros", "sync", "time"] }
+schemars = "1"
+
 [dependencies.smithay]
 version = "0.7"
 default-features = false

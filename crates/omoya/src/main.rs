@@ -27,6 +27,7 @@ mod deed;
 mod drm;
 mod handlers;
 mod introspect;
+mod mcp;
 mod input;
 mod layout;
 mod localtime;
@@ -656,6 +657,27 @@ fn attach_session<S, N>(
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // ── ★ THE MCP BRANCH RUNS BEFORE ANYTHING ELSE ──────────────────────
+    // Two reasons it cannot be folded into `parse_args`:
+    //
+    // 1. stdout is the JSON-RPC framing channel. The tracing init below
+    //    defaults to STDOUT, so a single log line emitted before the
+    //    server starts corrupts the protocol for the whole session — and
+    //    the failure surfaces at the client as unparseable garbage, not as
+    //    a message naming the cause. Redirect to stderr first, always.
+    //
+    // 2. `omoya mcp` does NOT take a seat. It is a stdio sidecar that
+    //    forwards to the compositor already running on this host over
+    //    kanshou. Falling through to `parse_args` would try to open DRM
+    //    and fight the live session for the operator's screen.
+    if std::env::args().nth(1).as_deref() == Some("mcp") {
+        tracing_subscriber::fmt().with_writer(std::io::stderr).init();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        return rt.block_on(crate::mcp::serve());
+    }
+
     if let Ok(env_filter) = tracing_subscriber::EnvFilter::try_from_default_env() {
         tracing_subscriber::fmt().with_env_filter(env_filter).init();
     } else {

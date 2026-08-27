@@ -126,6 +126,46 @@
           # DrmCompositor even though no GbmDevice is constructed.
           "libgbm"
         ];
+
+        # ── ★ THE MODULE TRIO ────────────────────────────────────────────
+        # One spec → nixosModules.default + darwinModules.default +
+        # homeManagerModules.default, emitted by substrate's mkModuleTrio.
+        # Before this, omoya was reachable only through the nix repo's
+        # hand-written `profiles/nixos-pleme-omoya` profile: the compositor
+        # that IS the seat had no module of its own, while mado, tear and
+        # tend all shipped one. A consumer therefore had to know how to
+        # assemble omoya rather than declare that it wants it.
+        #
+        # ★ withAnvilMcp, NOT withMcp. `withMcp` writes a
+        # `~/.local/bin/omoya-mcp` PATH shim, which helps a human at a
+        # prompt and does nothing for an agent. `withAnvilMcp` registers
+        # the binary with blackmatter-anvil as
+        # `blackmatter.components.anvil.mcp.servers.omoya`, which is the
+        # surface Claude Code / Cursor / OpenCode actually read — so the
+        # compositor becomes driveable by an agent by DECLARING it, with
+        # no per-host MCP wiring to hand-maintain.
+        #
+        # ★ The darwin arm is emitted and is INERT BY CONSTRUCTION, which
+        # is the right outcome rather than a wart. smithay does not build
+        # on darwin (see the systems note above), so the darwin module
+        # carries the option surface and enabling it installs nothing a
+        # macOS host could run. Emitting the trio keeps the option path
+        # identical on every node — a fleet where one component answers to
+        # a different option name per platform is the drift the trio exists
+        # to prevent.
+        module = {
+          description = "omoya (母屋) — the pleme-io-native Wayland compositor";
+          # Matches mado's placement, so every pleme-io desktop component
+          # lives under one namespace instead of half under `programs`.
+          hmNamespace = "blackmatter.components";
+          withAnvilMcp = true;
+          anvilDescription =
+            "omoya (母屋) — the Wayland compositor. Read the live seat (backend, mode, layout, "
+            + "damage, input devices) and drive it with synthetic keyboard, pointer and "
+            + "screenshot. Answers carry kotae outcomes: `blind` means no compositor is "
+            + "running, which is never the same as an empty result.";
+        };
+
       };
 
       devOutputs = flake-utils.lib.eachDefaultSystem (
