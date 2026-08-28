@@ -159,6 +159,21 @@
           # lives under one namespace instead of half under `programs`.
           hmNamespace = "blackmatter.components";
           withAnvilMcp = true;
+
+          # ★ THE CONFIG SURFACE, SO MODES ARE DECLARABLE RATHER THAN COMPILED.
+          # omoya already reads shikumi's discovery chain
+          # (`ConfigDiscovery::new("omoya")`), and until now nothing in the
+          # fleet WROTE that file — the seat ran on `prescribed_default()` and
+          # the whole typed config surface was unreachable from a nix config.
+          # `layout.mode`, `bar.height`, `placement.floating_app_ids` and the
+          # rest were settable only by hand-editing a file on the node.
+          #
+          # Empty `settings` renders no file at all, which is the correct
+          # default: a present-but-empty YAML would make omoya resolve its
+          # Custom tier against a document with no keys instead of resolving
+          # the prescribed tier, i.e. a different seat than configuring
+          # nothing.
+          withShikumiConfig = true;
           anvilDescription =
             "omoya (母屋) — the Wayland compositor. Read the live seat (backend, mode, layout, "
             + "damage, input devices) and drive it with synthetic keyboard, pointer and "
