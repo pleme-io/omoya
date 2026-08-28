@@ -386,11 +386,25 @@ impl crate::state::Omoya {
             .lock()
             .unwrap_or_else(|e| e.into_inner()) =
             seen.iter().map(|(_, id)| id.clone()).collect();
+        // ★ THE MODE DECIDES FIRST, THE PER-APP LIST SECOND.
+        //
+        // In `Floating` every window floats and `floating_app_ids` becomes
+        // redundant rather than ignored — a listed app still floats, it just
+        // no longer needs listing. In `Tiling` the list is the only thing that
+        // floats, which is the behaviour the seat has always had.
+        //
+        // Written as `mode == Floating || per_app` rather than as a match with
+        // two arms, because the per-app rule must keep applying in BOTH modes:
+        // an `if/else` here is how a launcher silently stops floating the day
+        // someone adds a third mode.
+        let floating_mode =
+            self.config.layout.mode == crate::config::LayoutMode::Floating;
         let floats: Vec<smithay::desktop::Window> = seen
             .iter()
             .filter(|(_, id)| {
-                crate::placement::for_app_id_in(id.as_deref(), &self.config.placement)
-                    .is_floating()
+                floating_mode
+                    || crate::placement::for_app_id_in(id.as_deref(), &self.config.placement)
+                        .is_floating()
             })
             .map(|(w, _)| w.clone())
             .collect();
@@ -429,13 +443,47 @@ impl crate::state::Omoya {
         // ★ MAPPED LAST, SO THEY ARE ON TOP. `Space` stacks in map order, and
         // an overlay behind the windows it overlays is worse than no overlay:
         // it takes the keyboard while showing nothing.
-        for w in &floats {
-            let Placement::Floating { width, height } =
-                crate::placement::for_app_id_in(app_id_of(w).as_deref(), &self.config.placement)
-            else {
-                continue;
+        for (idx, w) in floats.iter().enumerate() {
+            // ★ IN FLOATING MODE THE SIZE COMES FROM CONFIG, NOT FROM THE
+            // PER-APP RULE. `for_app_id_in` returns `Tiled` for an unlisted
+            // app, and this loop used to `continue` on that — correct when
+            // the only floaters were listed apps, and a seat that maps
+            // NOTHING once the mode makes every window a floater. The window
+            // would be unmapped from the tiling tree and then skipped here.
+            let (width, height) = match crate::placement::for_app_id_in(
+                app_id_of(w).as_deref(),
+                &self.config.placement,
+            ) {
+                Placement::Floating { width, height } => (width, height),
+                Placement::Tiled if floating_mode => (
+                    self.config.placement.float_width,
+                    self.config.placement.float_height,
+                ),
+                Placement::Tiled => continue,
             };
-            let rect = crate::placement::centred(usable, width, height);
+            // Cascade so successive windows are individually reachable, then
+            // snap so one nudged toward an edge sits flush with it. Snap
+            // AFTER cascade: the cascade decides where the window wants to be
+            // and the snap only tidies that answer, whereas snapping first
+            // would be immediately overwritten by the offset.
+            let rect = if floating_mode {
+                crate::placement::snap_to_edges(
+                    crate::placement::cascaded(
+                        usable,
+                        width,
+                        height,
+                        idx,
+                        self.config.layout.cascade_step,
+                    ),
+                    usable,
+                    self.config.layout.snap_threshold,
+                )
+            } else {
+                // A launcher summoned over a tiled desktop is still centred —
+                // it is a transient overlay, not a member of a floating
+                // arrangement, and cascading it would move it every time.
+                crate::placement::centred(usable, width, height)
+            };
             if let Some(t) = w.toplevel() {
                 t.with_pending_state(|state| {
                     state.size = Some(rect.size);

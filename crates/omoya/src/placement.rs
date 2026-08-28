@@ -238,3 +238,152 @@ mod tests {
         assert!(r.size.w >= 1 && r.size.h >= 1, "got {:?}", r.size);
     }
 }
+
+/// Offset a floating window so successive ones do not stack exactly.
+///
+/// ── ★ WHY CASCADE AT ALL ─────────────────────────────────────────────────
+/// [`centred`] is right for ONE floating window — a launcher, summoned and
+/// dismissed. It is wrong for a floating DESKTOP: three terminals opened in
+/// `LayoutMode::Floating` would be three identical rectangles in the exact
+/// centre, with only the topmost reachable by pointer and no visual evidence
+/// the other two exist. The seat would look like it had lost them.
+///
+/// The offset wraps rather than marching off-screen: after enough windows the
+/// cascade returns to the origin and overlaps an earlier one, which is
+/// recoverable, while a window placed past the edge is not.
+#[must_use]
+pub fn cascaded(
+    usable: smithay::utils::Rectangle<i32, smithay::utils::Logical>,
+    width: f64,
+    height: f64,
+    index: usize,
+    step: i32,
+) -> smithay::utils::Rectangle<i32, smithay::utils::Logical> {
+    let base = centred(usable, width, height);
+    if step <= 0 {
+        return base;
+    }
+    // How many steps fit before the window's far edge would leave the zone.
+    // Computed rather than fixed, so a small window on a large screen
+    // cascades further than a large one on a small screen.
+    let room_x = (usable.loc.x + usable.size.w - (base.loc.x + base.size.w)).max(0);
+    let room_y = (usable.loc.y + usable.size.h - (base.loc.y + base.size.h)).max(0);
+    let span = (room_x.min(room_y) / step).max(1);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+    let n = (index % (span as usize).max(1)) as i32;
+    smithay::utils::Rectangle::new(
+        (base.loc.x + n * step, base.loc.y + n * step).into(),
+        base.size,
+    )
+}
+
+/// Pull a floating window flush with the zone's edges when it is already
+/// close to them.
+///
+/// ── ★ WHY A THRESHOLD AND NOT ALWAYS ─────────────────────────────────────
+/// Snapping that always applies is maximising, and it takes away the operator
+/// deliberately parking a window off-centre. Snapping that never applies
+/// leaves a one- or two-pixel seam nobody can close by hand at 1920x1080.
+/// The threshold is exactly what makes it read as *alignment* rather than as
+/// the compositor overriding a choice.
+///
+/// ★ `threshold <= 0` is a no-op, deliberately: "off" is expressible in the
+/// same integer as "how close", so disabling snapping needs no second field
+/// that could disagree with this one.
+///
+/// Each axis is decided independently — a window flush to the left edge but
+/// floating vertically snaps horizontally only, which is what the operator
+/// asked for by putting it there.
+#[must_use]
+pub fn snap_to_edges(
+    rect: smithay::utils::Rectangle<i32, smithay::utils::Logical>,
+    usable: smithay::utils::Rectangle<i32, smithay::utils::Logical>,
+    threshold: i32,
+) -> smithay::utils::Rectangle<i32, smithay::utils::Logical> {
+    if threshold <= 0 {
+        return rect;
+    }
+    let (zl, zt) = (usable.loc.x, usable.loc.y);
+    let (zr, zb) = (usable.loc.x + usable.size.w, usable.loc.y + usable.size.h);
+    let (mut x, mut y) = (rect.loc.x, rect.loc.y);
+    let (w, h) = (rect.size.w, rect.size.h);
+
+    // ★ LEFT WINS A TIE, and the size never changes. Snapping both edges of
+    // one axis would RESIZE the window to fit the zone, which is a different
+    // operation than aligning it — and one the operator did not ask for by
+    // dragging near an edge. So each axis snaps at most one edge, and the
+    // near edge is preferred because that is the one being aimed at.
+    if (x - zl).abs() <= threshold {
+        x = zl;
+    } else if ((x + w) - zr).abs() <= threshold {
+        x = zr - w;
+    }
+    if (y - zt).abs() <= threshold {
+        y = zt;
+    } else if ((y + h) - zb).abs() <= threshold {
+        y = zb - h;
+    }
+    smithay::utils::Rectangle::new((x, y).into(), (w, h).into())
+}
+
+#[cfg(test)]
+mod layout_mode_tests {
+    use super::*;
+    use smithay::utils::Rectangle;
+
+    fn zone() -> Rectangle<i32, smithay::utils::Logical> {
+        Rectangle::new((0, 28).into(), (1920, 1052).into())
+    }
+
+    #[test]
+    fn snapping_is_a_no_op_at_zero_threshold() {
+        let r = Rectangle::new((3, 31).into(), (100, 100).into());
+        assert_eq!(snap_to_edges(r, zone(), 0), r, "0 must disable snapping");
+    }
+
+    #[test]
+    fn a_near_edge_snaps_flush_and_the_size_is_unchanged() {
+        let r = Rectangle::new((5, 33).into(), (400, 300).into());
+        let s = snap_to_edges(r, zone(), 16);
+        assert_eq!((s.loc.x, s.loc.y), (0, 28), "should sit flush at top-left");
+        assert_eq!(s.size, r.size, "snapping must never resize");
+    }
+
+    #[test]
+    fn a_far_edge_is_left_alone() {
+        let r = Rectangle::new((500, 500).into(), (400, 300).into());
+        assert_eq!(snap_to_edges(r, zone(), 16), r, "beyond the threshold is a choice");
+    }
+
+    #[test]
+    fn the_right_and_bottom_edges_snap_too() {
+        let z = zone();
+        let r = Rectangle::new((z.size.w - 400 - 6, z.loc.y + z.size.h - 300 - 6).into(),
+                               (400, 300).into());
+        let s = snap_to_edges(r, z, 16);
+        assert_eq!(s.loc.x + s.size.w, z.loc.x + z.size.w);
+        assert_eq!(s.loc.y + s.size.h, z.loc.y + z.size.h);
+    }
+
+    #[test]
+    fn cascade_separates_windows_and_wraps_rather_than_leaving_the_zone() {
+        let z = zone();
+        let a = cascaded(z, 0.6, 0.6, 0, 24);
+        let b = cascaded(z, 0.6, 0.6, 1, 24);
+        assert_ne!((a.loc.x, a.loc.y), (b.loc.x, b.loc.y), "must not stack");
+        for i in 0..50 {
+            let r = cascaded(z, 0.6, 0.6, i, 24);
+            assert!(r.loc.x >= z.loc.x && r.loc.y >= z.loc.y);
+            assert!(r.loc.x + r.size.w <= z.loc.x + z.size.w,
+                    "window {i} left the zone horizontally");
+            assert!(r.loc.y + r.size.h <= z.loc.y + z.size.h,
+                    "window {i} left the zone vertically");
+        }
+    }
+
+    #[test]
+    fn a_zero_step_falls_back_to_centred() {
+        let z = zone();
+        assert_eq!(cascaded(z, 0.6, 0.6, 7, 0), centred(z, 0.6, 0.6));
+    }
+}

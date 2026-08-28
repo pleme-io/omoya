@@ -71,6 +71,73 @@ pub struct OmoyaConfig {
     pub bar: BarConfig,
     /// Window placement rules.
     pub placement: PlacementConfig,
+    /// How windows are arranged — tiling or floating, and how floating
+    /// windows snap and cascade.
+    pub layout: LayoutConfig,
+}
+
+/// How windows are arranged by default.
+///
+/// ── ★ A MODE, NOT A PER-APP RULE ─────────────────────────────────────────
+/// `PlacementConfig::floating_app_ids` already answers "should THIS window
+/// float", and it answers it well for a launcher. It cannot answer "I want a
+/// floating desktop", because that is a property of the seat rather than of
+/// any app — expressing it that way would mean listing every app_id the
+/// operator will ever run, and silently tiling the one they forgot.
+///
+/// So the mode is its own field, and the per-app list keeps working
+/// underneath it: in `Tiling` a listed app still floats, and in `Floating`
+/// everything floats and the list is simply redundant rather than ignored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub enum LayoutMode {
+    /// Windows fill the usable zone, splitting it between them. The default,
+    /// because it is what the seat has always done and a mode change should
+    /// be asked for rather than arrive with an upgrade.
+    #[default]
+    Tiling,
+    /// Windows keep their own size and position, cascade as they open, and
+    /// snap to the zone's edges. Nothing is resized to make room.
+    Floating,
+}
+
+/// How the seat arranges windows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LayoutConfig {
+    /// `tiling` or `floating`.
+    pub mode: LayoutMode,
+    /// How close, in logical pixels, a floating window's edge must come to
+    /// the usable zone's edge before it is pulled flush with it.
+    ///
+    /// ★ A THRESHOLD, NOT A TOGGLE. Snapping that always applies is just
+    /// maximising; snapping that never applies leaves a one-pixel seam the
+    /// operator cannot close by hand. The threshold is what makes it feel
+    /// like alignment rather than like the compositor arguing.
+    ///
+    /// `0` disables snapping without needing a second field to mean "off" —
+    /// a distance of zero is exactly "only when already flush", which is a
+    /// no-op, so the disabled state is expressible in the same type.
+    pub snap_threshold: i32,
+    /// How far each successive floating window is offset from the last, so
+    /// that opening three terminals does not stack three identical rectangles
+    /// in the exact centre with only the top one reachable.
+    pub cascade_step: i32,
+}
+
+impl Default for LayoutConfig {
+    fn default() -> Self {
+        Self {
+            mode: LayoutMode::Tiling,
+            // 16 px: large enough to catch a deliberate nudge toward an edge,
+            // small enough that a window parked 20 px away stays there. On the
+            // seat's 4 px grid (see docs/SHITSURAI.md) this is 4 grid units.
+            snap_threshold: 16,
+            // 24 px — six grid units. Enough that a title area and a border
+            // are both visible on the window beneath, which is the whole job.
+            cascade_step: 24,
+        }
+    }
 }
 
 /// One keycode remap.
@@ -165,6 +232,7 @@ impl OmoyaConfig {
                 .collect(),
             bar: BarConfig::default(),
             placement: PlacementConfig::default(),
+            layout: LayoutConfig::default(),
         }
     }
 

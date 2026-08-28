@@ -322,13 +322,31 @@ mod tests {
     /// The write verbs must NOT appear in the read catalog — `omoya_read`
     /// is documented as a read surface, and a caller who found `type` in
     /// the leaf list would reasonably expect reading it to be harmless.
+    /// ★ `pointer` IS DELIBERATELY ABSENT FROM THIS LIST, AND THAT IS THE
+    /// POINT OF THE COMMENT.
+    ///
+    /// The first version of this test forbade every write verb from the read
+    /// catalog, `pointer` included, and it FAILED — correctly. `pointer` is
+    /// overloaded in omoya's own protocol: read with no args it reports where
+    /// the pointer is, and called with `dx`/`dy` it moves it. One name, two
+    /// operations, distinguished by arity.
+    ///
+    /// So the invariant is not "no write verb is readable" — that was my
+    /// assumption and the seat disagreed. It is "no write verb is listed as a
+    /// readable leaf UNLESS it genuinely answers a read", which for this
+    /// surface is `pointer` alone. Encoding the wrong rule here would have
+    /// forced someone to delete a real leaf to make a test pass.
     #[test]
-    fn read_catalog_excludes_the_write_verbs() {
-        for verb in ["do", "type", "key", "pointer", "click", "capture", "td_mode_set"] {
+    fn read_catalog_excludes_the_write_only_verbs() {
+        for verb in ["do", "type", "key", "click", "capture", "td_mode_set"] {
             assert!(
                 !LEAVES.contains(&verb),
-                "write verb `{verb}` must not be listed as a readable leaf"
+                "write-only verb `{verb}` must not be listed as a readable leaf"
             );
         }
+        assert!(
+            LEAVES.contains(&"pointer"),
+            "`pointer` answers a read (the position) and must stay in the catalog"
+        );
     }
 }

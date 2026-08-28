@@ -776,6 +776,7 @@ impl Introspect for OmoyaIntrospect {
             "windows",
             "owed_vt_switches",
             "capture_result",
+            "atomic",
             // ★ THESE WERE ANSWERED AND UNLISTED. `schema()` is how an agent
             // discovers what it can ask, so a leaf missing here is a leaf that
             // effectively does not exist — and `last_frame_causes` is the one
