@@ -92,6 +92,31 @@ async fn ask(path: Vec<String>, args: Vec<serde_json::Value>) -> String {
             "value": value,
         })
         .to_string(),
+        // ★ A COMPOSITOR THAT SAID "NO" IS NOT AN ABSENT COMPOSITOR.
+        //
+        // These were one arm, and collapsing them was a real defect in a tool
+        // whose entire job is to tell states apart. Measured 2026-08-28:
+        // `omoya_stale_scan` against a RUNNING seat answered "no live omoya
+        // reachable — check pgrep", because the running binary predated the
+        // verb and refused it. The seat was healthy, the socket was live, and
+        // the tool sent the reader to look for a process that was already
+        // there.
+        //
+        // `refused` also carries the pid, which is what makes it actionable:
+        // a refusal from a live pid on a verb that exists in this binary means
+        // the COMPOSITOR IS OLDER THAN THE MCP SERVER — i.e. the seat has not
+        // restarted since the last deploy, which is the single most common
+        // reason a new leaf answers nothing.
+        kanshou::mcp::ForwardOutcome::LiveError { pid, error } => serde_json::json!({
+            "outcome": "refused",
+            "omoya_pid": pid,
+            "query": path.join("/"),
+            "reason": format!("{error:?}"),
+            "hint": "the compositor is running and declined this query. If the leaf exists in \
+                     this binary, the SEAT IS OLDER THAN THIS TOOL — it has not restarted since \
+                     the deploy. Compare `omoya --version` on PATH against the running process.",
+        })
+        .to_string(),
         // No socket, or every discovered socket was stale. This is the
         // `blind` arm: we did not learn that the answer is nothing, we
         // learned that nobody answered.
