@@ -66,6 +66,7 @@ const LEAVES: &[&str] = &[
     "input_attached", "input_devices", "last_frame_causes", "layout", "mode",
     "modes", "output", "owed", "owed_causes", "owed_vt_switches", "pointer",
     "presented", "seat", "session_active", "session_events", "socket",
+    "stale_result",
     "synth_performed", "td_dirty_pct", "td_mode", "td_refined", "td_refused",
     "td_rows_dirty", "td_rows_examined", "td_shadows", "verbs",
     "window_app_ids", "windows",
@@ -270,12 +271,30 @@ impl OmoyaMcp {
     }
 
     #[tool(
-        description = "Screenshot the live seat to a path ON THE COMPOSITOR'S HOST. The single \
-                       most useful tool for diagnosing a desktop remotely: it answers what the \
-                       screen actually shows, which no counter can."
+        description = "Screenshot what the compositor COMPOSED, to a path on its host. Note this \
+                       reads the shadow buffer AND forces a full repaint, so it shows what the \
+                       seat believes and cannot show stale pixels — it repairs the frame in the \
+                       act of photographing it. For 'what is the display actually showing', use \
+                       omoya_stale_scan."
     )]
     async fn omoya_capture(&self, Parameters(input): Parameters<CaptureInput>) -> String {
         ask(vec!["capture".into()], vec![serde_json::json!(input.path)]).await
+    }
+
+    #[tool(
+        description = "Find STALE PIXELS: compare what the compositor composed against what the \
+                       scanout buffer actually holds, on a naturally-drawn frame. This is the \
+                       tool for 'lingering graphics that disappear when I move the mouse over \
+                       them' — a symptom no screenshot can capture, because requesting one \
+                       forces a repaint. Writes a mask image where stale pixels glow red over a \
+                       dimmed copy of the real screen, so the SHAPE names the cause: a window's \
+                       rectangle means a move went undamaged, a trail means the cursor. Each \
+                       region is attributed to the element it lies inside. Runs on the next \
+                       frame the seat draws anyway — on a fully idle seat it reports `waiting` \
+                       rather than a false pass, so drive some output first."
+    )]
+    async fn omoya_stale_scan(&self, Parameters(input): Parameters<CaptureInput>) -> String {
+        ask(vec!["stale_scan".into()], vec![serde_json::json!(input.path)]).await
     }
 }
 

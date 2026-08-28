@@ -299,11 +299,29 @@ pub trait ScanoutFlush {
     /// Put everything drawn since the last flush onto the display, clipped to
     /// `damage`. An empty slice means "everything".
     fn flush_damage(&mut self, damage: &[Rectangle<i32, Physical>]);
+
+    /// The scanout mapping's CURRENT bytes — what the display is actually
+    /// showing, as opposed to what the compositor composed.
+    ///
+    /// ── ★ THE ONE SANCTIONED READ OF THIS MEMORY ─────────────────────────
+    /// `data` is documented two fields up as *written once per frame and
+    /// never read*, because a read from write-combining memory costs ~1000x a
+    /// RAM read. That is the right rule for the hot path and exactly the
+    /// wrong one for a diagnostic: the stale-pixel class lives HERE and
+    /// nowhere else, since the shadow accumulates and is always complete.
+    ///
+    /// So this exists, it is called only on an explicit operator request, and
+    /// it must never be called from the frame path. See `crate::stale`.
+    fn scanout_bytes(&self) -> &[u8];
 }
 
 impl ScanoutFlush for NuriFramebuffer<'_> {
     fn flush_damage(&mut self, damage: &[Rectangle<i32, Physical>]) {
         NuriFramebuffer::flush_damage(self, damage);
+    }
+
+    fn scanout_bytes(&self) -> &[u8] {
+        self.data
     }
 }
 

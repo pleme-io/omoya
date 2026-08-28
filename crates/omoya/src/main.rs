@@ -34,6 +34,7 @@ mod localtime;
 mod owed;
 mod placement;
 mod remap;
+mod stale;
 mod state;
 mod synth;
 mod truedamage;

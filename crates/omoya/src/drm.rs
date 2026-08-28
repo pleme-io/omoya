@@ -1226,6 +1226,119 @@ where
                         fb.flush_damage(result.damage.map_or(&[], |d| d.as_slice()));
                     }
 
+                    // ── ★ THE STALE SCAN — AFTER THE FLUSH, BEFORE THE FLIP ──
+                    //
+                    // Placement is the whole correctness of this check. After
+                    // `flush_damage` the back buffer holds exactly what is
+                    // about to be scanned out: whatever it kept from two
+                    // frames ago, plus this frame's damage copied over it. If
+                    // the damage was under-reported, the difference against
+                    // the shadow IS the stale content the operator sees.
+                    //
+                    // A frame earlier and the flush has not happened; a frame
+                    // later and the buffers have swapped and the evidence is
+                    // gone.
+                    if let Some(mask_path) = introspect
+                        .stale_request
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .take()
+                    {
+                        use crate::nuri_renderer::ScanoutFlush as _;
+                        let (w, h) = (mode.size.w, mode.size.h);
+                        #[allow(clippy::cast_sign_loss)]
+                        let (wu, hu) = (w as usize, h as usize);
+                        let verdict = match renderer.copy_framebuffer(
+                            &fb,
+                            smithay::utils::Rectangle::from_size((w, h).into()),
+                            DrmFourcc::Argb8888,
+                        ) {
+                            Ok(m) => match renderer.map_texture(&m) {
+                                Ok(shadow) => {
+                                    let scanout = fb.scanout_bytes();
+                                    let mut rep = crate::stale::scan(shadow, scanout, wu, hu);
+                                    // Attribute against what the compositor
+                                    // itself drew, so a region is named by
+                                    // subsystem rather than counted.
+                                    let mut named: Vec<crate::stale::NamedRect> = elements
+                                        .iter()
+                                        .enumerate()
+                                        .map(|(i, e)| {
+                                            // `1.0` — the same scale the
+                                            // focus-ring geometry read at
+                                            // :1130 uses. This seat is 1:1;
+                                            // a second spelling here could
+                                            // disagree with that one and
+                                            // attribute regions to the wrong
+                                            // element on a HiDPI output.
+                                            let g = smithay::backend::renderer::element::Element::geometry(
+                                                e,
+                                                1.0.into(),
+                                            );
+                                            crate::stale::NamedRect {
+                                                name: format!("element[{i}]"),
+                                                x: g.loc.x,
+                                                y: g.loc.y,
+                                                w: g.size.w,
+                                                h: g.size.h,
+                                            }
+                                        })
+                                        .collect();
+                                    named.push(crate::stale::NamedRect {
+                                        name: "background".into(),
+                                        x: 0,
+                                        y: 0,
+                                        w,
+                                        h,
+                                    });
+                                    crate::stale::attribute(&mut rep, &named);
+                                    let img =
+                                        crate::stale::render_mask(shadow, scanout, wu, hu);
+                                    let wrote = std::fs::write(&mask_path, &img).is_ok();
+                                    let regions: Vec<serde_json::Value> = rep
+                                        .regions
+                                        .iter()
+                                        .take(12)
+                                        .map(|r| {
+                                            serde_json::json!({
+                                                "rect": [r.x, r.y, r.w, r.h],
+                                                "pixels": r.pixels,
+                                                "attributed_to": r.attribution,
+                                            })
+                                        })
+                                        .collect();
+                                    serde_json::json!({
+                                        "outcome": if rep.compared_pixels == 0 {
+                                            "blind"
+                                        } else if rep.stale_pixels == 0 {
+                                            "clean"
+                                        } else {
+                                            "stale"
+                                        },
+                                        "stale_pixels": rep.stale_pixels,
+                                        // ★ The denominator travels WITH the
+                                        // verdict: a scan that compared
+                                        // nothing reports zero stale, and
+                                        // without this that is
+                                        // indistinguishable from a healthy
+                                        // seat.
+                                        "compared_pixels": rep.compared_pixels,
+                                        "regions_total": rep.regions.len(),
+                                        "regions": regions,
+                                        "mask": if wrote { Some(mask_path.clone()) } else { None },
+                                    })
+                                    .to_string()
+                                }
+                                Err(e) => format!("{{\"outcome\":\"blind\",\"error\":\"map: {e}\"}}"),
+                            },
+                            Err(e) => format!("{{\"outcome\":\"blind\",\"error\":\"copy: {e}\"}}"),
+                        };
+                        *introspect
+                            .stale_result
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner()) = Some(verdict);
+                    }
+
                     // ★ CAPTURE HERE, WHERE THE FRAMEBUFFER IS STILL BOUND.
                     //
                     // This used to live outside this block, where it logged

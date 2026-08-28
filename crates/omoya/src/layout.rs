@@ -503,12 +503,44 @@ impl crate::state::Omoya {
             .introspect
             .focus_rect
             .lock()
-            .unwrap_or_else(|e| e.into_inner()) = self.tiling.focused().and_then(|f| {
-            arranged
-                .iter()
-                .find(|(w, _)| *w == f)
-                .map(|(_, r)| (r.loc.x, r.loc.y, r.size.w, r.size.h))
-        });
+            .unwrap_or_else(|e| e.into_inner()) = {
+            // ── ★ THE TILING TREE CANNOT ANSWER FOR A FLOATING WINDOW ────
+            //
+            // This read `tiling.focused()` and then searched `arranged` — the
+            // TILED arrangement. Both halves fail in `LayoutMode::Floating`:
+            // every float is `unmap`ped from the tree, so the tree has no
+            // focus, and `arranged` is empty because nothing is tiled.
+            //
+            // The consequence was not subtle. `focus_rect` drives BOTH the
+            // focus ring in `drm.rs` AND the bar's parcel indicator, so a
+            // floating seat drew no ring at all — and since a mado window's
+            // background is nord0 and the desktop ground is nord0, a floating
+            // window had NO visual boundary whatsoever. Measured on plo
+            // 2026-08-28: `focus_rect: "none"` with one window plainly on
+            // screen at `518,280 883x547`. The operator's report was "I don't
+            // see any floating screens", and they were right — the window was
+            // there and nothing distinguished it from the desktop.
+            //
+            // So: ask the tree, and if it has no answer ask the SPACE, which
+            // holds tiled and floating windows alike. `element_geometry` is
+            // the position actually mapped, so the ring lands where the
+            // window is rather than where the tiler wished it were.
+            let tiled = self.tiling.focused().and_then(|f| {
+                arranged
+                    .iter()
+                    .find(|(w, _)| *w == f)
+                    .map(|(_, r)| (r.loc.x, r.loc.y, r.size.w, r.size.h))
+            });
+            tiled.or_else(|| {
+                // The last-mapped float is the focused one: `map_element(.., true)`
+                // above activates each float as it is placed, so the final
+                // one holds focus. Reading the space rather than tracking a
+                // second focus field keeps one source of truth.
+                let w = floats.last()?;
+                let g = self.space.element_geometry(w)?;
+                Some((g.loc.x, g.loc.y, g.size.w, g.size.h))
+            })
+        };
 
         // ★ PUBLISH WHAT `Space` HOLDS, NOT WHAT THE TREE ASKED FOR — read
         // back AFTER the writes.

@@ -268,6 +268,16 @@ pub struct OmoyaIntrospect {
     /// thread only leaves a note. Same direction as every other field here —
     /// the loop pushes, the sidecar never reaches in.
     pub capture_request: std::sync::Mutex<Option<String>>,
+    /// A pending stale-pixel scan: where to write the mask image.
+    ///
+    /// ★ Separate from `capture_request` because the two are OPPOSITE
+    /// requests. A capture forces `age = 0` — a full repaint — and therefore
+    /// REPAIRS the frame it is photographing; a stale scan must run against
+    /// the natural age or it destroys its own subject. Sharing one field
+    /// would make the more useful of the two impossible to express.
+    pub stale_request: std::sync::Mutex<Option<String>>,
+    /// The last scan's verdict, as JSON.
+    pub stale_result: std::sync::Mutex<Option<String>>,
     /// What became of the last capture: the path written, or the error.
     pub capture_result: std::sync::Mutex<Option<String>>,
     /// The input device table: what the backend opened, what it believes
@@ -700,6 +710,44 @@ impl Introspect for OmoyaIntrospect {
                 }
                 Ok(serde_json::json!({ "requested": path }))
             }
+            // ── ★ THE TOOL THAT SEES WHAT A SCREENSHOT CANNOT ────────
+            // `capture` reads the shadow, and asking for one forces a full
+            // repaint. Both together mean a screenshot shows what the
+            // compositor BELIEVES and repairs the frame in the act of
+            // asking — measured 2026-08-28, two captures across a
+            // deliberate stale-pixel hunt came back byte-identical.
+            //
+            // This compares the shadow against the SCANOUT MAPPING at the
+            // natural age, which is the only place the difference exists.
+            // Read `stale_result` for the verdict.
+            "stale_scan" => {
+                let path = q
+                    .args
+                    .first()
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("/tmp/omoya-stale.ppm");
+                *self.stale_request.lock().unwrap_or_else(|e| e.into_inner()) =
+                    Some(path.to_string());
+                *self.stale_result.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                // ★ NOT `Owed::Capture`, and this is the whole subtlety: a
+                // scan must observe a frame the seat was going to draw
+                // ANYWAY. Owing one would compose a fresh frame whose damage
+                // is by definition complete, and the scan would report a
+                // clean seat on a broken one. So it waits, and on a fully
+                // idle seat it reports `waiting` rather than a false pass.
+                if let Some(p) = self.wake.get() {
+                    p.ping();
+                }
+                Ok(serde_json::json!({ "requested": path, "note":
+                    "runs on the next naturally-drawn frame; read stale_result" }))
+            }
+            "stale_result" => Ok(serde_json::json!(
+                self.stale_result
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone()
+                    .unwrap_or_else(|| "waiting: no frame drawn since the request".into())
+            )),
             "capture_result" => Ok(serde_json::json!(
                 self.capture_result
                     .lock()
@@ -776,6 +824,7 @@ impl Introspect for OmoyaIntrospect {
             "windows",
             "owed_vt_switches",
             "capture_result",
+            "stale_result",
             "atomic",
             // ★ THESE WERE ANSWERED AND UNLISTED. `schema()` is how an agent
             // discovers what it can ask, so a leaf missing here is a leaf that
@@ -857,6 +906,10 @@ mod tests {
             }
             const VERBS: &[&str] = &[
                 "do", "type", "key", "pointer", "click", "capture",
+                // A diagnostic REQUEST, not a field: it schedules a scan on
+                // the next naturally-drawn frame. `stale_result` reads the
+                // verdict back, and IS advertised as a leaf.
+                "stale_scan",
                 // A live-tuning SETTER, not a field. `td_mode` reads it back.
                 "td_mode_set",
             ];
