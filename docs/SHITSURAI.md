@@ -1,6 +1,37 @@
 # shitsurai (設え) — the visual design of the pleme-io seat
 
-**Status:** design, ready to implement. Every value below is a decision, not a range.
+> ## ★ RE-MEASURED 2026-08-28 — P0, P2 and P3 ARE IMPLEMENTED. Read this before working from §7.
+>
+> This document was written as a plan and still reads like one. Most of it has
+> since been BUILT, and several of its "confirmed by reading the file" defect
+> claims are now false. Verified against the source on 2026-08-28:
+>
+> | item | doc says | measured |
+> |---|---|---|
+> | §2.4 accent is nord9 in two places | defect | **FIXED** — `bar.rs:92` and `theme.rs:281` both use `NORD.frost[1]` (nord8). The doc's line numbers (`bar.rs:160`) now point at font loading. |
+> | §7 P0 inverted `focus_border_for_surface` | defect | **FIXED** — the branch is corrected and the reasoning is inline. |
+> | §7 P2 typographic pass on noki | not started | **DONE** — `FONT_PX 13.0`, `PAD 12.0`, `CELL 20.0`, baseline from `horizontal_line_metrics` (the 0.35 survives only as a fallback), f32 pen accumulation, and the per-(bg,fg) coverage LUT at `bar.rs:252` with exactly the gamma reasoning §7 P2 asks for. |
+> | §7 P3 `GAP` 8 → 4 | pending | **DONE** — `layout.rs:52` is `GAP: i32 = 4`, `BORDER: i32 = 2`. |
+> | §4 bar content | "today the bar says wayland-1 / N windows / UTC" | **FIXED** — it renders parcel cells + a screen-centred local clock, i.e. the doc's TARGET, not its "today". |
+>
+> **Still open:** P1 (opaque hint on `nuri::blit` — perf, zero visual), P4
+> (`blit_mask` + per-cell damage — perf), P5 (cross-fade, optional), P6
+> (the inverted `SeatElements` variant names — hygiene).
+>
+> **Why this banner exists rather than an edit in place.** A design doc that
+> describes fixed bugs as live ones is worse than no doc: it sends the next
+> reader to re-do finished work and to distrust the parts that are still
+> right. The body below is kept as the design record — it is the argument for
+> why each value is what it is, and that argument is still load-bearing. Read
+> it for reasons, not for status.
+>
+> **Verified on the live seat, not just in source:** a screenshot through
+> `omoya_capture` on 2026-08-28 shows parcel cells `1`/`2` with the active one
+> carrying the 2 px nord8 underline, a screen-centred `HH:MM`, the focus ring
+> on the focused window only, and `layout = "4,38 952x1038 | 964,38 952x1038"`
+> — an 8 px seam, exactly `GAP * 2`.
+
+**Status:** PARTLY IMPLEMENTED — see the banner above. Every value below is a decision, not a range.
 **Name:** `shitsurai` — the Japanese practice of *arranging a room*: choosing few things, placing them exactly, leaving the rest empty. Verified free across the fleet corpus (codesearch `search_repos`, 1152 repos, **0 hits**). It sits in omoya's existing house metaphor family — 母屋 omoya (main house) / 軒 noki (eaves, the bar) / 塗り nuri (the coating) / 区画 kukaku (the parcels).
 
 ---

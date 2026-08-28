@@ -389,10 +389,18 @@ smithay::backend::renderer::element::render_elements! {
     pub SeatElements<R, E> where R: ImportAll + ImportMem;
     /// A client surface, as `Space` laid it out.
     Space = smithay::desktop::space::SpaceRenderElements<R, E>,
-    /// omoya's own pointer — see `CURSOR_SIZE`.
-    Cursor = smithay::backend::renderer::element::solid::SolidColorRenderElement,
-    /// The status bar — a CPU-rasterized buffer, not a client surface.
-    Bar = smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement<R>,
+    /// A flat rectangle of one colour — the focus ring's four edges.
+    ///
+    /// ★ NAMED FOR WHAT IT HOLDS, NOT FOR ONE CALLER. This variant was
+    /// `Cursor` while carrying the focus-border edges, and `Bar` carried both
+    /// the status strip AND the mouse pointer. Two of the three names
+    /// described the wrong thing, which is the kind of defect that costs a
+    /// reader ten minutes and a writer a wrong `match` arm. A variant is a
+    /// TYPE, so it is named after its type; the caller's intent lives at the
+    /// push site, where `Kind::Cursor` already says it.
+    Solid = smithay::backend::renderer::element::solid::SolidColorRenderElement,
+    /// A CPU-rasterized buffer — the status bar, and omoya's own pointer.
+    Texture = smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement<R>,
 }
 
 /// Everything the render loop needs, assembled.
@@ -918,7 +926,7 @@ where
                     None,
                     Kind::Cursor,
                 ) {
-                    elements.push(SeatElements::Bar(el));
+                    elements.push(SeatElements::Texture(el));
                 }
             }
 
@@ -987,7 +995,7 @@ where
                         None,
                         Kind::Unspecified,
                     ) {
-                        elements.push(SeatElements::Bar(el));
+                        elements.push(SeatElements::Texture(el));
                     }
                 }
             }
@@ -1028,7 +1036,7 @@ where
                     if w <= 0 || h <= 0 {
                         continue;
                     }
-                    elements.push(SeatElements::Cursor(SolidColorRenderElement::new(
+                    elements.push(SeatElements::Solid(SolidColorRenderElement::new(
                         border_ids[i].clone(),
                         smithay::utils::Rectangle::new((x, y).into(), (w, h).into()),
                         CommitCounter::default(),
