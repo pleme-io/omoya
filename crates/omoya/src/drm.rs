@@ -750,6 +750,24 @@ where
         DrmFourcc::Argb8888,
     )?;
 
+    // ★ PUBLISH THE COMMIT PATH. Which of the kernel's two modesetting
+    // paths this seat is on was, until now, unknowable from outside the
+    // process — 44 read leaves and none of them this one, while
+    // `is_atomic()` sat uncalled. It is the first thing worth knowing when a
+    // seat is reported as tearing, because atomic and legacy are different
+    // kernel code with different failure modes, and on the proprietary
+    // nvidia driver that difference is not academic.
+    // ★ ASKED OF THE DEVICE, NOT THE SURFACE. smithay decides atomic-vs-legacy
+    // once, at `DrmDevice::new`, by asking the kernel for
+    // `DRM_CLIENT_CAP_ATOMIC`; a surface inherits it and exposes no accessor
+    // of its own. Reaching for `DrmSurface::is_atomic` compiles to E0599 —
+    // recorded here because the wrong receiver is the obvious first guess.
+    introspect.atomic.store(
+        u64::from(if device.is_atomic() { 1u8 } else { 2u8 }),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    tracing::info!(atomic = device.is_atomic(), "drm commit path");
+
     let clear = background();
     // Element geometry is expressed in physical pixels, so it needs the
     // output's scale. Read once rather than per element per frame.
@@ -786,10 +804,50 @@ where
             // Skipping costs one interval; issuing costs the composite AND
             // still does not present.
             if flip_pending.load(std::sync::atomic::Ordering::Acquire) {
-                let mut next = deadline + interval;
+                // ── ★ RETRY SOON, DO NOT SKIP A WHOLE FRAME ──────────────
+                //
+                // This used to reschedule a FULL interval away. That is right
+                // only if the pending flip retires just after the deadline;
+                // when it retires 100 us later, the seat has thrown away
+                // 2,678 us of a 2,778 us frame and presents on the NEXT
+                // vblank instead of this one.
+                //
+                // It is not a rare case on this seat, it is the normal one.
+                // Measured on plo 2026-08-28 through kanshou, on a focus
+                // change with two mado windows open:
+                //
+                //   frame_us              ~5,700     (vblank interval 2,778)
+                //   td_rows_examined      +2,076 per frame
+                //   td_rows_dirty         +62 per present
+                //
+                // A composite costs about two vblank intervals because
+                // truedamage must scan both full surfaces — wgpu clients
+                // cannot declare damage, so the compositor measures it. With
+                // frames longer than the interval, the timer is ALWAYS
+                // landing on a pending flip, and a full-interval back-off
+                // turns "late by a little" into "late by a whole frame". The
+                // resulting present cadence is irregular rather than merely
+                // slow, and irregular cadence is what an operator sees as
+                // tearing or judder.
+                //
+                // So: poll back at an eighth of the interval (~347 us at
+                // 360 Hz). The flip is picked up within an eighth of a frame
+                // instead of losing a full one, which makes the cadence a
+                // steady 2-frames-per-composite instead of a beat between
+                // the timer's period and the vblank's.
+                //
+                // ★ THIS IS A MITIGATION, NOT THE FIX. The real repair is
+                // still `pending-omoya-vblank`: drive the loop from
+                // `DrmDeviceNotifier` so the composite starts AT the vblank
+                // and gets the whole interval to work in, rather than
+                // discovering after the fact that it was late. This narrows
+                // the window; it does not remove it, and it must not be read
+                // as closing that item.
+                let retry = interval / 8;
                 let now = std::time::Instant::now();
+                let mut next = deadline + retry;
                 if next <= now {
-                    next = now + interval;
+                    next = now + retry;
                 }
                 return smithay::reexports::calloop::timer::TimeoutAction::ToInstant(next);
             }

@@ -64,6 +64,21 @@ use kanshou::{Introspect, Query, QueryError, QueryResult};
 pub struct OmoyaIntrospect {
     /// Which backend is driving pixels: 0 = nested (winit), 1 = drm.
     pub backend: AtomicU64,
+    /// Whether the DRM surface drives ATOMIC or LEGACY modesetting.
+    /// 0 = not yet known, 1 = atomic, 2 = legacy.
+    ///
+    /// ── ★ WHY THIS LEAF EXISTS ──────────────────────────────────────────
+    /// It was the sharpest UNMEASURED fact about this compositor: 44 read
+    /// leaves and not one of them recorded which commit path the seat is on,
+    /// while `DrmSurface::is_atomic()` sat there uncalled. That matters most
+    /// on the exact hardware this seat runs — the proprietary nvidia driver
+    /// with `nvidia-drm.modeset=1` and DUMB buffers — where the legacy and
+    /// atomic flip paths are not the same code in the kernel and do not fail
+    /// the same way.
+    ///
+    /// Diagnosing a "tearing" report without it means guessing at which of
+    /// two kernel paths is running. A leaf is cheaper than the guess.
+    pub atomic: AtomicU64,
     /// Frames the render loop has queued since start.
     pub frames: AtomicU64,
     /// Frames actually PRESENTED — i.e. page-flipped to the display.
@@ -392,6 +407,15 @@ impl Introspect for OmoyaIntrospect {
             "backend" => Ok(serde_json::json!(
                 if self.backend.load(Ordering::Relaxed) == 1 { "drm" } else { "nested" }
             )),
+            // ★ `unknown` is its own arm, not a default to one of the two.
+            // A seat that has not modeset yet genuinely does not know, and
+            // reporting a guess here would be worse than reporting nothing:
+            // the whole point of the leaf is to settle which path is live.
+            "atomic" => Ok(serde_json::json!(match self.atomic.load(Ordering::Relaxed) {
+                1 => "atomic",
+                2 => "legacy",
+                _ => "unknown",
+            })),
             "frames" => Ok(n(&self.frames)),
             "presented" => Ok(n(&self.presented)),
             // ── ★ THE ONE MUTATING LEAF ──────────────────────────────
