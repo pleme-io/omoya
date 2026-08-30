@@ -55,7 +55,7 @@ serde_yaml = "0.9"
 # 2026-08-21 — it lived at `crates/mekuri` for exactly as long as it took to
 # unpark the shard that owns it, because `gen` refuses a sibling path dep
 # (substrate's nix lockfile-builder cannot see a sibling repo in the sandbox).
-mekuri = "0.1.0"
+mekuri = "0.1.2"
 omoya-spec = { path = "../omoya-spec", version = "0.1.0" }
 # The palette. NOT a hex literal in this crate — `irodori::NORD` is where Nord
 # is BORN in this fleet (ishou-tokens itself reads it), so the compositor's

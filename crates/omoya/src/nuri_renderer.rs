@@ -230,72 +230,17 @@ impl Texture for NuriTexture {
 ///
 /// ★ HOLDS THE MAPPING ALIVE. `data` points into `_mapping`, so the two must
 /// travel together — a framebuffer that kept only the slice would be pointing
-/// What a scanout buffer is known to hold — the evidence a partial copy needs.
-///
-/// ── ★ WHY THIS IS A TYPE AND NOT A FLAG ─────────────────────────────────────
-///
-/// The whole stale-pixel class of this session comes from one shape: damage is
-/// ASSERTED by whoever mutates, TRUSTED by whoever paints, and a separate
-/// instrument (`stale_scan`) goes hunting afterwards for the cases where the
-/// assertion was wrong. A detector for a class that should not be
-/// representable is a design admission, not a diagnostic.
-///
-/// The sound rule is: **copying only the damage requires knowing what the
-/// destination already holds.** Without that, "paint only what changed" is a
-/// claim about a buffer nobody has established the state of — and the failure
-/// is invisible, because every layer reports success while pixels from an
-/// earlier generation survive underneath.
-///
-/// So the knowledge is carried in the type. `Unknown` has no partial path: the
-/// only thing `flush_damage` can do with it is copy everything. That is not a
-/// policy anyone can flip, it is the absence of a code path.
-///
-/// TIER: parse-time-rejected, not truly-unrepresentable. A caller can still
-/// construct `KnownAsOf` with a generation it did not verify. What is removed
-/// is the ACCIDENT — a partial copy can no longer happen because nobody thought
-/// about the destination, only because somebody claimed to know it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ScanoutContents {
-    /// Byte-identical to the shadow as of this generation, so damage since
-    /// then is exactly what must be written.
-    KnownAsOf(u64),
-    /// Never written, recycled from a pool, or the generation could not be
-    /// established. A partial copy here is unsound.
-    Unknown,
-}
-
-impl ScanoutContents {
-    /// The damage a copy into this target must write, given what changed.
-    ///
-    /// ★ Returns `None` for "everything" rather than an empty slice, because
-    /// an empty damage list and "I do not know" must not be the same value —
-    /// they were, and that is how a full repaint and a no-op became
-    /// indistinguishable at the call site.
-    #[must_use]
-    pub fn copy_plan<'d>(
-        self,
-        damage: &'d [Rectangle<i32, Physical>],
-    ) -> Option<&'d [Rectangle<i32, Physical>]> {
-        match self {
-            Self::KnownAsOf(_) if !damage.is_empty() => Some(damage),
-            // Known but nothing changed is still a full copy today: the
-            // generation is not yet verified end-to-end. Tightening this to a
-            // no-op is what a clean stale_scan differential would earn.
-            Self::KnownAsOf(_) | Self::Unknown => None,
-        }
-    }
-}
-
-
-/// at an unmapped page the moment the mapping dropped, and the write would go
-/// to whatever the kernel put there next.
 pub struct NuriFramebuffer<'a> {
     /// What this scanout buffer is KNOWN to hold.
     ///
     /// ★ A PROOF, NOT A PREFERENCE. This was a `partial_copy: bool` — a knob
     /// where there should be evidence, which is the same smell one level down
-    /// from `stale_scan` itself. See `ScanoutContents`.
-    contents: ScanoutContents,
+    /// from `stale_scan` itself. See `mekuri::kentou`.
+    ///
+    /// ★ `Target<Unknown>` has NO `load_preserving` method. The partial copy is
+    /// not disabled here — it is unreachable, because the type that would
+    /// permit it cannot be obtained without paying for a full paint first.
+    target: mekuri::kentou::Target<mekuri::kentou::Unknown>,
     /// The SCANOUT mapping. Written exactly once per frame, by
     /// [`NuriFramebuffer::flush_damage`], and never read.
     data: &'a mut [u8],
@@ -444,49 +389,42 @@ impl NuriFramebuffer<'_> {
         // in ~25 minutes, so today the cost is nothing. On a seat genuinely
         // sustaining 360 Hz it would matter, and the way to earn the partial
         // path back is to establish the generation -- not to add a flag.
-        let Some(damage) = self.contents.copy_plan(damage) else {
-            self.data[..len].copy_from_slice(&self.shadow[..len]);
-            return;
-        };
-        for d in damage {
-            let y0 = usize::try_from(d.loc.y.max(0)).unwrap_or(0).min(h);
-            let y1 = usize::try_from((d.loc.y + d.size.h).max(0))
-                .unwrap_or(0)
-                .min(h);
+        // ── ★ THE TYPE DECIDES, AND THERE IS NO OTHER BRANCH ────────────────
+        //
+        // `self.target` is `Target<Unknown>` and `load_preserving` DOES NOT
+        // EXIST on it. Reaching for a partial copy here is a compile error
+        // (E0599), not a policy check somebody can flip -- which is the whole
+        // difference between this and the `partial_copy: bool` it replaced.
+        //
+        // The only route to a `Target<Known>` is `adopt_by_clearing`, and
+        // kentou prices that transition at exactly the work that makes the
+        // claim true: a full paint. So the copy below is not a fallback, it IS
+        // the adoption.
+        //
+        // Opening the partial path is therefore a real change, not a flag:
+        // thread the scanout slot's `last_drawn` generation through the bind,
+        // construct `Target::owned(w, h, revision)`, and `load_preserving`
+        // appears -- refusing on its own terms with `Coverage::StaleBaseline`
+        // when the damage baseline and the target's revision disagree, which is
+        // the exact defect this whole investigation was chasing.
+        self.data[..len].copy_from_slice(&self.shadow[..len]);
 
-            // ★ CLIP HORIZONTALLY TOO, SNAPPED OUT TO CACHE LINES.
-            //
-            // This wrote whole stride-wide rows at first, justified by "WC
-            // memory wants contiguous full lines". Measured on plo: that made
-            // a pointer-only frame 294 us -> 626 us, because a 20-pixel cursor
-            // was writing 7,648 bytes per row instead of 80. The cache-line
-            // argument is real but it is about ALIGNMENT, not about writing
-            // the whole row — a rect narrower than ~2 lines is not worth
-            // splitting, and a rect 1/100th of the row is not worth widening.
-            //
-            // So: clip to the damage, then round the start DOWN and the end UP
-            // to 64-byte boundaries. Every write is still whole-cache-line and
-            // contiguous, and it is proportional to what changed.
-            const LINE: usize = 64;
-            let x0 = usize::try_from(d.loc.x.max(0)).unwrap_or(0).saturating_mul(4);
-            let x1 = usize::try_from((d.loc.x + d.size.w).max(0))
-                .unwrap_or(0)
-                .saturating_mul(4)
-                .min(self.stride);
-            if x1 <= x0 {
-                continue;
-            }
-            let x0 = x0 - x0 % LINE;
-            let x1 = x1.div_ceil(LINE).saturating_mul(LINE).min(self.stride);
-
-            for y in y0..y1 {
-                let a = y * self.stride + x0;
-                let b = (y * self.stride + x1).min(len);
-                if b > a && b <= self.shadow.len() && b <= self.data.len() {
-                    self.data[a..b].copy_from_slice(&self.shadow[a..b]);
-                }
-            }
-        }
+        // ★ The adopted `Target<Known>` is deliberately NOT stored back.
+        //
+        // It could not be honestly kept: this framebuffer's allocation returns
+        // to a pool on `Drop` and the next bind may receive different bytes, so
+        // knowledge established now does not survive the round-trip. kentou has
+        // no `forget_identity` and should not -- a type that could quietly
+        // downgrade would let a caller carry a stale `Known` across exactly the
+        // boundary that invalidates it.
+        //
+        // So the value is built and dropped: the full copy is what makes the
+        // claim true for THIS frame, and the next bind starts `Unknown` again
+        // because that is the truth about a recycled buffer.
+        let _adopted = self
+            .target
+            .adopt_by_clearing(mekuri::kentou::Revision::ORIGIN);
+        let _ = damage;
     }
 }
 
@@ -1300,7 +1238,15 @@ impl Bind<Dmabuf> for NuriRenderer {
             // Establishing it -- threading the scanout slot's `last_drawn`
             // generation through the bind -- is what earns the partial copy
             // back, and it is a real change rather than a flag flip.
-            contents: ScanoutContents::Unknown,
+            // ★ UNKNOWN, and honestly so. This allocation is recycled through
+            // a pool across binds (see `Drop`), so nothing here establishes
+            // which generation its bytes belong to. `Target::surface` is
+            // kentou's constructor for exactly that situation -- its doc says
+            // it takes no revision "because there is nothing true to pass".
+            target: mekuri::kentou::Target::surface(
+                u32::try_from(size.w).unwrap_or(0),
+                u32::try_from(size.h).unwrap_or(0),
+            ),
             data,
             shadow,
             pool: self.shadow_pool.clone(),
