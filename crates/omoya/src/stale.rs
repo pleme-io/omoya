@@ -210,7 +210,16 @@ pub fn attribute(report: &mut StaleReport, elements: &[NamedRect]) {
 /// recognisable, and a red overlay on a dimmed COLOUR image stays readable
 /// while red on grey does not.
 #[must_use]
-pub fn render_mask(shadow: &[u8], scanout: &[u8], w: usize, h: usize) -> Vec<u8> {
+pub fn render_mask(expected: &[u8], actual: &[u8], w: usize, h: usize) -> Vec<u8> {
+    // ── ★ S6: THE PAIR IS NOW ANY TWO BUFFERS ───────────────────────────────
+    //
+    // These were named `shadow` and `scanout`, and the names were the ONLY
+    // thing tying this to stale-pixel detection -- the arithmetic never cared.
+    // A golden-image comparison is the same operation with a different pair
+    // (recorded vs current), so it reuses this rather than growing a second
+    // image-diff. Writing a second one is the duplication the fleet forbids,
+    // and it would be a second place for "what counts as different" to drift.
+    let (shadow, scanout) = (expected, actual);
     // nord11 — the palette's `error`. See omoya docs/SHITSURAI.md §2.5: Aurora
     // appears only when the system has something to say, and a stale frame is
     // exactly that.
@@ -343,5 +352,119 @@ mod tests {
         let body = &png[png.len() - 6..];
         assert_eq!(&body[0..3], &[0x10, 0x10, 0x10], "clean pixel is dimmed 4x");
         assert_eq!(&body[3..6], &[0xBF, 0x61, 0x6A], "stale pixel is nord11");
+    }
+}
+
+/// The verdict of comparing a recorded frame against the current one.
+///
+/// ★ Three outcomes, not two. `Match`/`Differ` alone would report a golden
+/// that could not be READ as a difference -- the vacuous pass that makes a
+/// regression suite quietly stop testing. `Unusable` keeps "I could not
+/// compare" out of the answer set for "they are the same".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GoldenVerdict {
+    Match {
+        pixels: usize,
+    },
+    Differ {
+        differing: usize,
+        pixels: usize,
+    },
+    /// The pair could not be compared at all.
+    Unusable(&'static str),
+}
+
+/// Compare a recorded buffer against the current one.
+///
+/// ★ Refuses rather than guesses on a size mismatch. Two buffers of different
+/// dimensions can be compared byte-wise and will always "differ", which is a
+/// true statement that tells a caller nothing -- and reads as a regression
+/// when the real cause is a mode change.
+///
+/// ★ An EMPTY pair is `Unusable`, never `Match`. Two zero-length buffers are
+/// trivially equal, and reporting that as a pass is precisely the vacuity that
+/// makes a golden corpus stop protecting anything.
+#[must_use]
+pub fn compare_golden(expected: &[u8], actual: &[u8], w: usize, h: usize) -> GoldenVerdict {
+    let want = w * h * 3;
+    if w == 0 || h == 0 {
+        return GoldenVerdict::Unusable("zero-sized region");
+    }
+    if expected.len() != want || actual.len() != want {
+        return GoldenVerdict::Unusable("buffer size does not match the stated region");
+    }
+    let differing = expected
+        .chunks_exact(3)
+        .zip(actual.chunks_exact(3))
+        .filter(|(a, b)| a != b)
+        .count();
+    let pixels = w * h;
+    if differing == 0 {
+        GoldenVerdict::Match { pixels }
+    } else {
+        GoldenVerdict::Differ { differing, pixels }
+    }
+}
+
+#[cfg(test)]
+mod golden_tests {
+    use super::{GoldenVerdict, compare_golden};
+
+    fn buf(w: usize, h: usize, v: u8) -> Vec<u8> {
+        vec![v; w * h * 3]
+    }
+
+    #[test]
+    fn identical_buffers_match() {
+        let a = buf(4, 4, 7);
+        assert_eq!(
+            compare_golden(&a, &a, 4, 4),
+            GoldenVerdict::Match { pixels: 16 }
+        );
+    }
+
+    #[test]
+    fn a_single_changed_pixel_is_counted_not_rounded() {
+        let a = buf(4, 4, 7);
+        let mut b = a.clone();
+        b[0] = 9;
+        assert_eq!(
+            compare_golden(&a, &b, 4, 4),
+            GoldenVerdict::Differ { differing: 1, pixels: 16 },
+            "one pixel must report as one, not as 'differs'"
+        );
+    }
+
+    /// ★ THE VACUITY THIS EXISTS TO REFUSE.
+    ///
+    /// Two empty buffers are trivially equal. Reporting that as `Match` is how
+    /// a golden corpus quietly stops protecting anything -- every comparison
+    /// passes and nobody notices the images stopped being captured.
+    #[test]
+    fn an_empty_pair_is_unusable_not_a_match() {
+        assert!(matches!(
+            compare_golden(&[], &[], 0, 0),
+            GoldenVerdict::Unusable(_)
+        ));
+    }
+
+    /// A size mismatch is REFUSED, not reported as a difference. Byte-comparing
+    /// two different-sized buffers always "differs" -- a true statement that
+    /// tells a caller nothing, and reads as a regression when the real cause is
+    /// a mode change.
+    #[test]
+    fn a_size_mismatch_refuses_rather_than_reporting_a_difference() {
+        let a = buf(4, 4, 7);
+        let b = buf(8, 8, 7);
+        assert!(matches!(
+            compare_golden(&a, &b, 4, 4),
+            GoldenVerdict::Unusable(_)
+        ));
+        // And a buffer that is the wrong length for the STATED region is the
+        // same refusal -- the region is what the caller reasons about.
+        assert!(matches!(
+            compare_golden(&a, &a, 8, 8),
+            GoldenVerdict::Unusable(_)
+        ));
     }
 }
