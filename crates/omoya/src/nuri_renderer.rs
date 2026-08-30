@@ -233,6 +233,13 @@ impl Texture for NuriTexture {
 /// at an unmapped page the moment the mapping dropped, and the write would go
 /// to whatever the kernel put there next.
 pub struct NuriFramebuffer<'a> {
+    /// Whether the scanout copy may be clipped to the damage set.
+    ///
+    /// ★ FALSE by default. See `flush_damage` — on plo the shadow was provably
+    /// clean while the scanout was not, which localises the defect to the
+    /// damage set reaching this function. Correctness wins until the damage
+    /// path is proven by a clean `stale_scan` under load.
+    partial_copy: bool,
     /// The SCANOUT mapping. Written exactly once per frame, by
     /// [`NuriFramebuffer::flush_damage`], and never read.
     data: &'a mut [u8],
@@ -348,6 +355,37 @@ impl NuriFramebuffer<'_> {
         // caller could not say — copy everything rather than leave the screen
         // holding a stale frame.
         if damage.is_empty() {
+            self.data[..len].copy_from_slice(&self.shadow[..len]);
+            return;
+        }
+
+        // ── ★ THE PARTIAL COPY IS OFF BY DEFAULT (plo, 2026-08-30) ──────────
+        //
+        // MEASURED, not suspected. On plo the operator saw persistent stale
+        // content in the terminal, and the evidence localises it precisely:
+        //
+        //   `omoya_capture` reads the SHADOW and forces a full repaint. Its
+        //   output is CLEAN — fifteen identical prompt lines at 1:1, no
+        //   corruption anywhere. The composite is correct.
+        //
+        //   What the operator sees is the SCANOUT, and it is not clean.
+        //
+        // Shadow correct + scanout wrong + this function being the only writer
+        // between them means the DAMAGE SET reaching here under-reports. Which
+        // term is wrong — buffer age, the tracker's union, or a client's
+        // declaration — is not yet known, and `stale_scan` (the instrument
+        // built for exactly this) does not fire on this build, so the question
+        // stayed open while the screen stayed broken.
+        //
+        // ★ So the optimisation yields to correctness until it can be PROVEN,
+        // rather than the screen yielding to the optimisation. A full copy of
+        // 1920x1080x4 is 8.3 MB; this seat presented 643 frames in ~25 minutes,
+        // so the real cost here is nothing. On a seat that genuinely presents at
+        // 360 Hz it would matter, and that is what the knob is for.
+        //
+        // Turn it back on with `damage.partial_scanout_copy: true` once
+        // stale_scan reports a clean differential under load.
+        if !self.partial_copy {
             self.data[..len].copy_from_slice(&self.shadow[..len]);
             return;
         }
@@ -1195,6 +1233,12 @@ impl Bind<Dmabuf> for NuriRenderer {
         }
 
         Ok(NuriFramebuffer {
+            // ★ Correctness by default; see `flush_damage`. Overridable via the
+            // OMOYA_PARTIAL_SCANOUT_COPY escape hatch so the optimisation can be
+            // re-measured on a live seat without a rebuild -- which is exactly
+            // what could not be done when this defect was found.
+            partial_copy: std::env::var_os("OMOYA_PARTIAL_SCANOUT_COPY")
+                .is_some_and(|v| v == "1"),
             data,
             shadow,
             pool: self.shadow_pool.clone(),
