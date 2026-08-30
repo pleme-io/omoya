@@ -203,6 +203,16 @@ pub struct OmoyaIntrospect {
     /// Which `rouka::Route` the last import took, as its stable label (R7 —
     /// a route nobody records is a regression nobody can see).
     pub route_label: std::sync::Mutex<Option<&'static str>>,
+
+    /// The DRM planes reachable from this CRTC, as JSON.
+    ///
+    /// ★ M3a — this MEASURES the direct-scanout premise instead of assuming
+    /// it. `docs/SMOOTHNESS.md` says plo exposes 12 planes, but 12 planes on
+    /// the DEVICE is a different claim from *this CRTC* having a usable
+    /// overlay: a plane is reachable only if the CRTC is in its
+    /// `possible_crtcs` mask. An empty overlay list here means direct scanout
+    /// is dead as designed and the load falls to M5 + M6.
+    pub planes: std::sync::Mutex<Option<String>>,
     /// The rectangles the layout last assigned, as `"x,y,wxh"` per window.
     ///
     /// ★ PUBLISHED BECAUSE GUESSING AT A LAYOUT FROM PIXELS IS BACKWARDS.
@@ -807,6 +817,9 @@ impl Introspect for OmoyaIntrospect {
                 self.route_cpu_bytes_total
                     .load(std::sync::atomic::Ordering::Relaxed)
             )),
+            "planes" => Ok(serde_json::json!(
+                *self.planes.lock().unwrap_or_else(|e| e.into_inner())
+            )),
             "route_label" => Ok(serde_json::json!(
                 *self.route_label.lock().unwrap_or_else(|e| e.into_inner())
             )),
@@ -1228,6 +1241,7 @@ impl Introspect for OmoyaIntrospect {
             "chord_deeds",
             "focus_rect",
             "frame_us",
+            "planes",
             "route_cpu_bytes",
             "route_cpu_bytes_total",
             "route_label",

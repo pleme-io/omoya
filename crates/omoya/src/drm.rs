@@ -756,6 +756,21 @@ where
         DrmFourcc::Argb8888,
     )?;
 
+    // ★ M3a — publish the plane inventory, so the direct-scanout premise is a
+    // MEASUREMENT rather than a sentence in a design doc.
+    {
+        let inv: Vec<_> = scanout
+            .plane_inventory()
+            .into_iter()
+            .map(|(id, kind, formats)| {
+                serde_json::json!({ "id": id, "kind": kind, "formats": formats })
+            })
+            .collect();
+        tracing::info!(planes = inv.len(), "DRM plane inventory published");
+        *introspect.planes.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some(serde_json::Value::Array(inv).to_string());
+    }
+
     // ★ PUBLISH THE COMMIT PATH. Which of the kernel's two modesetting
     // paths this seat is on was, until now, unknowable from outside the
     // process — 44 read leaves and none of them this one, while

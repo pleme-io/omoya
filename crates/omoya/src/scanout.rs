@@ -194,6 +194,37 @@ impl DirectScanout {
     ///
     /// # Errors
     /// If the CRTC refuses the flip.
+    /// The planes this CRTC exposes, as `(id, kind, format_count)`.
+    ///
+    /// ── ★ M3a: THIS TESTS THE PREMISE, IT DOES NOT USE IT ────────────────
+    ///
+    /// The whole direct-scanout plan rests on an assumption nobody had
+    /// measured: that plo's hardware exposes a plane able to scan out a
+    /// client's buffer. `docs/SMOOTHNESS.md` says "plo exposes 12 DRM planes",
+    /// and 12 planes on the DEVICE is not the same claim as *this CRTC* having
+    /// a usable overlay — a plane belongs to a `possible_crtcs` mask.
+    ///
+    /// So: report what is actually reachable from here. If the overlay list
+    /// comes back empty, M3 is dead as designed and the load falls to the
+    /// derivation work (M5) and the rolling wash (M6) instead. Measuring this
+    /// is cheap; discovering it after building the plane-assignment path is
+    /// not.
+    #[must_use]
+    pub fn plane_inventory(&self) -> Vec<(u32, &'static str, usize)> {
+        let planes = self.surface.planes();
+        let mut out = Vec::new();
+        for (kind, list) in [
+            ("primary", &planes.primary),
+            ("cursor", &planes.cursor),
+            ("overlay", &planes.overlay),
+        ] {
+            for p in list {
+                out.push((p.handle.into(), kind, p.formats.iter().count()));
+            }
+        }
+        out
+    }
+
     pub fn flip(&mut self) -> Result<(), Error> {
         let slot = &self.slots[self.back];
         let (w, h) = (
