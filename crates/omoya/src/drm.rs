@@ -1351,7 +1351,12 @@ where
                                     // is `scan(expected, actual)`; swapping it
                                     // inverts every attribution silently.
                                     let mut rep =
-                                        crate::stale::scan(shadow, &baseline, wu, hu);
+                                        crate::stale::scan(
+                                            crate::stale::GroundTruth::from_full_repaint(shadow),
+                                            crate::stale::Observed::from_natural_age(&baseline),
+                                            wu,
+                                            hu,
+                                        );
                                     // Attribute against what the compositor
                                     // itself drew, so a region is named by
                                     // subsystem rather than counted.

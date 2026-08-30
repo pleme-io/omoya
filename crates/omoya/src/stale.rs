@@ -93,7 +93,50 @@ pub struct NamedRect {
 /// is not meaningful after compositing, so comparing it would report every
 /// pixel stale on a seat that is perfectly correct.
 #[must_use]
-pub fn scan(shadow: &[u8], scanout: &[u8], w: usize, h: usize) -> StaleReport {
+/// Bytes read back from a render at the **natural buffer age** — what the
+/// operator actually saw.
+///
+/// ★ A NEWTYPE BECAUSE THE PROVENANCE IS THE WHOLE MEANING OF THE COMPARISON.
+///
+/// `scan` used to take two bare `&[u8]`. That is exactly as type-correct when
+/// the two slices come from the same render as when they come from different
+/// ones — and the day `flush_damage` became a full copy, the two arguments
+/// silently became the same bytes. The scan did not fail; it reported "clean"
+/// forever, about a screen that was not.
+///
+/// A guard that cannot fail is worse than an absent one: absence is visible,
+/// and unfalsifiable green is trusted. So provenance is carried in the type,
+/// and a comparison of two same-provenance buffers no longer type-checks.
+#[derive(Clone, Copy)]
+pub struct Observed<'a>(&'a [u8]);
+
+/// Bytes read back from a **forced full repaint** — the control.
+#[derive(Clone, Copy)]
+pub struct GroundTruth<'a>(&'a [u8]);
+
+impl<'a> Observed<'a> {
+    /// Tag a readback taken after a render at the natural buffer age.
+    #[must_use]
+    pub const fn from_natural_age(bytes: &'a [u8]) -> Self {
+        Self(bytes)
+    }
+}
+
+impl<'a> GroundTruth<'a> {
+    /// Tag a readback taken after a render forced to `age = 0`.
+    ///
+    /// Honest ceiling: this constructor is callable from anywhere, so the type
+    /// stops the ACCIDENTAL same-provenance comparison — the one that actually
+    /// happened — and not a deliberate one. Sealing that needs a witness only
+    /// the forced-repaint call site can mint (kentou's `Painted` shape).
+    #[must_use]
+    pub const fn from_full_repaint(bytes: &'a [u8]) -> Self {
+        Self(bytes)
+    }
+}
+
+pub fn scan(truth: GroundTruth<'_>, observed: Observed<'_>, w: usize, h: usize) -> StaleReport {
+    let (shadow, scanout) = (truth.0, observed.0);
     let stride = w * 4;
     let usable = stride.saturating_mul(h);
     if shadow.len() < usable || scanout.len() < usable || w == 0 || h == 0 {
@@ -263,7 +306,12 @@ mod tests {
     #[test]
     fn identical_buffers_are_clean_and_say_what_they_compared() {
         let (w, h) = (16, 8);
-        let r = scan(&buf(w, h, 7), &buf(w, h, 7), w, h);
+        let r = scan(
+            GroundTruth::from_full_repaint(&buf(w, h, 7)),
+            Observed::from_natural_age(&buf(w, h, 7)),
+            w,
+            h,
+        );
         assert_eq!(r.stale_pixels, 0);
         assert_eq!(r.compared_pixels, 128, "the denominator must be reported");
         assert!(r.is_clean());
@@ -273,7 +321,12 @@ mod tests {
     /// a healthy seat.
     #[test]
     fn a_scan_that_compared_nothing_is_not_clean() {
-        let r = scan(&[], &[], 16, 8);
+        let r = scan(
+            GroundTruth::from_full_repaint(&[]),
+            Observed::from_natural_age(&[]),
+            16,
+            8,
+        );
         assert_eq!(r.stale_pixels, 0);
         assert_eq!(r.compared_pixels, 0);
         assert!(!r.is_clean(), "zero stale over zero compared is not health");
@@ -290,7 +343,12 @@ mod tests {
                 sc[(y * w + x) * 4 + 1] = 0xFF;
             }
         }
-        let r = scan(&sh, &sc, w, h);
+        let r = scan(
+            GroundTruth::from_full_repaint(&sh),
+            Observed::from_natural_age(&sc),
+            w,
+            h,
+        );
         assert_eq!(r.stale_pixels, 24);
         assert_eq!(r.regions.len(), 1, "one block must merge to one region");
         let g = &r.regions[0];
@@ -306,7 +364,13 @@ mod tests {
             p[3] = 0xFF; // alpha only
         }
         assert_eq!(
-            scan(&sh, &sc, w, h).stale_pixels,
+            scan(
+                GroundTruth::from_full_repaint(&sh),
+                Observed::from_natural_age(&sc),
+                w,
+                h
+            )
+            .stale_pixels,
             0,
             "the scanout plane has no meaningful alpha; comparing it would \
              report a correct seat as entirely stale"
