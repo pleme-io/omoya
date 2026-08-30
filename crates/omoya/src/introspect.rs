@@ -1030,8 +1030,10 @@ impl Introspect for OmoyaIntrospect {
                 *self.stale_request.lock().unwrap_or_else(|e| e.into_inner()) =
                     Some(path.to_string());
                 *self.stale_result.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                // Armed against the SAME counter the wait is measured in;
+                // two different counters here is how the bug above was built.
                 self.stale_armed_at_frame.store(
-                    self.frames.load(std::sync::atomic::Ordering::Relaxed),
+                    self.presented.load(std::sync::atomic::Ordering::Relaxed),
                     std::sync::atomic::Ordering::Relaxed,
                 );
                 // ★ NOT `Owed::Capture`, and this is the whole subtlety: a
@@ -1063,8 +1065,20 @@ impl Introspect for OmoyaIntrospect {
                 if !pending {
                     return Ok(serde_json::json!("no scan has been requested"));
                 }
+                // ★ `presented`, NOT `frames`. `frames` counts TICKS OF THE
+                // EVENT LOOP (drm.rs:861 says so in as many words), and the
+                // loop ticks on a timer whether or not anything composites. So
+                // reading `frames` here made an IDLE SEAT — the overwhelmingly
+                // common case — report "composites ARE happening and the scan
+                // hook was not reached", sending the reader to debug a scan
+                // that was working perfectly.
+                //
+                // Measured 2026-08-30: `frames` advanced 2946 while `presented`
+                // sat at 604 across four seconds. Exactly the kotae failure
+                // this block's own comment claims to have fixed — two
+                // different waits, named, but keyed off the wrong counter.
                 let since = self
-                    .frames
+                    .presented
                     .load(std::sync::atomic::Ordering::Relaxed)
                     .saturating_sub(
                         self.stale_armed_at_frame
@@ -1076,8 +1090,9 @@ impl Introspect for OmoyaIntrospect {
                     "outcome": "waiting",
                     "frames_since_armed": since,
                     "verdict": if since == 0 {
-                        "the seat is idle — drive it (move the pointer, type) to \
-                         produce a naturally-drawn frame"
+                        "the seat has composited NOTHING since arming — it is \
+                         idle. Drive it (move the pointer, type) to produce a \
+                         naturally-drawn frame; the scan is not at fault"
                     } else {
                         "composites ARE happening and the scan hook was not \
                          reached — this is a defect in the scan, not the seat"
