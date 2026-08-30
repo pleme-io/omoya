@@ -30,24 +30,61 @@
 
 use std::collections::VecDeque;
 
-/// A monotonically increasing version of the surface's content.
-///
-/// Deliberately the same shape as `mekuri::kentou::Revision` and Salsa's — this
-/// is the object the Wayland boundary strips, and naming it identically is what
-/// lets the two sides be joined later rather than translated.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Revision(u64);
+// ── ★ Revision: RETIRED IN PLACE, NOT DELETED ───────────────────────────────
+//
+// This module used to declare its own `pub struct Revision(u64)` and SAID SO in
+// the doc comment: "deliberately the same shape as `mekuri::kentou::Revision`".
+// A knowing re-spelling of an imported type is a copy, not a convergence —
+// `mekuri = "0.1.2"` has been in this crate's `Cargo.toml` the whole time, and
+// `nuri_renderer.rs` already calls `mekuri::kentou::Revision::ORIGIN`.
+//
+// ★ This is a RE-EXPORT, not a deletion (MODULARIZE, DON'T DELETE).
+// `denpa::Revision` still resolves, to the same type mekuri hands the renderer,
+// so the ledger and the scanout path now compare the SAME revision rather than
+// two that merely look alike.
+//
+// What mekuri's adds that the local copy lacked: `Hash`, a saturating `next()`
+// (the local one had no advance method at all), and `from_raw` — which is how
+// the ledger builds one now that the tuple field belongs to another crate.
+//
+// ★ `Coverage` is deliberately NOT re-exported here. See `StaleBaseline` below.
+pub use mekuri::kentou::Revision;
 
-impl Revision {
-    /// The revision of a surface nothing has been recorded against.
-    pub const ORIGIN: Self = Self(0);
-
-    /// The raw counter, for recording in a log or an introspection leaf.
-    #[must_use]
-    pub const fn get(self) -> u64 {
-        self.0
+// ── ★ THE GUARD ─────────────────────────────────────────────────────────────
+//
+// This item only compiles while `Revision` IS mekuri's type. Re-introducing a
+// local `struct Revision(u64)` — the exact regression this retirement exists to
+// forbid — fails HERE with a type mismatch instead of silently forking the
+// fleet's revision vocabulary a second time.
+//
+// `const _` rather than a `#[test]`: a test proves it at test time, a `const _`
+// proves it at every build, including the release one.
+const _: () = {
+    #[allow(dead_code)]
+    const fn revision_is_mekuris(r: mekuri::kentou::Revision) -> Revision {
+        r
     }
-}
+};
+
+// ── ★ WHY `StaleBaseline` DID NOT MOVE WITH `Revision` ──────────────────────
+//
+// `mekuri::kentou::Coverage::StaleBaseline` shares this one's NAME and neither
+// its shape nor its question. Measured 2026-08-30, three independent reasons:
+//
+//  1. It is an enum VARIANT, not a type. `since` returns `Result<_, E>` and a
+//     variant cannot be an `E` (`E0573: expected type, found variant`). Using
+//     the whole `Coverage` widens the error with an `OutOfBounds` arm this
+//     ledger can never produce — adding a bad state, not removing one.
+//  2. The fields are a different fact. mekuri's are
+//     `{ damage_base, target }: u64` — "the damage's base is not the revision
+//     this target holds", an IDENTITY mismatch. Ours are
+//     `{ asked, oldest_retained }: Revision` — "history no longer reaches back
+//     that far", a RETENTION fact. Neither field name means the other.
+//  3. The `Display` text differs, and this module's load-bearing test asserts
+//     on it (`contains("full repaint")`). `Coverage`'s says "the frames between
+//     are unaccounted for" and never says "full repaint".
+//
+// Same goal, different shapes ⇒ write the rule down, do not force one type.
 
 /// The ledger cannot account for the requested baseline.
 ///
@@ -69,7 +106,8 @@ impl core::fmt::Display for StaleBaseline {
             f,
             "damage asked from revision {} but the ledger only accounts back to \
              {} — the honest answer is a full repaint, not an empty region",
-            self.asked.0, self.oldest_retained.0
+            self.asked.get(),
+            self.oldest_retained.get()
         )
     }
 }
@@ -103,7 +141,7 @@ impl DamageLedger {
     /// The current revision.
     #[must_use]
     pub const fn revision(&self) -> Revision {
-        Revision(self.current)
+        Revision::from_raw(self.current)
     }
 
     /// The oldest revision this ledger can still answer for.
@@ -111,7 +149,9 @@ impl DamageLedger {
     pub fn oldest_retained(&self) -> Revision {
         self.history
             .front()
-            .map_or(Revision(self.current), |&(r, _)| Revision(r - 1))
+            .map_or(Revision::from_raw(self.current), |&(r, _)| {
+                Revision::from_raw(r - 1)
+            })
     }
 
     /// Record a change, advancing the revision.
@@ -121,7 +161,7 @@ impl DamageLedger {
         while self.history.len() > self.capacity {
             self.history.pop_front();
         }
-        Revision(self.current)
+        Revision::from_raw(self.current)
     }
 
     /// What changed since `base`.
@@ -130,7 +170,7 @@ impl DamageLedger {
     /// [`StaleBaseline`] when `base` predates the retained history — NOT an
     /// empty result, which is the distinction the whole module exists for.
     pub fn since(&self, base: Revision) -> Result<Vec<(i32, i32, i32, i32)>, StaleBaseline> {
-        if base.0 > self.current {
+        if base.get() > self.current {
             // A baseline from the future is nonsense; refuse rather than
             // silently return nothing, which would read as "up to date".
             return Err(StaleBaseline {
@@ -148,7 +188,7 @@ impl DamageLedger {
         Ok(self
             .history
             .iter()
-            .filter(|&&(r, _)| r > base.0)
+            .filter(|&&(r, _)| r > base.get())
             .map(|&(_, rect)| rect)
             .collect())
     }
@@ -222,13 +262,13 @@ mod tests {
     #[test]
     fn a_future_baseline_is_refused() {
         let l = DamageLedger::new(8);
-        assert!(l.since(Revision(99)).is_err());
+        assert!(l.since(Revision::from_raw(99)).is_err());
     }
 
     #[test]
     fn a_zero_capacity_ledger_still_retains_one_entry() {
         let mut l = DamageLedger::new(0);
         let r = l.record(A);
-        assert_eq!(l.since(Revision(r.get() - 1)), Ok(vec![A]));
+        assert_eq!(l.since(Revision::from_raw(r.get() - 1)), Ok(vec![A]));
     }
 }
