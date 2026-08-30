@@ -281,6 +281,35 @@ mod tests {
 
 // ── ★ PERFORMING A DEED — the compositor side ────────────────────────────
 
+/// What became of a deed.
+///
+/// ★ Exists because `do` answered `"queued: <verb>"` and nothing more. A deed
+/// that becomes a NO-OP was indistinguishable from one that worked, which is
+/// the exact shape of "the gesture did nothing and nothing said why".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeedOutcome {
+    Performed,
+    /// Carries a REASON rather than a bool: "nothing happened" and "nothing
+    /// could have happened, here is why" are different answers, and only the
+    /// second lets a caller stop guessing.
+    Refused(&'static str),
+}
+
+impl DeedOutcome {
+    /// The JSON a caller reads back from `deed_result`.
+    #[must_use]
+    pub fn to_json(&self, verb: &str, id: u64) -> serde_json::Value {
+        match self {
+            Self::Performed => serde_json::json!({
+                "deed_id": id, "verb": verb, "outcome": "performed"
+            }),
+            Self::Refused(reason) => serde_json::json!({
+                "deed_id": id, "verb": verb, "outcome": "refused", "reason": reason
+            }),
+        }
+    }
+}
+
 impl crate::state::Omoya {
     /// Carry out one deed.
     ///
@@ -290,20 +319,47 @@ impl crate::state::Omoya {
     /// worst failure this layer has, because the key visibly stops reaching
     /// the application AND produces no effect — the operator concludes the
     /// keyboard is broken.
-    pub fn perform(&mut self, deed: Deed) {
+    pub fn perform(&mut self, deed: Deed) -> DeedOutcome {
         match deed {
-            Deed::Focus(dir) => self.focus_direction(dir),
+            Deed::Focus(dir) => {
+                self.focus_direction(dir);
+                DeedOutcome::Performed
+            }
             Deed::Resize(dir) => {
                 // 0.05 of the parent, matching kukaku's MIN_RATIO: one press
                 // is the smallest move that cannot collapse a pane, so a held
                 // key ramps smoothly instead of snapping to an edge.
                 if self.tiling.resize_focused(dir, 0.05) {
                     self.apply_layout();
+                    DeedOutcome::Performed
+                } else {
+                    // ── ★ THE SILENT NO-OP, NAMED ──────────────────────────
+                    //
+                    // `resize_focused` already returned false here and the
+                    // answer was DISCARDED, so the caller was told "queued" and
+                    // nothing else. In floating mode this is not an edge case:
+                    // `layout.rs` unmaps EVERY window from the tiling tree, so
+                    // a resize deed can never do anything -- independently of
+                    // the move_request/resize_request stubs, which are a
+                    // separate hole in the same symptom.
+                    //
+                    // An operator reporting "I cannot resize" was therefore
+                    // right twice over, and no leaf could say so.
+                    DeedOutcome::Refused("no tiled window to resize (floating mode unmaps all)")
                 }
             }
-            Deed::Close => self.close_focused(),
-            Deed::SpawnTerminal => self.spawn_terminal(),
-            Deed::SpawnLauncher => self.spawn_launcher(),
+            Deed::Close => {
+                self.close_focused();
+                DeedOutcome::Performed
+            }
+            Deed::SpawnTerminal => {
+                self.spawn_terminal();
+                DeedOutcome::Performed
+            }
+            Deed::SpawnLauncher => {
+                self.spawn_launcher();
+                DeedOutcome::Performed
+            }
         }
     }
 
@@ -441,5 +497,36 @@ impl crate::state::Omoya {
             Ok(child) => tracing::info!(pid = child.id(), program, what, "spawned into the seat"),
             Err(e) => tracing::error!(error = %e, program, what, "spawn failed"),
         }
+    }
+}
+
+#[cfg(test)]
+mod deed_outcome_tests {
+    use super::DeedOutcome;
+
+    /// ★ "The gesture did nothing and nothing said why" (plo, 2026-08-29).
+    ///
+    /// A refusal must carry a REASON. `resize_focused` already returned false
+    /// and the answer was DISCARDED, so `do` replied "queued" and the operator
+    /// learned nothing.
+    #[test]
+    fn a_refusal_names_its_reason() {
+        let j = DeedOutcome::Refused("no tiled window to resize").to_json("resize-left", 3);
+        assert_eq!(j["outcome"], "refused");
+        assert_eq!(j["reason"], "no tiled window to resize");
+        assert_eq!(j["deed_id"], 3);
+        assert_eq!(j["verb"], "resize-left");
+    }
+
+    /// Anti-vacuity: performed and refused must not serialise the same.
+    /// A single "outcome" string that was always present would pass the test
+    /// above while telling a caller nothing.
+    #[test]
+    fn performed_and_refused_are_distinguishable() {
+        let p = DeedOutcome::Performed.to_json("focus-right", 1);
+        let r = DeedOutcome::Refused("x").to_json("focus-right", 1);
+        assert_ne!(p, r);
+        assert_eq!(p["outcome"], "performed");
+        assert!(p.get("reason").is_none(), "a success carries no reason");
     }
 }
