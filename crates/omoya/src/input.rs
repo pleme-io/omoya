@@ -311,6 +311,49 @@ impl Omoya {
                 .element_under(pointer.current_location())
                 .map(|(w, l)| (w.clone(), l))
             {
+                // ── ★ SUPER + DRAG MOVES THE WINDOW ─────────────────────────
+                //
+                // `MoveGrab` already existed and was reachable only through
+                // `move_request` — i.e. only when a CLIENT asks, which a client
+                // does when the operator drags ITS titlebar. mado has no
+                // titlebar: this seat draws server-side decorations, so mado
+                // never sends `xdg_toplevel.move` and the grab had no trigger.
+                // The machinery was complete and unreachable, which is why the
+                // operator still could not drag a window after it landed.
+                //
+                // Super+drag is the compositor-side trigger. It needs no client
+                // cooperation, so it works for every toplevel including ones
+                // with server-side decorations and ones that implement no move
+                // protocol at all.
+                let logo_held = keyboard.modifier_state().logo;
+                if logo_held && button == 0x110 {
+                    if let Some(geo) = self.space.element_geometry(&window) {
+                        let p = pointer.current_location();
+                        #[allow(clippy::cast_possible_truncation)]
+                        let offset = smithay::utils::Point::<i32, smithay::utils::Logical>::from((
+                            geo.loc.x - p.x as i32,
+                            geo.loc.y - p.y as i32,
+                        ));
+                        let start_data = smithay::input::pointer::GrabStartData {
+                            focus: None,
+                            button,
+                            location: p,
+                        };
+                        self.space.raise_element(&window, true);
+                        pointer.set_grab(
+                            self,
+                            crate::grab::MoveGrab {
+                                start_data,
+                                window: window.clone(),
+                                offset,
+                            },
+                            serial,
+                            smithay::input::pointer::Focus::Clear,
+                        );
+                        return;
+                    }
+                }
+
                 self.space.raise_element(&window, true);
                 keyboard.set_focus(
                     self,
