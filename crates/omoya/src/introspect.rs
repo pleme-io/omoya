@@ -60,6 +60,29 @@ use kanshou::{Introspect, Query, QueryError, QueryResult};
 /// the instant asked; for "is it rendering, what is it rendering on, how many
 /// clients" that is the right trade, and it is stated so nobody reads these as
 /// transactional.
+/// A pending capture: which id asked, where to write, and what region.
+///
+/// ★ Carries the id so the RESULT can carry it too. Without that a result is
+/// anonymous and a client cannot tell its own answer from a predecessor's.
+#[derive(Debug, Clone)]
+pub struct CaptureRequest {
+    pub id: u64,
+    pub path: String,
+    /// `None` = the whole output. `Some((x, y, w, h))` clips.
+    ///
+    /// ★ The renderer's `copy_region` already takes and clips a rectangle
+    /// (`nuri_renderer.rs`); only `drm.rs::capture` hardcoded full-size. The
+    /// region path is wiring, not new readback machinery.
+    pub region: Option<(i32, i32, i32, i32)>,
+    /// Hash the pixels instead of writing them.
+    ///
+    /// ★ Measured on plo: three captures 0.5s apart are BIT-IDENTICAL, and
+    /// across 70s only the top 28 rows differ -- the 1 Hz clock in the bar.
+    /// So a hash is a viable change-oracle, and masking the bar is mandatory
+    /// or every comparison differs for a reason nobody cares about.
+    pub hash_only: bool,
+}
+
 /// One toplevel, with the protocol side and the pixel side in the same row.
 ///
 /// ★ `Option` is load-bearing on the P-side field: "the client was told
@@ -312,7 +335,24 @@ pub struct OmoyaIntrospect {
     /// The render loop owns the framebuffer, so it must do the work; the socket
     /// thread only leaves a note. Same direction as every other field here —
     /// the loop pushes, the sidecar never reaches in.
-    pub capture_request: std::sync::Mutex<Option<String>>,
+    pub capture_request: std::sync::Mutex<Option<CaptureRequest>>,
+    /// Monotonic id handed to each capture/scan request.
+    ///
+    /// ── ★ WHY A RESULT NEEDS AN IDENTITY ────────────────────────────────
+    ///
+    /// `capture_result` outlives the client that asked for it: the compositor
+    /// is long-lived and the socket client is not. So a FRESH client reading
+    /// the leaf gets whatever a PREVIOUS client's request left there, with no
+    /// way to tell it apart from its own answer -- a stale success read as a
+    /// fresh one, which is the worst shape a diagnostic can take.
+    ///
+    /// Observed exactly that way: a probe read a `capture_result` written for
+    /// a request from an earlier process and reported it as its own.
+    ///
+    /// The id makes the mismatch VISIBLE rather than removing it -- a caller
+    /// still has to compare. That is only-mitigated, not unrepresentable: the
+    /// leaf cannot refuse to answer a client that declines to check.
+    pub request_seq: std::sync::atomic::AtomicU64,
     /// A pending stale-pixel scan: where to write the mask image.
     ///
     /// ★ Separate from `capture_request` because the two are OPPOSITE
@@ -808,8 +848,37 @@ impl Introspect for OmoyaIntrospect {
                         field: "capture needs a path argument".to_string(),
                     });
                 };
+                // Optional args after the path: x y w h (region), then a
+                // literal "hash" to hash instead of writing pixels.
+                let nums: Vec<i32> = q
+                    .args
+                    .iter()
+                    .skip(1)
+                    .filter_map(|v| v.as_i64().and_then(|n| i32::try_from(n).ok()))
+                    .collect();
+                let region = if nums.len() >= 4 {
+                    Some((nums[0], nums[1], nums[2], nums[3]))
+                } else {
+                    None
+                };
+                let hash_only = q
+                    .args
+                    .iter()
+                    .any(|v| v.as_str().is_some_and(|s| s == "hash"));
+                let id = self
+                    .request_seq
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                    + 1;
                 *self.capture_request.lock().unwrap_or_else(|e| e.into_inner()) =
-                    Some(path.to_string());
+                    Some(CaptureRequest {
+                        id,
+                        path: path.to_string(),
+                        region,
+                        hash_only,
+                    });
+                // ★ Cleared so a caller cannot read the PREVIOUS request's
+                // result and believe it is this one's. The id below is what
+                // makes that check possible at all; clearing alone is a race.
                 *self.capture_result.lock().unwrap_or_else(|e| e.into_inner()) = None;
                 // Same pairing as `do` above: owe the frame, then wake. A
                 // screenshot of an idle seat is precisely the case where no
@@ -818,7 +887,13 @@ impl Introspect for OmoyaIntrospect {
                 if let Some(p) = self.wake.get() {
                     p.ping();
                 }
-                Ok(serde_json::json!({ "requested": path }))
+                Ok(serde_json::json!({
+                    "requested": path,
+                    "request_id": id,
+                    "region": region.map(|r| vec![r.0, r.1, r.2, r.3]),
+                    "hash_only": hash_only,
+                    "note": "compare capture_result.request_id against this",
+                }))
             }
             // ── ★ THE TOOL THAT SEES WHAT A SCREENSHOT CANNOT ────────
             // `capture` reads the shadow, and asking for one forces a full
@@ -1165,5 +1240,69 @@ mod toplevel_table_tests {
             "client-side (client draws its own)",
             "absence must not be read as a ServerSide promise"
         );
+    }
+}
+
+#[cfg(test)]
+mod capture_identity_tests {
+    use super::*;
+
+    /// ★ THE STALE-SUCCESS READ (observed 2026-08-29).
+    ///
+    /// `capture_result` outlives the client that asked for it: the compositor
+    /// is long-lived, a socket client is not. A fresh client reading the leaf
+    /// gets whatever a PREVIOUS client's request left, and without an identity
+    /// on the answer it cannot tell that from its own — a stale success read
+    /// as fresh, which is the worst shape a diagnostic can take.
+    #[test]
+    fn every_request_gets_a_distinct_id() {
+        let i = OmoyaIntrospect::default();
+        let ids: Vec<u64> = (0..5)
+            .map(|_| {
+                i.request_seq
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                    + 1
+            })
+            .collect();
+        let mut sorted = ids.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), ids.len(), "ids must not repeat: {ids:?}");
+        assert!(ids.windows(2).all(|w| w[1] > w[0]), "must increase: {ids:?}");
+    }
+
+    /// The id must start above zero, so "no request yet" (0 / absent) is never
+    /// confusable with "request number zero".
+    #[test]
+    fn the_first_id_is_not_zero() {
+        let i = OmoyaIntrospect::default();
+        let first = i
+            .request_seq
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
+        assert_eq!(first, 1, "a zero id would collide with 'never requested'");
+    }
+
+    /// A region request carries its rectangle rather than silently capturing
+    /// the whole output — the failure mode where a caller asks for 100x100 and
+    /// reasons about a full-screen image.
+    #[test]
+    fn a_region_request_keeps_its_rectangle() {
+        let r = CaptureRequest {
+            id: 7,
+            path: "/tmp/x.ppm".into(),
+            region: Some((10, 20, 30, 40)),
+            hash_only: true,
+        };
+        assert_eq!(r.region, Some((10, 20, 30, 40)));
+        assert!(r.hash_only);
+        // And a full-output request is DISTINCT from a zero-sized region.
+        let full = CaptureRequest {
+            id: 8,
+            path: "/tmp/y.ppm".into(),
+            region: None,
+            hash_only: false,
+        };
+        assert!(full.region.is_none(), "None means whole output, not 0x0");
     }
 }

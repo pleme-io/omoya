@@ -44,6 +44,11 @@ default = []
 nested = ["smithay/backend_winit"]
 
 [dependencies]
+# ★ For region-hash capture. The fleet's content-addressing hash, already in
+# this workspace's lock via a transitive dep -- declared directly here because
+# `capture` calls it, and a direct call on a transitive dep is a version the
+# lock can move out from under us.
+blake3 = "1"
 shikumi = "0.1"
 serde_yaml = "0.9"
 # The frame-necessity decision. Its own repo and its own crate as of

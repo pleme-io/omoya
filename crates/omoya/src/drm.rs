@@ -1355,13 +1355,25 @@ where
                     // Taking the request CLEARS it (above), so this is one-shot
                     // by construction: a capture every frame would fill the
                     // disk and change the timing it exists to observe.
-                    if let Some(path) = requested {
+                    if let Some(req) = requested {
+                        let path = req.path.clone();
                         let size = (mode.size.w, mode.size.h);
                         let outcome =
-                            match capture(&mut renderer, &fb, size, std::path::Path::new(&path)) {
-                                Ok(()) => {
-                                    tracing::info!(path = %path, w = size.0, h = size.1, "captured");
-                                    format!("ok: {path} ({}x{})", size.0, size.1)
+                            match capture(
+                                &mut renderer,
+                                &fb,
+                                size,
+                                std::path::Path::new(&path),
+                                req.region,
+                                req.hash_only,
+                            ) {
+                                Ok(v) => {
+                                    tracing::info!(path = %path, "captured");
+                                    if req.hash_only {
+                                        format!("hash: {v}")
+                                    } else {
+                                        format!("ok: {v}")
+                                    }
                                 }
                                 // Reported, never fatal: a failed screenshot
                                 // must not take down the seat it was meant to
@@ -1373,10 +1385,19 @@ where
                                     format!("error: {e}")
                                 }
                             };
+                        // ★ STAMPED WITH THE REQUEST ID. A result without one
+                        // is anonymous, and a client that reconnects reads a
+                        // predecessor's success as its own -- observed.
                         *introspect
                             .capture_result
                             .lock()
-                            .unwrap_or_else(|e| e.into_inner()) = Some(outcome);
+                            .unwrap_or_else(|e| e.into_inner()) = Some(
+                            serde_json::json!({
+                                "request_id": req.id,
+                                "outcome": outcome,
+                            })
+                            .to_string(),
+                        );
                     }
 
                     // Published so the cost of a frame is a number anyone
@@ -1661,19 +1682,54 @@ pub fn capture<R>(
     framebuffer: &<R as smithay::backend::renderer::RendererSuper>::Framebuffer<'_>,
     size: (i32, i32),
     path: &Path,
-) -> Result<(), Box<dyn std::error::Error>>
+    // ── ★ REGION + HASH ─────────────────────────────────────────────────────
+    //
+    // `copy_framebuffer` ALREADY takes and clips a rectangle; only this
+    // function hardcoded full-size. Region capture is therefore wiring, not
+    // new readback machinery.
+    //
+    // `hash_only` exists because a 1920x1080 PPM is 6.2 MB and the question is
+    // usually "did it change", not "what is every pixel". Measured on plo:
+    // three captures 0.5 s apart are BIT-IDENTICAL, and across 70 s only the
+    // top 28 rows differ -- the 1 Hz clock in the bar. So a hash is a real
+    // change-oracle, and excluding the bar is what makes it usable rather than
+    // a detector of the clock.
+    region: Option<(i32, i32, i32, i32)>,
+    hash_only: bool,
+) -> Result<String, Box<dyn std::error::Error>>
 where
     R: smithay::backend::renderer::ExportMem,
     R::Error: Send + Sync + 'static,
 {
     use std::io::Write;
 
-    let region = smithay::utils::Rectangle::from_size((size.0, size.1).into());
-    let mapping = renderer.copy_framebuffer(framebuffer, region, DrmFourcc::Argb8888)?;
+    // Clip to the output. A region reaching past the edge is CLAMPED rather
+    // than refused: a caller asking for the bottom-right corner should not have
+    // to know the exact mode to get it.
+    let (rx, ry, rw, rh) = region.unwrap_or((0, 0, size.0, size.1));
+    let rx = rx.clamp(0, size.0);
+    let ry = ry.clamp(0, size.1);
+    let rw = rw.clamp(1, size.0 - rx);
+    let rh = rh.clamp(1, size.1 - ry);
+    let rect = smithay::utils::Rectangle::new((rx, ry).into(), (rw, rh).into());
+    let mapping = renderer.copy_framebuffer(framebuffer, rect, DrmFourcc::Argb8888)?;
     let bytes = renderer.map_texture(&mapping)?;
 
-    let mut out = Vec::with_capacity(15 + (size.0 * size.1 * 3) as usize);
-    out.extend_from_slice(format!("P6\n{} {}\n255\n", size.0, size.1).as_bytes());
+    if hash_only {
+        // ★ blake3 over the RGB bytes in the same order the PPM would hold
+        // them, so a hash and an image of the same region describe the same
+        // thing -- otherwise two oracles disagree about what "unchanged" means.
+        let mut h = blake3::Hasher::new();
+        for px in bytes.chunks_exact(4) {
+            h.update(&[px[2], px[1], px[0]]);
+        }
+        let digest = h.finalize().to_hex().to_string();
+        tracing::info!(hash = %digest, x = rx, y = ry, w = rw, h = rh, "region hash");
+        return Ok(digest);
+    }
+
+    let mut out = Vec::with_capacity(15 + (rw * rh * 3) as usize);
+    out.extend_from_slice(format!("P6\n{rw} {rh}\n255\n").as_bytes());
     // ARGB8888 little-endian lands in memory as B,G,R,A. PPM wants R,G,B — get
     // this backwards and the screenshot is a plausible image with the red and
     // blue channels swapped, which on a BLUE-GREY palette like Nord reads as
@@ -1684,8 +1740,8 @@ where
         out.push(px[0]);
     }
     std::fs::File::create(path)?.write_all(&out)?;
-    tracing::info!(path = %path.display(), w = size.0, h = size.1, "wrote framebuffer capture");
-    Ok(())
+    tracing::info!(path = %path.display(), w = rw, h = rh, "wrote framebuffer capture");
+    Ok(format!("{}", path.display()))
 }
 
 /// M4c — feed real keyboards and pointers into the seat.
