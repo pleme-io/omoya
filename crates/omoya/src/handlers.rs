@@ -244,8 +244,67 @@ impl XdgShellHandler for Omoya {
         surface.send_repositioned(token);
     }
 
-    /// M2: accepted and ignored — see the module header.
-    fn move_request(&mut self, _surface: ToplevelSurface, _seat: wl_seat::WlSeat, _serial: Serial) {}
+    /// Start an interactive move.
+    ///
+    /// ★ WAS "M2: accepted and ignored". On plo that meant a desktop whose
+    /// windows could not be moved at all -- the operator's report was "the
+    /// windows have no borders for me to drag around and such".
+    ///
+    /// ★ The GRAB START DATA IS VALIDATED, not assumed. `pointer.grab_start_data`
+    /// returns None when the serial does not match a real button press, which is
+    /// how a client asking to be dragged with no button held is refused. Taking
+    /// the request on trust lets any client move itself at any time, which is a
+    /// window that walks off on its own.
+    fn move_request(&mut self, surface: ToplevelSurface, seat: wl_seat::WlSeat, serial: Serial) {
+        let Some(seat) = Seat::<Self>::from_resource(&seat) else {
+            return;
+        };
+        let Some(pointer) = seat.get_pointer() else {
+            return;
+        };
+        let wl_surface = surface.wl_surface();
+        // ★ TWO CHECKS, NOT ONE. `has_grab(serial)` validates that THIS serial
+        // corresponds to a real press the compositor issued -- without it any
+        // client could move itself at any time, which is a window that walks
+        // off on its own. `grab_start_data()` then supplies where that press
+        // happened. Neither substitutes for the other.
+        if !pointer.has_grab(serial) {
+            tracing::debug!("move_request refused — serial does not match a live grab");
+            return;
+        }
+        let Some(start_data) = pointer.grab_start_data() else {
+            // Refused, and deliberately silent to the client: the protocol has
+            // no "no" for this, and a compositor is permitted to decline.
+            tracing::debug!("move_request refused — no matching button grab");
+            return;
+        };
+        let Some(window) = self
+            .space
+            .elements()
+            .find(|w| w.toplevel().map(smithay::wayland::shell::xdg::ToplevelSurface::wl_surface) == Some(wl_surface))
+            .cloned()
+        else {
+            return;
+        };
+        let Some(geo) = self.space.element_geometry(&window) else {
+            return;
+        };
+        let p = start_data.location;
+        let offset = smithay::utils::Point::<i32, smithay::utils::Logical>::from((
+            geo.loc.x - p.x as i32,
+            geo.loc.y - p.y as i32,
+        ));
+        pointer.set_grab(
+            self,
+            crate::grab::MoveGrab {
+                start_data,
+                window,
+                offset,
+            },
+            serial,
+            smithay::input::pointer::Focus::Clear,
+        );
+    }
 
     /// M2: accepted and ignored — see the module header.
     fn resize_request(

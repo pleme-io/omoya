@@ -27,6 +27,7 @@ mod deed;
 mod drm;
 mod handlers;
 mod introspect;
+mod grab;
 mod mcp;
 mod input;
 mod layout;
