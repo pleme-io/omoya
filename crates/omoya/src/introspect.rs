@@ -163,6 +163,32 @@ pub struct OmoyaIntrospect {
     /// `presented < frames` on an idle seat is the measurement that says it is
     /// working. Equal counts say it is not.
     pub presented: AtomicU64,
+
+    // ── ★ WHAT THE CLIENT ACTUALLY DECLARED ──────────────────────────────
+    //
+    // The stale-pixel hunt of 2026-08-30 stalled on a question no counter
+    // could answer: mado's own `grid_damage.rs` asserts it never calls
+    // `wl_surface.damage_buffer`, so "the whole surface is reported dirty on
+    // every present". If that were true the negative-control probe would have
+    // measured ZERO stale pixels. It measured 34.
+    //
+    // One of the two is wrong and NO amount of reading settles it, because the
+    // claim is about what a foreign library (wgpu/Mesa WSI) emits at run time,
+    // not about our source. So: count it at the seam where it arrives.
+    //
+    // `empty` is the interesting one. An import with empty damage takes the
+    // full-copy path (`nuri_renderer` :966), so an all-empty distribution
+    // means the texture is always complete and the under-report is downstream
+    // in ELEMENT damage; a mixed distribution means the client is declaring
+    // fine-grained damage and mado's comment is stale.
+    /// shm imports serviced, total.
+    pub shm_imports: AtomicU64,
+    /// …of which arrived with EMPTY client damage (⇒ full copy).
+    pub shm_imports_empty_damage: AtomicU64,
+    /// Damage rectangles in the most recent import.
+    pub shm_damage_rects: AtomicU64,
+    /// Total damaged area, in pixels, in the most recent import.
+    pub shm_damage_area: AtomicU64,
     /// The rectangles the layout last assigned, as `"x,y,wxh"` per window.
     ///
     /// ★ PUBLISHED BECAUSE GUESSING AT A LAYOUT FROM PIXELS IS BACKWARDS.
@@ -759,6 +785,21 @@ impl Introspect for OmoyaIntrospect {
             "blit_fast" => Ok(n(&self.blit_fast)),
             "blit_slow" => Ok(n(&self.blit_slow)),
             "blit_general" => Ok(n(&self.blit_general)),
+            "shm_imports" => Ok(serde_json::json!(
+                self.shm_imports.load(std::sync::atomic::Ordering::Relaxed)
+            )),
+            "shm_imports_empty_damage" => Ok(serde_json::json!(
+                self.shm_imports_empty_damage
+                    .load(std::sync::atomic::Ordering::Relaxed)
+            )),
+            "shm_damage_rects" => Ok(serde_json::json!(
+                self.shm_damage_rects
+                    .load(std::sync::atomic::Ordering::Relaxed)
+            )),
+            "shm_damage_area" => Ok(serde_json::json!(
+                self.shm_damage_area
+                    .load(std::sync::atomic::Ordering::Relaxed)
+            )),
             "gather_us" => Ok(n(&self.gather_us)),
             // ★ WHICH MODE IS LIVE. Reading `td_dirty_pct` without this is a
             // measurement with no idea whether it changed anything: `verify`
@@ -1162,6 +1203,10 @@ impl Introspect for OmoyaIntrospect {
             "chord_deeds",
             "focus_rect",
             "frame_us",
+            "shm_imports",
+            "shm_imports_empty_damage",
+            "shm_damage_rects",
+            "shm_damage_area",
             "blit_fast",
             "blit_general",
             "blit_slow",

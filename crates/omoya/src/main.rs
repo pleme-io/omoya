@@ -550,7 +550,11 @@ where
             &drm_fd,
             &target,
             introspect.clone(),
-            crate::nuri_renderer::NuriRenderer::new(),
+            {
+                let mut r = crate::nuri_renderer::NuriRenderer::new();
+                r.set_introspect(introspect.clone());
+                r
+            },
         )?,
     }
 

@@ -467,6 +467,10 @@ impl Texture for NuriFramebuffer<'_> {
 #[derive(Debug)]
 pub struct NuriRenderer {
     debug: DebugFlags,
+    /// Optional introspection sink, so the shm import can COUNT what the
+    /// client declared. `Option` because `Default`/`new()` must keep working
+    /// for the tests and the winit backend, which have no sidecar.
+    introspect: Option<std::sync::Arc<crate::introspect::OmoyaIntrospect>>,
     /// The last texture imported for each shm buffer, kept so a re-import
     /// can copy only what changed.
     ///
@@ -519,10 +523,18 @@ impl Default for NuriRenderer {
 }
 
 impl NuriRenderer {
+    /// Attach the introspection sink. Separate from `new()` so no existing
+    /// construction site has to change (MODULARIZE, DON'T DELETE applied to a
+    /// constructor).
+    pub fn set_introspect(&mut self, i: std::sync::Arc<crate::introspect::OmoyaIntrospect>) {
+        self.introspect = Some(i);
+    }
+
     #[must_use]
     pub fn new() -> Self {
         // `DebugFlags` has no Default impl — spelled out rather than derived.
         Self {
+            introspect: None,
             debug: DebugFlags::empty(),
             shadow_pool: Arc::new(std::sync::Mutex::new(Vec::new())),
             shm_cache: std::collections::HashMap::new(),
@@ -901,6 +913,24 @@ impl ImportMemWl for NuriRenderer {
         damage: &[Rectangle<i32, BufferCoord>],
     ) -> Result<Self::TextureId, Self::Error> {
         use smithay::wayland::shm;
+
+        // ★ COUNT WHAT ARRIVED, at the one place it is knowable. See the
+        // field docs in `introspect` for why reading source could not settle
+        // this.
+        if let Some(i) = self.introspect.as_ref() {
+            use std::sync::atomic::Ordering::Relaxed;
+            i.shm_imports.fetch_add(1, Relaxed);
+            if damage.is_empty() {
+                i.shm_imports_empty_damage.fetch_add(1, Relaxed);
+            }
+            i.shm_damage_rects.store(damage.len() as u64, Relaxed);
+            let area: i64 = damage
+                .iter()
+                .map(|r| i64::from(r.size.w) * i64::from(r.size.h))
+                .sum();
+            i.shm_damage_area
+                .store(u64::try_from(area).unwrap_or(0), Relaxed);
+        }
 
         shm::with_buffer_contents(buffer, |ptr, len, data| {
             let fourcc = shm::shm_format_to_fourcc(data.format)
