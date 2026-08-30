@@ -1,12 +1,12 @@
 {
   "schema_version": 2,
-  "cargo_lock_sha256": "1a59314c01d43e73740b6a21ed1f7884ab41b63d7ff8b3607c552c20214c0af2",
+  "cargo_lock_sha256": "eec9b229e028adf5c490b65b261e850a7a442974d27d5657f00cd2f7024adbcc",
   "manifest_sha256": {
-    "Cargo.toml": "35da0fd8dd77a38585645e0f52ec7dff3718b3bb737cd5152155cd817c3e8f30",
+    "Cargo.toml": "1fc6f218f066fc56693957a310ac8d5d4c2c8f8cb9b34f2c88c82007ba014bed",
     "crates/hairetsu/Cargo.toml": "67a784b3f0dc716e74f9257bed09bef7c637618269586ecf20b1ff223114b0da",
     "crates/nuri/Cargo.toml": "3116435ecbd4619097d2879f5a26924834f5550aa4c732e667c3617e28d2865d",
     "crates/omoya-spec/Cargo.toml": "75cd6d31f2ef617df89556610445abab8cf9cddb49d7bbf04c28ac5b7fc89031",
-    "crates/omoya/Cargo.toml": "1973ee3e2700caeb9138576835669b5658d1f971c650ef202b9f780313718403",
+    "crates/omoya/Cargo.toml": "a4ac61f415edf6ddc731594acfbfb2455a7d7d4a216e309e15da48c8d29d454f",
     "crates/xkbcommon-hairetsu/Cargo.toml": "47e976fa1c8c185b17a5c2ced9fcec14a3fa5521a7bc9c046f3d23cf94af19b2"
   },
   "target_resolves": {
@@ -2590,7 +2590,7 @@
           "std"
         ]
       },
-      "nuri-0.1.57": {
+      "nuri-0.1.58": {
         "runtime_dependencies": [
           {
             "name": "thiserror",
@@ -2611,11 +2611,21 @@
         "build_dependencies": [],
         "features": []
       },
-      "omoya-0.1.57": {
+      "omoya-0.1.58": {
         "runtime_dependencies": [
           {
             "name": "awase",
             "package_key": "awase-0.1.10",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "blake3",
+            "package_key": "blake3-1.8.7",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -2685,7 +2695,7 @@
           },
           {
             "name": "nuri",
-            "package_key": "nuri-0.1.57",
+            "package_key": "nuri-0.1.58",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -2695,7 +2705,7 @@
           },
           {
             "name": "omoya_spec",
-            "package_key": "omoya-spec-0.1.57",
+            "package_key": "omoya-spec-0.1.58",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -2860,7 +2870,7 @@
           "default"
         ]
       },
-      "omoya-spec-0.1.57": {
+      "omoya-spec-0.1.58": {
         "runtime_dependencies": [
           {
             "name": "thiserror",
@@ -10075,7 +10085,7 @@
       "edition": "2021",
       "build_script": "build.rs"
     },
-    "nuri-0.1.57": {
+    "nuri-0.1.58": {
       "edition": "2024",
       "lib_target": {
         "name": "nuri",
@@ -10085,7 +10095,7 @@
     "okiba-0.2.1": {
       "edition": "2024"
     },
-    "omoya-0.1.57": {
+    "omoya-0.1.58": {
       "edition": "2024",
       "binaries": [
         {
@@ -10094,7 +10104,7 @@
         }
       ]
     },
-    "omoya-spec-0.1.57": {
+    "omoya-spec-0.1.58": {
       "edition": "2024",
       "lib_target": {
         "name": "omoya_spec",
