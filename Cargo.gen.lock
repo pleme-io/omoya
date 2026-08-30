@@ -1,8 +1,8 @@
 {
   "schema_version": 2,
-  "cargo_lock_sha256": "65afe2b6f80ca3a9e7d5e79daa6158907f22c460e7bb1c2c017c401dec351ccf",
+  "cargo_lock_sha256": "3dcd676c77fb92a101a6a87c24dc65a56028d1e4c1c59b384a680be766e89b54",
   "manifest_sha256": {
-    "Cargo.toml": "51a1cbc8676001b9b57462d3b8b8284ef472b354e5424c68da40a4fe4e59d8d8",
+    "Cargo.toml": "c28c687e6ce3635080379f6a7a135b5fcc79ef8da676cc853698446dc71f5cc8",
     "crates/hairetsu/Cargo.toml": "67a784b3f0dc716e74f9257bed09bef7c637618269586ecf20b1ff223114b0da",
     "crates/nuri/Cargo.toml": "3116435ecbd4619097d2879f5a26924834f5550aa4c732e667c3617e28d2865d",
     "crates/omoya-spec/Cargo.toml": "75cd6d31f2ef617df89556610445abab8cf9cddb49d7bbf04c28ac5b7fc89031",
@@ -2590,7 +2590,7 @@
           "std"
         ]
       },
-      "nuri-0.1.62": {
+      "nuri-0.1.63": {
         "runtime_dependencies": [
           {
             "name": "thiserror",
@@ -2611,7 +2611,7 @@
         "build_dependencies": [],
         "features": []
       },
-      "omoya-0.1.62": {
+      "omoya-0.1.63": {
         "runtime_dependencies": [
           {
             "name": "awase",
@@ -2695,7 +2695,7 @@
           },
           {
             "name": "nuri",
-            "package_key": "nuri-0.1.62",
+            "package_key": "nuri-0.1.63",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -2705,7 +2705,7 @@
           },
           {
             "name": "omoya_spec",
-            "package_key": "omoya-spec-0.1.62",
+            "package_key": "omoya-spec-0.1.63",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -2870,7 +2870,7 @@
           "default"
         ]
       },
-      "omoya-spec-0.1.62": {
+      "omoya-spec-0.1.63": {
         "runtime_dependencies": [
           {
             "name": "thiserror",
@@ -10085,7 +10085,7 @@
       "edition": "2021",
       "build_script": "build.rs"
     },
-    "nuri-0.1.62": {
+    "nuri-0.1.63": {
       "edition": "2024",
       "lib_target": {
         "name": "nuri",
@@ -10095,7 +10095,7 @@
     "okiba-0.2.1": {
       "edition": "2024"
     },
-    "omoya-0.1.62": {
+    "omoya-0.1.63": {
       "edition": "2024",
       "binaries": [
         {
@@ -10104,7 +10104,7 @@
         }
       ]
     },
-    "omoya-spec-0.1.62": {
+    "omoya-spec-0.1.63": {
       "edition": "2024",
       "lib_target": {
         "name": "omoya_spec",
