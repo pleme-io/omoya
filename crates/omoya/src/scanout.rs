@@ -41,12 +41,9 @@
 //!
 //! `pending-omoya-planes: overlay planes and a hardware cursor`
 
-use smithay::backend::allocator::{
-    Allocator, Buffer as _, Fourcc, Modifier,
-    dumb::DumbBuffer,
-};
-use smithay::backend::drm::{DrmDeviceFd, DrmSurface, PlaneConfig, PlaneState};
+use smithay::backend::allocator::{Allocator, Buffer as _, Fourcc, Modifier, dumb::DumbBuffer};
 use smithay::backend::drm::exporter::ExportFramebuffer;
+use smithay::backend::drm::{DrmDeviceFd, DrmSurface, PlaneConfig, PlaneState};
 use smithay::utils::{Physical, Rectangle, Transform};
 
 /// One side of the flip chain.
@@ -157,7 +154,10 @@ impl DirectScanout {
                 )
                 .map_err(|e| Error::Export(format!("{e:?}")))?
                 .ok_or_else(|| Error::Export("driver returned no framebuffer".into()))?;
-            Ok(Slot { buffer, framebuffer })
+            Ok(Slot {
+                buffer,
+                framebuffer,
+            })
         };
 
         let slots = [make()?, make()?];
@@ -233,9 +233,13 @@ impl DirectScanout {
         // also goes true when a connector or mode changed under us, so a
         // hotplug re-modesets rather than flipping into a stale configuration.
         if self.modeset && !self.surface.commit_pending() {
-            self.surface.page_flip([state], true).map_err(|e| Error::Flip(e.to_string()))?;
+            self.surface
+                .page_flip([state], true)
+                .map_err(|e| Error::Flip(e.to_string()))?;
         } else {
-            self.surface.commit([state], true).map_err(|e| Error::Flip(e.to_string()))?;
+            self.surface
+                .commit([state], true)
+                .map_err(|e| Error::Flip(e.to_string()))?;
             self.modeset = true;
         }
 

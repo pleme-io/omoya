@@ -12,11 +12,13 @@
 //! dragged is asking, not commanding. Window-management POLICY is omoya's own
 //! essence (`theory/OMOYA.md` §3) and lands with the mode faces, not here.
 
+use smithay::backend::renderer::utils::on_commit_buffer_handler;
 use smithay::{
     delegate_compositor, delegate_data_device, delegate_output, delegate_seat, delegate_shm,
     delegate_xdg_shell,
-    desktop::{PopupKind, PopupManager, Space, Window, find_popup_root_surface,
-        get_popup_toplevel_coords},
+    desktop::{
+        PopupKind, PopupManager, Space, Window, find_popup_root_surface, get_popup_toplevel_coords,
+    },
     input::{Seat, SeatHandler, SeatState},
     reexports::{
         wayland_protocols::xdg::shell::server::xdg_toplevel,
@@ -47,7 +49,6 @@ use smithay::{
         shm::{ShmHandler, ShmState},
     },
 };
-use smithay::backend::renderer::utils::on_commit_buffer_handler;
 
 use crate::state::{ClientState, Omoya};
 
@@ -99,8 +100,7 @@ impl CompositorHandler for Omoya {
                 ),
             )
         {
-            self.introspect
-                .publish_truedamage(&self.shadows, &v);
+            self.introspect.publish_truedamage(&self.shadows, &v);
         }
         on_commit_buffer_handler::<Self>(surface);
         // ★ THE ORDINARY REASON A FRAME EXISTS. Every pixel a client changes
@@ -160,9 +160,10 @@ impl CompositorHandler for Omoya {
     fn destroyed(&mut self, surface: &WlSurface) {
         use smithay::reexports::wayland_server::Resource as _;
         self.shadows.forget(surface.id().protocol_id());
-        self.introspect
-            .td_shadows
-            .store(self.shadows.len() as u64, std::sync::atomic::Ordering::Relaxed);
+        self.introspect.td_shadows.store(
+            self.shadows.len() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
     }
 }
 
@@ -221,7 +222,11 @@ impl XdgShellHandler for Omoya {
                 });
                 t.send_pending_configure();
             }
-            kb.set_focus(self, window.toplevel().map(|t| t.wl_surface().clone()), serial);
+            kb.set_focus(
+                self,
+                window.toplevel().map(|t| t.wl_surface().clone()),
+                serial,
+            );
         }
     }
 
@@ -281,7 +286,11 @@ impl XdgShellHandler for Omoya {
         let Some(window) = self
             .space
             .elements()
-            .find(|w| w.toplevel().map(smithay::wayland::shell::xdg::ToplevelSurface::wl_surface) == Some(wl_surface))
+            .find(|w| {
+                w.toplevel()
+                    .map(smithay::wayland::shell::xdg::ToplevelSurface::wl_surface)
+                    == Some(wl_surface)
+            })
             .cloned()
         else {
             return;
@@ -515,9 +524,7 @@ pub fn handle_commit(popups: &mut PopupManager, space: &Space<Window>, surface: 
                 .expect("surface data mutex poisoned")
                 .initial_configure_sent
         });
-        if !initial_configure_sent
-            && let Some(toplevel) = window.toplevel()
-        {
+        if !initial_configure_sent && let Some(toplevel) = window.toplevel() {
             toplevel.send_configure();
         }
     }
@@ -526,7 +533,8 @@ pub fn handle_commit(popups: &mut PopupManager, space: &Space<Window>, surface: 
     if let Some(PopupKind::Xdg(xdg)) = popups.find_popup(surface)
         && !xdg.is_initial_configure_sent()
     {
-        xdg.send_configure().expect("initial popup configure failed");
+        xdg.send_configure()
+            .expect("initial popup configure failed");
     }
 }
 

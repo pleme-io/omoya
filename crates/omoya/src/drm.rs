@@ -69,7 +69,6 @@ use smithay::{
     utils::DeviceFd,
 };
 
-
 use crate::theme;
 
 /// What the scanout probe found: a connector with a display on it, the mode to
@@ -304,7 +303,11 @@ pub fn probe(device: &DrmDevice) -> Result<ScanoutTarget, Box<dyn std::error::Er
 #[must_use]
 pub fn output_for(target: &ScanoutTarget) -> (Output, OutputMode) {
     let mode = OutputMode {
-        size: (i32::from(target.mode.size().0), i32::from(target.mode.size().1)).into(),
+        size: (
+            i32::from(target.mode.size().0),
+            i32::from(target.mode.size().1),
+        )
+            .into(),
         // DRM reports vertical refresh in Hz; smithay wants mHz.
         refresh: (target.mode.vrefresh() * 1000) as i32,
     };
@@ -626,8 +629,11 @@ where
         let copied = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
         let blended = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
         let general = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
-        let _ = crate::nuri_renderer::BLIT_COUNTS
-            .set((copied.clone(), blended.clone(), general.clone()));
+        let _ = crate::nuri_renderer::BLIT_COUNTS.set((
+            copied.clone(),
+            blended.clone(),
+            general.clone(),
+        ));
         blit_counters = Some((copied, blended, general));
     }
 
@@ -1210,6 +1216,71 @@ where
                         &elements,
                         smithay::backend::renderer::Color32F::from(clear),
                     )?;
+                    // Owned, because the control render below borrows the
+                    // tracker again and `result` would still be alive at the
+                    // flush. Cloning a handful of rectangles is the cheapest
+                    // way to keep both.
+                    let drawn: Option<Vec<_>> = result.damage.cloned();
+                    drop(result);
+
+                    // ── ★ THE STALE DIFFERENTIAL — A NEGATIVE CONTROL ────────
+                    //
+                    // This replaced a shadow-vs-scanout comparison, which was
+                    // CORRECT until `flush_damage` became a full copy and then
+                    // silently became VACUOUS: a full copy makes those two byte
+                    // ranges equal by construction, so the scan could not report
+                    // a defect no matter what was on the screen. It did not go
+                    // red or go quiet — it went permanently, unfalsifiably green.
+                    //
+                    // The honest question is not "did the copy arrive" (it now
+                    // always does) but "did the natural-age render DRAW
+                    // everything a full repaint would have?" So the probe renders
+                    // the SAME scene twice, back to back inside one frame:
+                    //
+                    //   A = render at the natural buffer age   (what you saw)
+                    //   B = render at age 0, a full repaint    (ground truth)
+                    //
+                    // B is the negative control. A ≠ B means damage was
+                    // under-reported and the difference IS the stale content, at
+                    // exactly the pixels the operator is looking at.
+                    //
+                    // Same frame, same element list, no time gap — so a moving
+                    // cursor or a ticking clock cannot masquerade as staleness,
+                    // which a two-frame version of this could never rule out.
+                    //
+                    // The second render also REPAIRS the frame, so arming the
+                    // probe costs one extra composite and leaves the screen
+                    // correct. That is deliberate: an instrument that leaves the
+                    // defect on screen tempts you to keep it armed.
+                    let stale_probe = introspect
+                        .stale_request
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .take();
+                    let stale_baseline: Option<Vec<u8>> = if stale_probe.is_some() {
+                        let (w, h) = (mode.size.w, mode.size.h);
+                        renderer
+                            .copy_framebuffer(
+                                &fb,
+                                smithay::utils::Rectangle::from_size((w, h).into()),
+                                DrmFourcc::Argb8888,
+                            )
+                            .ok()
+                            .and_then(|m| renderer.map_texture(&m).ok().map(<[u8]>::to_vec))
+                    } else {
+                        None
+                    };
+                    if stale_baseline.is_some() {
+                        // Ground truth. `age = 0` is the whole point — it is what
+                        // makes this a control rather than a second sample.
+                        damage_tracker.render_output(
+                            &mut renderer,
+                            &mut fb,
+                            0,
+                            &elements,
+                            smithay::backend::renderer::Color32F::from(clear),
+                        )?;
+                    }
 
                     // ── ★ THE ONE WRITE TO SCANOUT MEMORY IN THE FRAME ──
                     //
@@ -1228,7 +1299,7 @@ where
                     // everything for an empty slice.
                     {
                         use crate::nuri_renderer::ScanoutFlush as _;
-                        fb.flush_damage(result.damage.map_or(&[], |d| d.as_slice()));
+                        fb.flush_damage(drawn.as_deref().unwrap_or(&[]));
                     }
 
                     // ── ★ THE STALE SCAN — AFTER THE FLUSH, BEFORE THE FLIP ──
@@ -1243,12 +1314,26 @@ where
                     // A frame earlier and the flush has not happened; a frame
                     // later and the buffers have swapped and the evidence is
                     // gone.
-                    if let Some(mask_path) = introspect
-                        .stale_request
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .take()
-                    {
+                    // ★ `blind` is an ANSWER. If the baseline snapshot failed
+                    // the probe still consumed the request, and reporting nothing
+                    // would leave the caller polling a result that can never
+                    // arrive — the exact failure this scan exists to end. Say
+                    // which of the four kotae outcomes happened.
+                    if let (Some(path), None) = (stale_probe.as_ref(), stale_baseline.as_ref()) {
+                        *introspect
+                            .stale_result
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner()) = Some(
+                            serde_json::json!({
+                                "outcome": "blind",
+                                "reason": "could not read back the natural-age \
+                                           render; no baseline, so no control",
+                                "path": path,
+                            })
+                            .to_string(),
+                        );
+                    }
+                    if let (Some(mask_path), Some(baseline)) = (stale_probe, stale_baseline) {
                         use crate::nuri_renderer::ScanoutFlush as _;
                         let (w, h) = (mode.size.w, mode.size.h);
                         #[allow(clippy::cast_sign_loss)]
@@ -1260,8 +1345,13 @@ where
                         ) {
                             Ok(m) => match renderer.map_texture(&m) {
                                 Ok(shadow) => {
-                                    let scanout = fb.scanout_bytes();
-                                    let mut rep = crate::stale::scan(shadow, scanout, wu, hu);
+                                    // expected = the full repaint (ground
+                                    // truth), actual = what the natural-age
+                                    // render actually produced. Argument order
+                                    // is `scan(expected, actual)`; swapping it
+                                    // inverts every attribution silently.
+                                    let mut rep =
+                                        crate::stale::scan(shadow, &baseline, wu, hu);
                                     // Attribute against what the compositor
                                     // itself drew, so a region is named by
                                     // subsystem rather than counted.
@@ -1298,7 +1388,7 @@ where
                                     });
                                     crate::stale::attribute(&mut rep, &named);
                                     let img =
-                                        crate::stale::render_mask(shadow, scanout, wu, hu);
+                                        crate::stale::render_mask(shadow, &baseline, wu, hu);
                                     let wrote = std::fs::write(&mask_path, &img).is_ok();
                                     let regions: Vec<serde_json::Value> = rep
                                         .regions
@@ -1426,7 +1516,7 @@ where
                             std::sync::atomic::Ordering::Relaxed,
                         );
                     }
-                    result.damage.is_some()
+                    drawn.is_some()
                 };
 
                 // ★ NOTHING CHANGED ⇒ NO FLIP. This is the second half of the

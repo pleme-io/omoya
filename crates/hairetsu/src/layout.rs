@@ -5,8 +5,8 @@
 //! source, so the table we resolve against and the table clients compile can
 //! never disagree.
 
-use xkeysym::key;
 use xkeysym::RawKeysym;
+use xkeysym::key;
 
 /// How a key selects its shift level.
 ///
@@ -55,7 +55,12 @@ const fn k(
     kind: KeyType,
     levels: &'static [RawKeysym],
 ) -> KeyEntry {
-    KeyEntry { keycode, name, kind, levels }
+    KeyEntry {
+        keycode,
+        name,
+        kind,
+        levels,
+    }
 }
 
 use KeyType::{Alphabetic, Keypad, OneLevel, TwoLevel};
@@ -177,7 +182,9 @@ pub static US: &[KeyEntry] = &[
 /// Look up a key by XKB keycode.
 #[must_use]
 pub fn lookup(keycode: u32) -> Option<&'static KeyEntry> {
-    US.binary_search_by_key(&keycode, |e| e.keycode).ok().map(|i| &US[i])
+    US.binary_search_by_key(&keycode, |e| e.keycode)
+        .ok()
+        .map(|i| &US[i])
 }
 
 #[cfg(test)]

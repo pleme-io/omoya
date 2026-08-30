@@ -131,8 +131,12 @@ fn font_bytes() -> Option<&'static [u8]> {
                 continue;
             };
             for chunk in text.split("<dir").skip(1) {
-                let Some(open) = chunk.find('>') else { continue };
-                let Some(close) = chunk.find("</dir>") else { continue };
+                let Some(open) = chunk.find('>') else {
+                    continue;
+                };
+                let Some(close) = chunk.find("</dir>") else {
+                    continue;
+                };
                 if close <= open {
                     continue;
                 }
@@ -147,7 +151,9 @@ fn font_bytes() -> Option<&'static [u8]> {
         }
         // The declared roots first, then the conventional ones as a floor for
         // a system with no fontconfig at all.
-        roots.push(std::path::PathBuf::from("/run/current-system/sw/share/fonts"));
+        roots.push(std::path::PathBuf::from(
+            "/run/current-system/sw/share/fonts",
+        ));
         roots.push(std::path::PathBuf::from("/usr/share/fonts"));
 
         // Ordered by preference: the fleet face first, then anything
@@ -438,18 +444,18 @@ fn font() -> Option<&'static fontdue::Font> {
 fn baseline(font: &fontdue::Font, h: usize) -> f32 {
     #[allow(clippy::cast_precision_loss)]
     let h = h as f32;
-    font.horizontal_line_metrics(FONT_PX).map_or(
-        h / 2.0 + FONT_PX * 0.35,
-        |m| {
+    font.horizontal_line_metrics(FONT_PX)
+        .map_or(h / 2.0 + FONT_PX * 0.35, |m| {
             // ascent is positive up, descent negative down.
             let ink = m.ascent - m.descent;
             (h - ink) / 2.0 + m.ascent
-        },
-    )
+        })
 }
 
 fn measure(font: &fontdue::Font, s: &str) -> f32 {
-    s.chars().map(|c| font.metrics(c, FONT_PX).advance_width).sum()
+    s.chars()
+        .map(|c| font.metrics(c, FONT_PX).advance_width)
+        .sum()
 }
 
 /// A 2 px underline in the accent, sitting on the bottom hairline.

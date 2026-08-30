@@ -111,7 +111,10 @@ impl UeventMonitor {
 
         // pid = 0 lets the kernel assign the port id. Binding a fixed pid is
         // how two monitors in one process collide with EADDRINUSE.
-        bind(&sock, &netlink::SocketAddrNetlink::new(0, MONITOR_GROUP_UDEV))?;
+        bind(
+            &sock,
+            &netlink::SocketAddrNetlink::new(0, MONITOR_GROUP_UDEV),
+        )?;
 
         Ok(Self { sock })
     }

@@ -302,11 +302,7 @@ impl MockEnv {
 
 impl CompositorEnv for MockEnv {
     fn authenticate(&mut self, user: &str, secret: &str) -> Result<AuthProof, ModeError> {
-        if self
-            .accepted
-            .iter()
-            .any(|(u, s)| u == user && s == secret)
-        {
+        if self.accepted.iter().any(|(u, s)| u == user && s == secret) {
             Ok(AuthProof { _private: () })
         } else {
             Err(ModeError::AuthFailed)

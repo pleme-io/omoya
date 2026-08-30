@@ -73,7 +73,11 @@ pub fn evdev_for(c: char) -> Option<(u32, bool)> {
     const ROW4: &str = "zxcvbnm,./";
     const ROW4S: &str = "ZXCVBNM<>?";
 
-    let find = |s: &str, base: u32| s.chars().position(|x| x == c).map(|i| base + u32::try_from(i).unwrap_or(0));
+    let find = |s: &str, base: u32| {
+        s.chars()
+            .position(|x| x == c)
+            .map(|i| base + u32::try_from(i).unwrap_or(0))
+    };
 
     if let Some(k) = find(ROW1, 2) {
         return Some((k, false));
@@ -131,9 +135,8 @@ pub fn expand(s: &Synth) -> Result<Vec<Step>, String> {
             let mut out = Vec::with_capacity(t.len() * 2);
             let mut shift_held = false;
             for c in t.chars() {
-                let (code, shift) = evdev_for(c).ok_or_else(|| {
-                    format!("{c:?} is not on the us layout this seat serves")
-                })?;
+                let (code, shift) = evdev_for(c)
+                    .ok_or_else(|| format!("{c:?} is not on the us layout this seat serves"))?;
                 // ★ Bracket the shift, and only change it when it CHANGES.
                 // Pressing and releasing shift around every character works
                 // but generates 4x the events, and a run of capitals then
@@ -212,7 +215,15 @@ mod tests {
         let steps = expand(&Synth::Text("ABC".into())).unwrap();
         let shifts = steps
             .iter()
-            .filter(|s| matches!(s, Step::Key { code: KEY_LEFTSHIFT, .. }))
+            .filter(|s| {
+                matches!(
+                    s,
+                    Step::Key {
+                        code: KEY_LEFTSHIFT,
+                        ..
+                    }
+                )
+            })
             .count();
         assert_eq!(
             shifts, 2,
@@ -274,7 +285,8 @@ mod tests {
         // Not "every char maps" — a claim about the ones we DO map, so a typo
         // in a row string (two chars sharing a code, or an off-by-one base) is
         // caught rather than silently typing the wrong letter.
-        let mut seen: std::collections::HashMap<(u32, bool), char> = std::collections::HashMap::new();
+        let mut seen: std::collections::HashMap<(u32, bool), char> =
+            std::collections::HashMap::new();
         for c in (0x20u8..0x7f).map(char::from) {
             if let Some(k) = evdev_for(c) {
                 if let Some(prev) = seen.insert(k, c) {

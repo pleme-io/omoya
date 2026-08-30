@@ -22,9 +22,9 @@
 
 use std::collections::HashMap;
 
+use crate::placement::Placement;
 use kukaku::{Direction, LayoutNode, LeafRemoval, Rect, SplitOrientation};
 use smithay::desktop::Window;
-use crate::placement::Placement;
 use smithay::utils::{Logical, Rectangle};
 
 /// The space left between tiled windows, and between a window and the screen
@@ -130,11 +130,9 @@ impl Tiling {
                     // if a window was unmapped without the focus moving.
                     // Splitting the root keeps the newcomer visible rather
                     // than dropping it on the floor.
-                    None => LayoutNode::split(
-                        SplitOrientation::Vertical,
-                        tree,
-                        LayoutNode::leaf(id),
-                    ),
+                    None => {
+                        LayoutNode::split(SplitOrientation::Vertical, tree, LayoutNode::leaf(id))
+                    }
                 }
             }
         });
@@ -188,7 +186,10 @@ impl Tiling {
     /// lets one algebra serve an 80x24 grid and a 1920x1080 panel — the unit
     /// lives at the call site, here, and nowhere inside the tree.
     #[must_use]
-    pub fn arrange(&self, bounds: Rectangle<i32, Logical>) -> Vec<(Window, Rectangle<i32, Logical>)> {
+    pub fn arrange(
+        &self,
+        bounds: Rectangle<i32, Logical>,
+    ) -> Vec<(Window, Rectangle<i32, Logical>)> {
         // Saturating rather than `as`: a negative or oversized logical rect is
         // a bug elsewhere, and `as u16` would wrap it into a plausible-looking
         // small rectangle instead of clamping to something visible.
@@ -275,7 +276,9 @@ impl Tiling {
     }
 
     fn id_of(&self, window: &Window) -> Option<WindowId> {
-        self.windows.iter().find_map(|(id, w)| (w == window).then_some(*id))
+        self.windows
+            .iter()
+            .find_map(|(id, w)| (w == window).then_some(*id))
     }
 
     /// Depth of a leaf, used only to alternate split orientation.
@@ -384,8 +387,7 @@ impl crate::state::Omoya {
             .introspect
             .window_app_ids
             .lock()
-            .unwrap_or_else(|e| e.into_inner()) =
-            seen.iter().map(|(_, id)| id.clone()).collect();
+            .unwrap_or_else(|e| e.into_inner()) = seen.iter().map(|(_, id)| id.clone()).collect();
 
         // ── ★ THE JOINED TABLE, BUILT FROM THE SAME WALK ────────────────────
         //
@@ -396,7 +398,11 @@ impl crate::state::Omoya {
         // -- the property the three legacy lists never had.
         {
             use smithay::reexports::wayland_server::Resource as _;
-            let focused = self.introspect.focus_rect.lock().unwrap_or_else(|e| e.into_inner());
+            let focused = self
+                .introspect
+                .focus_rect
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             let sent = self
                 .introspect
                 .decoration_sent
@@ -406,12 +412,11 @@ impl crate::state::Omoya {
                 .iter()
                 .enumerate()
                 .map(|(i, (w, app))| {
-                    let rect = self.space.element_geometry(w).map(|g| {
-                        (g.loc.x, g.loc.y, g.size.w, g.size.h)
-                    });
-                    let key = w
-                        .toplevel()
-                        .map(|t| format!("{:?}", t.wl_surface().id()));
+                    let rect = self
+                        .space
+                        .element_geometry(w)
+                        .map(|g| (g.loc.x, g.loc.y, g.size.w, g.size.h));
+                    let key = w.toplevel().map(|t| format!("{:?}", t.wl_surface().id()));
                     crate::introspect::ToplevelRow {
                         id: i as u64,
                         app_id: app.clone(),
@@ -424,8 +429,7 @@ impl crate::state::Omoya {
                         decoration_elements_drawn: u32::from(
                             rect.is_some() && *focused == rect.map(|r| (r.0, r.1, r.2, r.3)),
                         ) * 4,
-                        focused: rect.is_some()
-                            && *focused == rect.map(|r| (r.0, r.1, r.2, r.3)),
+                        focused: rect.is_some() && *focused == rect.map(|r| (r.0, r.1, r.2, r.3)),
                         tiled: false,
                     }
                 })
@@ -449,8 +453,7 @@ impl crate::state::Omoya {
         // two arms, because the per-app rule must keep applying in BOTH modes:
         // an `if/else` here is how a launcher silently stops floating the day
         // someone adds a third mode.
-        let floating_mode =
-            self.config.layout.mode == crate::config::LayoutMode::Floating;
+        let floating_mode = self.config.layout.mode == crate::config::LayoutMode::Floating;
         // ★ Published from the point of DECISION, so the leaf reports the mode
         // the arrangement actually used rather than a re-read of config that
         // could drift from it.
@@ -644,7 +647,12 @@ mod tests {
     use super::*;
 
     /// The screen the vkms gate runs at.
-    const SCREEN: Rect = Rect { x: 0, y: 0, w: 1024, h: 768 };
+    const SCREEN: Rect = Rect {
+        x: 0,
+        y: 0,
+        w: 1024,
+        h: 768,
+    };
 
     #[test]
     fn one_window_fills_the_screen() {
@@ -666,10 +674,22 @@ mod tests {
         let b = t.map_id();
         let rects = t.arrange_ids(SCREEN);
         assert_eq!(rects.len(), 2);
-        let ra = rects.iter().find(|(i, _)| *i == a).expect("a is laid out").1;
-        let rb = rects.iter().find(|(i, _)| *i == b).expect("b is laid out").1;
+        let ra = rects
+            .iter()
+            .find(|(i, _)| *i == a)
+            .expect("a is laid out")
+            .1;
+        let rb = rects
+            .iter()
+            .find(|(i, _)| *i == b)
+            .expect("b is laid out")
+            .1;
         assert_ne!(ra.x, rb.x, "both windows at the same x — that is stacking");
-        assert_eq!(ra.w + rb.w, SCREEN.w, "the halves must tile the screen exactly");
+        assert_eq!(
+            ra.w + rb.w,
+            SCREEN.w,
+            "the halves must tile the screen exactly"
+        );
         assert_eq!(ra.h, SCREEN.h);
         assert_eq!(rb.h, SCREEN.h);
     }
@@ -689,7 +709,10 @@ mod tests {
         let rc = rects.iter().find(|(i, _)| *i == c).expect("c").1;
         // b was focused, so c split IT — and one level deeper, so the divider
         // turns: same column, stacked vertically.
-        assert_eq!(rb.x, rc.x, "the third window should share the second's column");
+        assert_eq!(
+            rb.x, rc.x,
+            "the third window should share the second's column"
+        );
         assert_ne!(rb.y, rc.y, "and sit above or below it, not on top of it");
     }
 

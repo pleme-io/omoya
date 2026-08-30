@@ -20,7 +20,7 @@
 use smithay::{
     backend::input::{
         AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputBackend, InputEvent,
-        KeyState, Keycode, KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent,
+        KeyState, KeyboardKeyEvent, Keycode, PointerAxisEvent, PointerButtonEvent,
         PointerMotionEvent,
     },
     input::{
@@ -150,20 +150,12 @@ impl Omoya {
                 // seat deed must never also reach the client, or
                 // Logo+Q closes the window AND the client reads a Q.
                 if event_state == KeyState::Pressed {
-                    let hk = crate::chord::hotkey_from(
-                        modifiers,
-                        handle.modified_sym(),
-                    );
+                    let hk = crate::chord::hotkey_from(modifiers, handle.modified_sym());
                     if let Some(hk) = hk {
-                        let m = state.bindings.match_key(
-                            hk,
-                            &awase::MatchContext::default(),
-                        );
-                        if let awase::mode::MatchResult::Matched {
-                            action,
-                            consume,
-                        } = m
-                        {
+                        let m = state
+                            .bindings
+                            .match_key(hk, &awase::MatchContext::default());
+                        if let awase::mode::MatchResult::Matched { action, consume } = m {
                             deed = Some(action);
                             if consume {
                                 return FilterResult::Intercept(());
@@ -296,7 +288,6 @@ impl Omoya {
     /// click-to-focus-and-raise policy below is omoya's own, and a synthetic
     /// click that skipped it would move focus differently from a real one.
     pub fn pointer_button(&mut self, code: u32, pressed: bool, time: u32) {
-
         let Some(pointer) = self.seat.get_pointer() else {
             return;
         };
@@ -305,7 +296,11 @@ impl Omoya {
         };
         let serial = SERIAL_COUNTER.next_serial();
         let button = code;
-        let button_state = if pressed { ButtonState::Pressed } else { ButtonState::Released };
+        let button_state = if pressed {
+            ButtonState::Pressed
+        } else {
+            ButtonState::Released
+        };
 
         // Click-to-focus, and raise. This IS window-management policy —
         // omoya's own, not smithay's — and it is the smallest possible

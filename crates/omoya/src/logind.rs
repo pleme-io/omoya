@@ -79,7 +79,10 @@ pub enum Error {
     #[error("this process is not in a logind session: {0}")]
     NoSession(String),
     #[error("logind refused {method}: {reason}")]
-    Refused { method: &'static str, reason: String },
+    Refused {
+        method: &'static str,
+        reason: String,
+    },
     #[error("{0}")]
     Io(#[from] std::io::Error),
     /// ★ A device path that cannot be stat'd. Its own arm rather than folded
@@ -133,14 +136,22 @@ struct Inner {
 }
 
 impl Inner {
-    fn call<B>(&self, iface: &str, path: &zvariant::OwnedObjectPath, method: &'static str, body: &B)
-        -> Result<zbus::Message, Error>
+    fn call<B>(
+        &self,
+        iface: &str,
+        path: &zvariant::OwnedObjectPath,
+        method: &'static str,
+        body: &B,
+    ) -> Result<zbus::Message, Error>
     where
         B: serde::Serialize + zvariant::DynamicType,
     {
         self.conn
             .call_method(Some(DEST), path.as_str(), Some(iface), method, body)
-            .map_err(|e| Error::Refused { method, reason: e.to_string() })
+            .map_err(|e| Error::Refused {
+                method,
+                reason: e.to_string(),
+            })
     }
 }
 
@@ -182,7 +193,13 @@ impl LogindSession {
         // fails later and more confusingly than asking directly.
         let pid = std::process::id();
         let reply = conn
-            .call_method(Some(DEST), MANAGER_PATH, Some(MANAGER_IFACE), "GetSessionByPID", &(pid,))
+            .call_method(
+                Some(DEST),
+                MANAGER_PATH,
+                Some(MANAGER_IFACE),
+                "GetSessionByPID",
+                &(pid,),
+            )
             .map_err(|e| Error::NoSession(e.to_string()))?;
         let session_path: zvariant::OwnedObjectPath = reply
             .body()
@@ -198,17 +215,30 @@ impl LogindSession {
             .map_err(|e| Error::Bus(e.to_string()))?;
 
         let seat_val = props
-            .get(SESSION_IFACE.try_into().expect("a valid interface name"), "Seat")
-            .map_err(|e| Error::Refused { method: "Get(Seat)", reason: e.to_string() })?;
-        let (seat_name, seat_path): (String, zvariant::OwnedObjectPath) =
-            seat_val.try_into().map_err(|e: zvariant::Error| Error::Refused {
+            .get(
+                SESSION_IFACE.try_into().expect("a valid interface name"),
+                "Seat",
+            )
+            .map_err(|e| Error::Refused {
+                method: "Get(Seat)",
+                reason: e.to_string(),
+            })?;
+        let (seat_name, seat_path): (String, zvariant::OwnedObjectPath) = seat_val
+            .try_into()
+            .map_err(|e: zvariant::Error| Error::Refused {
                 method: "Get(Seat)",
                 reason: format!("Seat is (so), not a string: {e}"),
             })?;
 
         let active_val = props
-            .get(SESSION_IFACE.try_into().expect("a valid interface name"), "Active")
-            .map_err(|e| Error::Refused { method: "Get(Active)", reason: e.to_string() })?;
+            .get(
+                SESSION_IFACE.try_into().expect("a valid interface name"),
+                "Active",
+            )
+            .map_err(|e| Error::Refused {
+                method: "Get(Active)",
+                reason: e.to_string(),
+            })?;
         let active: bool = active_val.try_into().unwrap_or(false);
 
         let inner = Arc::new(Inner {
@@ -233,7 +263,9 @@ impl LogindSession {
         spawn_signal_thread(Arc::clone(&inner), tx);
 
         Ok((
-            Self { inner: Arc::clone(&inner) },
+            Self {
+                inner: Arc::clone(&inner),
+            },
             LogindSessionNotifier { rx, _inner: inner },
         ))
     }
@@ -313,7 +345,9 @@ fn handle_resume(inner: &Arc<Inner>, msg: &zbus::Message) {
     };
     let new_fd = std::os::fd::OwnedFd::from(new_fd);
 
-    let Ok(devices) = inner.devices.lock() else { return };
+    let Ok(devices) = inner.devices.lock() else {
+        return;
+    };
     let Some(&old) = devices.get(&(major, minor)) else {
         // Resumed a device we never took. Not an error — logind resumes
         // everything it paused, and we may have released one meanwhile.
@@ -351,7 +385,9 @@ fn handle_properties(inner: &Arc<Inner>, msg: &zbus::Message, tx: &SyncSender<Se
     if iface != SESSION_IFACE {
         return;
     }
-    let Some(v) = changed.get("Active") else { return };
+    let Some(v) = changed.get("Active") else {
+        return;
+    };
     let Ok(now) = bool::try_from(v.try_clone().unwrap_or(zvariant::Value::Bool(false))) else {
         return;
     };
@@ -406,17 +442,12 @@ impl Session for LogindSession {
 
     fn close(&mut self, fd: OwnedFd) -> Result<(), Self::Error> {
         let raw = fd.as_raw_fd();
-        let found = self
-            .inner
-            .devices
-            .lock()
-            .ok()
-            .and_then(|mut d| {
-                let key = d.iter().find(|(_, v)| **v == raw).map(|(k, _)| *k);
-                key.inspect(|k| {
-                    d.remove(k);
-                })
-            });
+        let found = self.inner.devices.lock().ok().and_then(|mut d| {
+            let key = d.iter().find(|(_, v)| **v == raw).map(|(k, _)| *k);
+            key.inspect(|k| {
+                d.remove(k);
+            })
+        });
 
         if let Some((major, minor)) = found {
             self.inner.call(

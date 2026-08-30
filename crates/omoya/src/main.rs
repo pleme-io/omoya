@@ -13,11 +13,6 @@
 //! mukae), no lock (M7), no chrome (M9). What this binary answers is the one
 //! question worth answering first — *can omoya composite at all?*
 
-mod evdev_backend;
-mod uevent;
-mod logind;
-mod nuri_renderer;
-mod scanout;
 mod bar;
 mod chord;
 mod config;
@@ -25,21 +20,26 @@ mod cursor;
 mod deed;
 #[cfg(target_os = "linux")]
 mod drm;
-mod handlers;
-mod introspect;
+mod evdev_backend;
 mod grab;
-mod mcp;
+mod handlers;
 mod input;
+mod introspect;
 mod layout;
 mod localtime;
+mod logind;
+mod mcp;
+mod nuri_renderer;
 mod owed;
 mod placement;
 mod remap;
+mod scanout;
 mod stale;
 mod state;
 mod synth;
-mod truedamage;
 mod theme;
+mod truedamage;
+mod uevent;
 /// The nested development backend. Off by default — it drags in winit, which
 /// `dlopen`s libxkbcommon behind `ldd`'s back. See `Cargo.toml`'s `[features]`.
 #[cfg(feature = "nested")]
@@ -183,7 +183,9 @@ fn parse_args() -> Result<Args, String> {
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--mode" => {
-                let v = it.next().ok_or("--mode needs a value (entrance | session)")?;
+                let v = it
+                    .next()
+                    .ok_or("--mode needs a value (entrance | session)")?;
                 mode = SeatMode::parse(&v)?;
             }
             "--backend" => {
@@ -200,18 +202,18 @@ fn parse_args() -> Result<Args, String> {
                 };
             }
             "--session" => {
-                let v = it.next().ok_or("--session needs a value (libseat | logind)")?;
+                let v = it
+                    .next()
+                    .ok_or("--session needs a value (libseat | logind)")?;
                 session = match v.as_str() {
                     "logind" => SessionBackend::Logind,
                     // ★ Not in the build: backend_session_libseat is off and
                     // libseat.so.1 is not linked.
                     "libseat" => {
-                        return Err(
-                            "session backend `libseat` is not in this build — the \
+                        return Err("session backend `libseat` is not in this build — the \
                              backend_session_libseat feature is off and libseat is not \
                              linked. `logind` is the only backend."
-                                .to_string(),
-                        );
+                            .to_string());
                     }
                     other => {
                         return Err(format!(
@@ -221,7 +223,9 @@ fn parse_args() -> Result<Args, String> {
                 };
             }
             "--input" => {
-                let v = it.next().ok_or("--input needs a value (libinput | evdev)")?;
+                let v = it
+                    .next()
+                    .ok_or("--input needs a value (libinput | evdev)")?;
                 input = match v.as_str() {
                     "evdev" => InputBackendKind::Evdev,
                     // ★ Not in the build: backend_libinput/backend_udev are off.
@@ -229,22 +233,24 @@ fn parse_args() -> Result<Args, String> {
                     // with libinput — acceleration, tap-to-click, gestures — and
                     // deserves that answer rather than "unknown value".
                     "libinput" => {
-                        return Err(
-                            "input backend `libinput` is not in this build — the \
+                        return Err("input backend `libinput` is not in this build — the \
                              backend_libinput/backend_udev features are off. `evdev` is \
                              the only backend, and it implements no pointer \
                              acceleration, tap-to-click or gestures \
                              (pending-omoya-input-policy)."
-                                .to_string(),
-                        );
+                            .to_string());
                     }
                     other => {
-                        return Err(format!("unknown input backend `{other}` — expected `evdev`"));
+                        return Err(format!(
+                            "unknown input backend `{other}` — expected `evdev`"
+                        ));
                     }
                 };
             }
             "--renderer" => {
-                let v = it.next().ok_or("--renderer needs a value (nuri | pixman)")?;
+                let v = it
+                    .next()
+                    .ok_or("--renderer needs a value (nuri | pixman)")?;
                 renderer = match v.as_str() {
                     "nuri" => RendererKind::Nuri,
                     // ★ `pixman` is not merely unsupported, it is NOT IN THE
@@ -253,12 +259,10 @@ fn parse_args() -> Result<Args, String> {
                     // generic "unknown value", because someone reaching for it
                     // is asking for a fallback that no longer exists.
                     "pixman" => {
-                        return Err(
-                            "renderer `pixman` is not in this build — the \
+                        return Err("renderer `pixman` is not in this build — the \
                              renderer_pixman feature is off and libpixman is not \
                              linked. `nuri` is the only renderer."
-                                .to_string(),
-                        );
+                            .to_string());
                     }
                     other => {
                         return Err(format!("unknown renderer `{other}` — expected `nuri`"));
@@ -510,12 +514,13 @@ where
     );
 
     introspect.backend.store(1, Ordering::Relaxed);
-    introspect.output_w.store(u64::from(target.mode.size().0), Ordering::Relaxed);
-    introspect.output_h.store(u64::from(target.mode.size().1), Ordering::Relaxed);
-    *introspect
-        .modes
-        .lock()
-        .unwrap_or_else(|e| e.into_inner()) = target.mode_list.clone();
+    introspect
+        .output_w
+        .store(u64::from(target.mode.size().0), Ordering::Relaxed);
+    introspect
+        .output_h
+        .store(u64::from(target.mode.size().1), Ordering::Relaxed);
+    *introspect.modes.lock().unwrap_or_else(|e| e.into_inner()) = target.mode_list.clone();
     // ★ THE SAME DERIVATION AS THE RENDER LOOP, NOT `vrefresh()` RAW.
     //
     // This line stored the panel's raw `vrefresh`, which is an optional DRM
@@ -525,9 +530,10 @@ where
     //
     // Two writers to one field is the drift hazard on its own; both now go
     // through `drm::refresh_hz` so they cannot disagree.
-    introspect
-        .refresh_hz
-        .store(u64::from(crate::drm::refresh_hz(&target.mode)), Ordering::Relaxed);
+    introspect.refresh_hz.store(
+        u64::from(crate::drm::refresh_hz(&target.mode)),
+        Ordering::Relaxed,
+    );
 
     let mut device = device;
     // ★ THE MATCH IS HERE AND NOT INSIDE `run` because the renderer is a TYPE
@@ -586,24 +592,28 @@ fn attach_session<S, N>(
     // switch — see the ActivateSession arm below.
     let mut input_token: Option<smithay::reexports::calloop::RegistrationToken> = None;
     let attached = match kind {
-        InputBackendKind::Evdev => crate::evdev_backend::EvdevBackend::new(session.clone(), Some(introspect.clone()))
-            .map_err(|e| format!("{e}"))
-            .and_then(|backend| {
-                event_loop
-                    .handle()
-                    .insert_source(backend, move |event, (), data| {
-                        data.state.process_input_event(event);
-                    })
-                    .map(|token| input_token = Some(token))
-                    .map_err(|e| format!("{e}"))
-            }),
+        InputBackendKind::Evdev => {
+            crate::evdev_backend::EvdevBackend::new(session.clone(), Some(introspect.clone()))
+                .map_err(|e| format!("{e}"))
+                .and_then(|backend| {
+                    event_loop
+                        .handle()
+                        .insert_source(backend, move |event, (), data| {
+                            data.state.process_input_event(event);
+                        })
+                        .map(|token| input_token = Some(token))
+                        .map_err(|e| format!("{e}"))
+                })
+        }
     };
     match attached {
         Ok(()) => {
             introspect.input_attached.store(1, Ordering::Relaxed);
             tracing::info!(backend = ?kind, "input attached — the seat is now typeable");
         }
-        Err(e) => tracing::error!(error = %e, backend = ?kind, "input attach failed — seat is look-only"),
+        Err(e) => {
+            tracing::error!(error = %e, backend = ?kind, "input attach failed — seat is look-only")
+        }
     }
 
     let intro = introspect.clone();
@@ -612,41 +622,43 @@ fn attach_session<S, N>(
     // because the loop is process-lifetime, and named rather than left to be
     // rediscovered.
     let handle = event_loop.handle();
-    match event_loop.handle().insert_source(notifier, move |event, (), _data| {
-        use smithay::backend::session::Event as SessionEvent;
-        match event {
-            SessionEvent::ActivateSession => {
-                intro.session_active.store(1, Ordering::Relaxed);
-                // ★ RE-ARM INPUT. logind resumes a device by `dup2`ing a NEW
-                // file description onto the fd NUMBER the evdev backend
-                // already holds (`logind.rs:320-322`), and the kernel drops
-                // every epoll entry for a file as that file is freed —
-                // `fs/file_table.c:422` calls `eventpoll_release`,
-                // `fs/eventpoll.c:1083` implements it. So returning from
-                // another VT leaves the seat visually correct and completely
-                // untypeable until something re-registers those fds.
-                // `LoopHandle::update` is the only public way to make a source
-                // re-register from outside itself (calloop
-                // `loop_logic.rs:199-228`); the backend re-arms on the
-                // inactive → active TRANSITION it observes inside its own
-                // `reregister`.
-                if let Some(tok) = &input_token {
-                    if let Err(e) = handle.update(tok) {
-                        tracing::error!(
-                            error = %e,
-                            "input re-arm failed — the seat is back but not typeable"
-                        );
+    match event_loop
+        .handle()
+        .insert_source(notifier, move |event, (), _data| {
+            use smithay::backend::session::Event as SessionEvent;
+            match event {
+                SessionEvent::ActivateSession => {
+                    intro.session_active.store(1, Ordering::Relaxed);
+                    // ★ RE-ARM INPUT. logind resumes a device by `dup2`ing a NEW
+                    // file description onto the fd NUMBER the evdev backend
+                    // already holds (`logind.rs:320-322`), and the kernel drops
+                    // every epoll entry for a file as that file is freed —
+                    // `fs/file_table.c:422` calls `eventpoll_release`,
+                    // `fs/eventpoll.c:1083` implements it. So returning from
+                    // another VT leaves the seat visually correct and completely
+                    // untypeable until something re-registers those fds.
+                    // `LoopHandle::update` is the only public way to make a source
+                    // re-register from outside itself (calloop
+                    // `loop_logic.rs:199-228`); the backend re-arms on the
+                    // inactive → active TRANSITION it observes inside its own
+                    // `reregister`.
+                    if let Some(tok) = &input_token {
+                        if let Err(e) = handle.update(tok) {
+                            tracing::error!(
+                                error = %e,
+                                "input re-arm failed — the seat is back but not typeable"
+                            );
+                        }
                     }
+                    tracing::info!("session ACTIVATED — the seat is ours again");
                 }
-                tracing::info!("session ACTIVATED — the seat is ours again");
+                SessionEvent::PauseSession => {
+                    intro.session_active.store(0, Ordering::Relaxed);
+                    tracing::info!("session PAUSED — another VT holds the seat");
+                }
             }
-            SessionEvent::PauseSession => {
-                intro.session_active.store(0, Ordering::Relaxed);
-                tracing::info!("session PAUSED — another VT holds the seat");
-            }
-        }
-        intro.session_events.fetch_add(1, Ordering::Relaxed);
-    }) {
+            intro.session_events.fetch_add(1, Ordering::Relaxed);
+        }) {
         Ok(_token) => introspect.session_active.store(1, Ordering::Relaxed),
         // Reported, not fatal: a seat that cannot observe VT switches is
         // degraded; a seat that refuses to start is worse.
@@ -673,7 +685,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     //    kanshou. Falling through to `parse_args` would try to open DRM
     //    and fight the live session for the operator's screen.
     if std::env::args().nth(1).as_deref() == Some("mcp") {
-        tracing_subscriber::fmt().with_writer(std::io::stderr).init();
+        tracing_subscriber::fmt()
+            .with_writer(std::io::stderr)
+            .init();
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
@@ -735,55 +749,60 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match smithay::reexports::calloop::ping::make_ping() {
         Ok((ping, source)) => {
             let sink = introspect.clone();
-            if let Err(e) = event_loop.handle().insert_source(source, move |(), (), data| {
-                // Drain under the lock, perform outside it: `perform` can
-                // spawn a process and send configures, and holding the
-                // socket thread's lock across that would stall every read.
-                let deeds: Vec<_> = sink
-                    .pending_deeds
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .drain(..)
-                    .collect();
-                // ★ SYNTHETIC INPUT, ON THE SAME SEAM AND FOR THE SAME
-                // REASON. Drained here because `Omoya::key` needs `&mut
-                // Omoya`, and applied through the very method the evdev
-                // backend calls — see `synth.rs` for why taking a shortcut to
-                // the client would make this surface worthless as a
-                // diagnostic.
-                let synths: Vec<_> = sink
-                    .pending_input
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .drain(..)
-                    .collect();
-                for sy in synths {
-                    match crate::synth::expand(&sy) {
-                        Ok(steps) => {
-                            for step in steps {
-                                data.state.apply_step(step);
-                                sink.synth_performed
-                                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if let Err(e) = event_loop
+                .handle()
+                .insert_source(source, move |(), (), data| {
+                    // Drain under the lock, perform outside it: `perform` can
+                    // spawn a process and send configures, and holding the
+                    // socket thread's lock across that would stall every read.
+                    let deeds: Vec<_> = sink
+                        .pending_deeds
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .drain(..)
+                        .collect();
+                    // ★ SYNTHETIC INPUT, ON THE SAME SEAM AND FOR THE SAME
+                    // REASON. Drained here because `Omoya::key` needs `&mut
+                    // Omoya`, and applied through the very method the evdev
+                    // backend calls — see `synth.rs` for why taking a shortcut to
+                    // the client would make this surface worthless as a
+                    // diagnostic.
+                    let synths: Vec<_> = sink
+                        .pending_input
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .drain(..)
+                        .collect();
+                    for sy in synths {
+                        match crate::synth::expand(&sy) {
+                            Ok(steps) => {
+                                for step in steps {
+                                    data.state.apply_step(step);
+                                    sink.synth_performed
+                                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                }
+                            }
+                            // Validated at queue time too, so this is unreachable
+                            // unless the two disagree — which is worth saying out
+                            // loud rather than dropping.
+                            Err(e) => {
+                                tracing::error!(error = %e, ?sy, "unexpandable synthetic input")
                             }
                         }
-                        // Validated at queue time too, so this is unreachable
-                        // unless the two disagree — which is worth saying out
-                        // loud rather than dropping.
-                        Err(e) => tracing::error!(error = %e, ?sy, "unexpandable synthetic input"),
                     }
-                }
 
-                for deed in deeds {
-                    tracing::info!(?deed, "performing a deed requested over kanshou");
-                    data.state.perform(deed);
-                    // Counted HERE, by the thread that did the work — see
-                    // `OmoyaIntrospect::deeds_performed`. The `do` leaf's
-                    // "queued" answer cannot distinguish a drained deed from
-                    // one nothing ever drains.
-                    sink.deeds_performed
-                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                }
-            }) {
+                    for deed in deeds {
+                        tracing::info!(?deed, "performing a deed requested over kanshou");
+                        data.state.perform(deed);
+                        // Counted HERE, by the thread that did the work — see
+                        // `OmoyaIntrospect::deeds_performed`. The `do` leaf's
+                        // "queued" answer cannot distinguish a drained deed from
+                        // one nothing ever drains.
+                        sink.deeds_performed
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                })
+            {
                 tracing::error!(error = %e, "no deed source — the seat is read-only");
             } else {
                 // Published only on success, so `wake.get()` being None is an
@@ -806,7 +825,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match args.backend {
         #[cfg(feature = "nested")]
         Backend::Nested => {
-            introspect.backend.store(0, std::sync::atomic::Ordering::Relaxed);
+            introspect
+                .backend
+                .store(0, std::sync::atomic::Ordering::Relaxed);
             crate::winit::init_winit(&mut event_loop, &mut data)?;
         }
         Backend::Drm => {
@@ -826,7 +847,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             match args.session {
                 SessionBackend::Logind => match crate::logind::LogindSession::new() {
                     Ok((session, notifier)) => run_drm_seat(
-                        &mut event_loop, &mut data, &introspect, session, notifier, args.input,
+                        &mut event_loop,
+                        &mut data,
+                        &introspect,
+                        session,
+                        notifier,
+                        args.input,
                         args.renderer,
                     )?,
                     Err(e) => {
@@ -847,9 +873,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Announce the socket BEFORE spawning, so a client started here finds it.
     let socket = data.state.socket_name.clone();
-    let _ = introspect
-        .socket
-        .set(socket.to_string_lossy().into_owned());
+    let _ = introspect.socket.set(socket.to_string_lossy().into_owned());
     tracing::info!(
         socket = ?socket,
         mode = args.mode.name(),

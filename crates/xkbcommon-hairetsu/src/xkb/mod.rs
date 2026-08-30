@@ -219,7 +219,9 @@ impl Keymap {
         if !matches!(layout, "" | "us") || !variant.is_empty() {
             return None;
         }
-        Some(Self { inner: Arc::new(hairetsu::Keymap::us()) })
+        Some(Self {
+            inner: Arc::new(hairetsu::Keymap::us()),
+        })
     }
 
     /// Compile a keymap from a shared-memory fd, as a Wayland client sends one.
@@ -300,7 +302,11 @@ impl Keymap {
     /// Iterate the layout names.
     #[must_use]
     pub fn layouts(&self) -> KeymapLayouts<'_> {
-        KeymapLayouts { keymap: self, ind: 0, len: self.inner.num_layouts() }
+        KeymapLayouts {
+            keymap: self,
+            ind: 0,
+            len: self.inner.num_layouts(),
+        }
     }
 
     #[must_use]
@@ -368,7 +374,9 @@ pub struct State {
 impl State {
     #[must_use]
     pub fn new(keymap: &Keymap) -> Self {
-        Self { inner: hairetsu::State::new(Arc::clone(&keymap.inner)) }
+        Self {
+            inner: hairetsu::State::new(Arc::clone(&keymap.inner)),
+        }
     }
 
     pub fn update_key(&mut self, key: Keycode, direction: KeyDirection) -> StateComponent {
@@ -463,7 +471,9 @@ impl State {
 
     #[must_use]
     pub fn get_keymap(&self) -> Keymap {
-        Keymap { inner: Arc::clone(self.inner.keymap()) }
+        Keymap {
+            inner: Arc::clone(self.inner.keymap()),
+        }
     }
 }
 
@@ -532,7 +542,10 @@ mod tests {
     #[test]
     fn keysym_names_use_xkb_spelling_not_c_macros() {
         assert_eq!(keysym_get_name(Keysym::new(keysyms::KEY_a)), "a");
-        assert_eq!(keysym_get_name(Keysym::new(keysyms::KEY_BackSpace)), "BackSpace");
+        assert_eq!(
+            keysym_get_name(Keysym::new(keysyms::KEY_BackSpace)),
+            "BackSpace"
+        );
         assert_eq!(
             keysym_get_name(Keysym::new(keysyms::KEY_XF86AudioMute)),
             "XF86AudioMute"
@@ -542,7 +555,9 @@ mod tests {
     #[test]
     fn new_from_string_refuses_rather_than_pretending() {
         let ctx = Context::new(CONTEXT_NO_FLAGS);
-        assert!(Keymap::new_from_string(&ctx, "xkb_keymap {};", KEYMAP_FORMAT_TEXT_V1, 0).is_none());
+        assert!(
+            Keymap::new_from_string(&ctx, "xkb_keymap {};", KEYMAP_FORMAT_TEXT_V1, 0).is_none()
+        );
     }
 
     #[test]
@@ -570,7 +585,10 @@ mod tests {
         assert!(!st.led_index_is_active(caps));
         st.update_key(Keycode::new(66), KeyDirection::Down);
         assert!(st.led_index_is_active(caps));
-        assert_eq!(st.led_index_is_active(caps), st.led_name_is_active(LED_NAME_CAPS));
+        assert_eq!(
+            st.led_index_is_active(caps),
+            st.led_name_is_active(LED_NAME_CAPS)
+        );
         // An invalid index must not index out of bounds or shift by >= 32.
         assert!(!st.led_index_is_active(LED_INVALID));
         assert!(!st.led_index_is_active(99));

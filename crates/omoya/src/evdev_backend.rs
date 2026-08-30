@@ -51,7 +51,6 @@ const XKB_KEYCODE_OFFSET: u32 = 8;
 /// dependency to read it.
 const INPUT_DIR: &str = "/dev/input";
 
-
 /// `EAGAIN` — the normal "nothing to read" answer on a non-blocking fd.
 const AGAIN: i32 = smithay::reexports::rustix::io::Errno::AGAIN.raw_os_error();
 /// `ENODEV` — what `evdev_read` returns for a device that is gone OR revoked
@@ -426,9 +425,7 @@ impl<S: Session> EvdevBackend<S> {
             // render the same — "no devices" is a finding, not a blank.
             out.push_str("NONE OPENED");
         }
-        *i.input_devices
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = out;
+        *i.input_devices.lock().unwrap_or_else(|e| e.into_inner()) = out;
     }
 
     fn open_one(
@@ -586,7 +583,6 @@ impl<S: Session> EvdevBackend<S> {
         }
     }
 }
-
 
 /// Decide what a failed `fetch_events` means, and disarm the device if the fd
 /// is dead. Returns whether the poll set now needs updating.
@@ -922,7 +918,10 @@ impl<S: Session> smithay::reexports::calloop::EventSource for EvdevBackend<S> {
                     // `fs/eventpoll.c:1083` implements. So after a VT switch
                     // `epoll_ctl(MOD)` answers ENOENT for an fd we believe is
                     // registered. Re-ADD; do not fail the loop.
-                    if poll.reregister(fd, Interest::READ, Mode::Level, token).is_err() {
+                    if poll
+                        .reregister(fd, Interest::READ, Mode::Level, token)
+                        .is_err()
+                    {
                         // SAFETY: as above.
                         unsafe { poll.register(fd, Interest::READ, Mode::Level, token)? };
                     }
@@ -974,7 +973,6 @@ impl<S: Session> smithay::reexports::calloop::EventSource for EvdevBackend<S> {
         Ok(())
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -1041,7 +1039,9 @@ mod tests {
             count: 1,
         };
         assert_eq!(
-            u32::from(si::KeyboardKeyEvent::<EvdevBackend<NoSession>>::key_code(&k)),
+            u32::from(si::KeyboardKeyEvent::<EvdevBackend<NoSession>>::key_code(
+                &k
+            )),
             38
         );
     }
@@ -1088,6 +1088,9 @@ mod tests {
         assert!(want(true, false), "a live device is polled");
         assert!(!want(false, false), "a revoked device is not polled");
         assert!(!want(true, true), "a removed device is not polled");
-        assert!(!want(false, true), "a removed, revoked device is not polled");
+        assert!(
+            !want(false, true),
+            "a removed, revoked device is not polled"
+        );
     }
 }

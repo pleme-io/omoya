@@ -60,16 +60,49 @@ const APP: &str = "omoya";
 /// Every read leaf `introspect.rs` answers. See the module header on why
 /// this is a constant rather than a live `schema()` query.
 const LEAVES: &[&str] = &[
-    "backend", "blit_fast", "blit_general", "blit_slow", "capture_result",
-    "chord_deeds", "deeds_performed", "elements", "focus_rect", "frame_us",
-    "frames", "gather_us", "geometry", "import_full", "import_partial",
-    "input_attached", "input_devices", "last_frame_causes", "layout", "mode",
-    "modes", "output", "owed", "owed_causes", "owed_vt_switches", "pointer",
-    "presented", "seat", "session_active", "session_events", "socket",
+    "backend",
+    "blit_fast",
+    "blit_general",
+    "blit_slow",
+    "capture_result",
+    "chord_deeds",
+    "deeds_performed",
+    "elements",
+    "focus_rect",
+    "frame_us",
+    "frames",
+    "gather_us",
+    "geometry",
+    "import_full",
+    "import_partial",
+    "input_attached",
+    "input_devices",
+    "last_frame_causes",
+    "layout",
+    "mode",
+    "modes",
+    "output",
+    "owed",
+    "owed_causes",
+    "owed_vt_switches",
+    "pointer",
+    "presented",
+    "seat",
+    "session_active",
+    "session_events",
+    "socket",
     "stale_result",
-    "synth_performed", "td_dirty_pct", "td_mode", "td_refined", "td_refused",
-    "td_rows_dirty", "td_rows_examined", "td_shadows", "verbs",
-    "window_app_ids", "windows",
+    "synth_performed",
+    "td_dirty_pct",
+    "td_mode",
+    "td_refined",
+    "td_refused",
+    "td_rows_dirty",
+    "td_rows_examined",
+    "td_shadows",
+    "verbs",
+    "window_app_ids",
+    "windows",
 ];
 
 /// Ship a query to the live compositor and render the kotae outcome.
@@ -78,7 +111,10 @@ const LEAVES: &[&str] = &[
 /// NOT an empty success. An agent diagnosing a dark seat must be able to
 /// tell "the compositor says zero windows" from "there is no compositor".
 async fn ask(path: Vec<String>, args: Vec<serde_json::Value>) -> String {
-    let q = Query { path: path.clone(), args };
+    let q = Query {
+        path: path.clone(),
+        args,
+    };
     let outcome = kanshou::mcp::forward_status(APP, &q, || {
         Err(kanshou::QueryError::unknown_field("no live omoya"))
     })
@@ -319,7 +355,11 @@ impl OmoyaMcp {
                        rather than a false pass, so drive some output first."
     )]
     async fn omoya_stale_scan(&self, Parameters(input): Parameters<CaptureInput>) -> String {
-        ask(vec!["stale_scan".into()], vec![serde_json::json!(input.path)]).await
+        ask(
+            vec!["stale_scan".into()],
+            vec![serde_json::json!(input.path)],
+        )
+        .await
     }
 }
 
@@ -360,7 +400,11 @@ mod tests {
         for l in LEAVES {
             assert!(seen.insert(*l), "duplicate leaf in catalog: {l}");
         }
-        assert!(LEAVES.len() >= 40, "catalog shrank unexpectedly: {}", LEAVES.len());
+        assert!(
+            LEAVES.len() >= 40,
+            "catalog shrank unexpectedly: {}",
+            LEAVES.len()
+        );
     }
 
     /// The write verbs must NOT appear in the read catalog — `omoya_read`

@@ -318,13 +318,32 @@ mod tests {
         let mut r = StaleReport {
             stale_pixels: 4,
             compared_pixels: 100,
-            regions: vec![StaleRegion { x: 12, y: 12, w: 4, h: 4, pixels: 4, attribution: None }],
+            regions: vec![StaleRegion {
+                x: 12,
+                y: 12,
+                w: 4,
+                h: 4,
+                pixels: 4,
+                attribution: None,
+            }],
         };
         attribute(
             &mut r,
             &[
-                NamedRect { name: "background".into(), x: 0, y: 0, w: 100, h: 100 },
-                NamedRect { name: "window[0]".into(), x: 10, y: 10, w: 20, h: 20 },
+                NamedRect {
+                    name: "background".into(),
+                    x: 0,
+                    y: 0,
+                    w: 100,
+                    h: 100,
+                },
+                NamedRect {
+                    name: "window[0]".into(),
+                    x: 10,
+                    y: 10,
+                    w: 20,
+                    h: 20,
+                },
             ],
         );
         assert_eq!(r.regions[0].attribution.as_deref(), Some("window[0]"));
@@ -335,10 +354,29 @@ mod tests {
         let mut r = StaleReport {
             stale_pixels: 1,
             compared_pixels: 100,
-            regions: vec![StaleRegion { x: 90, y: 90, w: 2, h: 2, pixels: 1, attribution: None }],
+            regions: vec![StaleRegion {
+                x: 90,
+                y: 90,
+                w: 2,
+                h: 2,
+                pixels: 1,
+                attribution: None,
+            }],
         };
-        attribute(&mut r, &[NamedRect { name: "w".into(), x: 0, y: 0, w: 10, h: 10 }]);
-        assert!(r.regions[0].attribution.is_none(), "background staleness is a finding");
+        attribute(
+            &mut r,
+            &[NamedRect {
+                name: "w".into(),
+                x: 0,
+                y: 0,
+                w: 10,
+                h: 10,
+            }],
+        );
+        assert!(
+            r.regions[0].attribution.is_none(),
+            "background staleness is a finding"
+        );
         assert_eq!(r.regions.len(), 1);
     }
 
@@ -430,7 +468,10 @@ mod golden_tests {
         b[0] = 9;
         assert_eq!(
             compare_golden(&a, &b, 4, 4),
-            GoldenVerdict::Differ { differing: 1, pixels: 16 },
+            GoldenVerdict::Differ {
+                differing: 1,
+                pixels: 16
+            },
             "one pixel must report as one, not as 'differs'"
         );
     }

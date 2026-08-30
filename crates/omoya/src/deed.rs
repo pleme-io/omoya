@@ -239,7 +239,11 @@ mod tests {
     #[test]
     fn ctrl_and_alt_are_left_to_the_applications() {
         let (mut m, _) = default_bindings();
-        for mods in [Modifiers::CTRL, Modifiers::ALT, Modifiers::CTRL | Modifiers::ALT] {
+        for mods in [
+            Modifiers::CTRL,
+            Modifiers::ALT,
+            Modifiers::CTRL | Modifiers::ALT,
+        ] {
             for key in [Key::H, Key::J, Key::K, Key::L, Key::Q, Key::Return] {
                 assert_eq!(
                     hit(&mut m, Hotkey::new(mods, key)),

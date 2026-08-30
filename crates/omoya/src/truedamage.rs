@@ -160,10 +160,7 @@ pub fn changed_rows(prev: &[u8], next: &[u8], stride: usize, height: usize) -> V
         }
     }
     if let Some(start) = run {
-        spans.push(RowSpan {
-            start,
-            end: height,
-        });
+        spans.push(RowSpan { start, end: height });
     }
     Verdict::Refined {
         spans,
@@ -212,7 +209,14 @@ impl Shadows {
     /// Returns the verdict. The shadow is updated **whether or not** the
     /// comparison succeeded, so the commit after a refusal can refine again —
     /// a resize should cost one full frame, not permanently disable this.
-    pub fn refine(&mut self, key: u32, next: &[u8], stride: usize, height: usize, format: u32) -> Verdict {
+    pub fn refine(
+        &mut self,
+        key: u32,
+        next: &[u8],
+        stride: usize,
+        height: usize,
+        format: u32,
+    ) -> Verdict {
         let verdict = match self.by_surface.get(&key) {
             None => Verdict::Refused("first commit for this surface"),
             Some(prev) if prev.stride != stride => Verdict::Refused("stride changed"),
@@ -287,7 +291,9 @@ mod tests {
     use super::*;
 
     fn buf(rows: &[u8], stride: usize) -> Vec<u8> {
-        rows.iter().flat_map(|v| std::iter::repeat(*v).take(stride)).collect()
+        rows.iter()
+            .flat_map(|v| std::iter::repeat(*v).take(stride))
+            .collect()
     }
 
     #[test]
@@ -307,7 +313,10 @@ mod tests {
         assert_eq!(Mode::parse("verify"), Ok(Mode::Verify));
         assert_eq!(Mode::parse("off"), Ok(Mode::Off));
         let e = Mode::parse("ON").unwrap_err();
-        assert!(e.contains("off, on, verify"), "the refusal must name the set: {e}");
+        assert!(
+            e.contains("off, on, verify"),
+            "the refusal must name the set: {e}"
+        );
     }
 
     #[test]
@@ -335,7 +344,11 @@ mod tests {
         // reach scanout memory at all.
         let a = buf(&[1, 2, 3, 4], 16);
         let v = changed_rows(&a, &a, 16, 4);
-        assert_eq!(v.rows(), Some(0), "identical buffers must produce zero rows");
+        assert_eq!(
+            v.rows(),
+            Some(0),
+            "identical buffers must produce zero rows"
+        );
     }
 
     #[test]
@@ -377,7 +390,11 @@ mod tests {
         let a = buf(&[1, 1, 1, 1], 8);
         let b = buf(&[1, 1, 9, 9], 8);
         let v = changed_rows(&a, &b, 8, 4);
-        assert_eq!(v.rows(), Some(2), "a run at the bottom edge must be emitted");
+        assert_eq!(
+            v.rows(),
+            Some(2),
+            "a run at the bottom edge must be emitted"
+        );
         if let Verdict::Refined { spans, .. } = v {
             assert_eq!(spans, vec![RowSpan { start: 2, end: 4 }]);
         }
@@ -449,7 +466,11 @@ mod tests {
         sh.refine(1, &buf(&[1, 9, 1], 8), 8, 3, 0);
         // Committing the SAME pixels again must now be a no-op.
         let v = sh.refine(1, &buf(&[1, 9, 1], 8), 8, 3, 0);
-        assert_eq!(v.rows(), Some(0), "the shadow did not adopt the changed row");
+        assert_eq!(
+            v.rows(),
+            Some(0),
+            "the shadow did not adopt the changed row"
+        );
     }
 
     #[test]
@@ -627,11 +648,7 @@ impl Mode {
 /// Returns the verdict for the counters, or `None` when there was nothing to
 /// decide — no new buffer, not shm, or the client already declared honest
 /// damage.
-pub fn refine_commit(
-    surface: &WlSurface,
-    shadows: &mut Shadows,
-    mode: Mode,
-) -> Option<Verdict> {
+pub fn refine_commit(surface: &WlSurface, shadows: &mut Shadows, mode: Mode) -> Option<Verdict> {
     if !mode.computes() {
         return None;
     }
@@ -660,8 +677,11 @@ pub fn refine_commit(
         // client simply takes the `None` path.
         let outcome = shm::with_buffer_contents(buffer, |ptr, len, data| {
             #[allow(clippy::cast_sign_loss)]
-            let (stride, height, offset) =
-                (data.stride as usize, data.height as usize, data.offset as usize);
+            let (stride, height, offset) = (
+                data.stride as usize,
+                data.height as usize,
+                data.offset as usize,
+            );
             #[allow(clippy::cast_sign_loss)]
             let width = data.width as i32;
             let needed = stride.checked_mul(height)?;

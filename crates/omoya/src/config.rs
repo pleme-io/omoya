@@ -333,7 +333,7 @@ pub fn load() -> OmoyaConfig {
             return OmoyaConfig::prescribed();
         }
     };
-        // ── ★ THE FIELD-OVERRIDE PREFIX MUST NOT CONTAIN THE DISCOVERY VAR ──
+    // ── ★ THE FIELD-OVERRIDE PREFIX MUST NOT CONTAIN THE DISCOVERY VAR ──
     // `OMOYA_OPT_`, not `OMOYA_`. shikumi's env layer maps `<PREFIX><FIELD>`
     // onto fields, so with the prefix `OMOYA_` the discovery variable
     // `OMOYA_CONFIG` is itself read as a field named `config` -- which does

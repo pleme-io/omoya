@@ -164,7 +164,10 @@ mod tests {
         };
         assert_eq!(
             for_app_id_in(Some("my-dialog"), &custom),
-            Placement::Floating { width: 0.3, height: 0.4 }
+            Placement::Floating {
+                width: 0.3,
+                height: 0.4
+            }
         );
         assert_eq!(for_app_id_in(Some("tobira"), &custom), Placement::Tiled);
     }
@@ -352,14 +355,20 @@ mod layout_mode_tests {
     #[test]
     fn a_far_edge_is_left_alone() {
         let r = Rectangle::new((500, 500).into(), (400, 300).into());
-        assert_eq!(snap_to_edges(r, zone(), 16), r, "beyond the threshold is a choice");
+        assert_eq!(
+            snap_to_edges(r, zone(), 16),
+            r,
+            "beyond the threshold is a choice"
+        );
     }
 
     #[test]
     fn the_right_and_bottom_edges_snap_too() {
         let z = zone();
-        let r = Rectangle::new((z.size.w - 400 - 6, z.loc.y + z.size.h - 300 - 6).into(),
-                               (400, 300).into());
+        let r = Rectangle::new(
+            (z.size.w - 400 - 6, z.loc.y + z.size.h - 300 - 6).into(),
+            (400, 300).into(),
+        );
         let s = snap_to_edges(r, z, 16);
         assert_eq!(s.loc.x + s.size.w, z.loc.x + z.size.w);
         assert_eq!(s.loc.y + s.size.h, z.loc.y + z.size.h);
@@ -374,10 +383,14 @@ mod layout_mode_tests {
         for i in 0..50 {
             let r = cascaded(z, 0.6, 0.6, i, 24);
             assert!(r.loc.x >= z.loc.x && r.loc.y >= z.loc.y);
-            assert!(r.loc.x + r.size.w <= z.loc.x + z.size.w,
-                    "window {i} left the zone horizontally");
-            assert!(r.loc.y + r.size.h <= z.loc.y + z.size.h,
-                    "window {i} left the zone vertically");
+            assert!(
+                r.loc.x + r.size.w <= z.loc.x + z.size.w,
+                "window {i} left the zone horizontally"
+            );
+            assert!(
+                r.loc.y + r.size.h <= z.loc.y + z.size.h,
+                "window {i} left the zone vertically"
+            );
         }
     }
 

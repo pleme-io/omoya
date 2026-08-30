@@ -147,7 +147,10 @@ pub fn keymap_text(keys: &[KeyEntry], layout_name: &str) -> String {
     s.push_str("\n\n");
 
     // --- symbols --------------------------------------------------------
-    let _ = writeln!(s, "xkb_symbols \"hairetsu\" {{\n    name[Group1]=\"{layout_name}\";");
+    let _ = writeln!(
+        s,
+        "xkb_symbols \"hairetsu\" {{\n    name[Group1]=\"{layout_name}\";"
+    );
     for e in keys {
         let syms: Vec<String> = e.levels.iter().map(|r| keysym_name(*r)).collect();
         let _ = writeln!(
@@ -159,14 +162,20 @@ pub fn keymap_text(keys: &[KeyEntry], layout_name: &str) -> String {
         );
     }
     // Group the modifier map so each modifier is declared once.
-    for modname in ["Shift", "Lock", "Control", "Mod1", "Mod2", "Mod3", "Mod4", "Mod5"] {
+    for modname in [
+        "Shift", "Lock", "Control", "Mod1", "Mod2", "Mod3", "Mod4", "Mod5",
+    ] {
         let members: Vec<&str> = keys
             .iter()
             .filter(|e| modmap_entry(e) == Some(modname))
             .map(|e| e.name)
             .collect();
         if !members.is_empty() {
-            let list = members.iter().map(|n| format!("<{n}>")).collect::<Vec<_>>().join(", ");
+            let list = members
+                .iter()
+                .map(|n| format!("<{n}>"))
+                .collect::<Vec<_>>()
+                .join(", ");
             let _ = writeln!(s, "    modifier_map {modname} {{ {list} }};");
         }
     }
@@ -189,7 +198,12 @@ mod tests {
     fn has_all_four_required_sections() {
         // A keymap missing any of these is rejected wholesale by clients.
         let t = text();
-        for section in ["xkb_keycodes", "xkb_types", "xkb_compatibility", "xkb_symbols"] {
+        for section in [
+            "xkb_keycodes",
+            "xkb_types",
+            "xkb_compatibility",
+            "xkb_symbols",
+        ] {
             assert!(t.contains(section), "missing {section}");
         }
         assert!(t.starts_with("xkb_keymap {"));
@@ -223,8 +237,16 @@ mod tests {
     fn every_key_in_the_table_is_emitted() {
         let t = text();
         for e in US {
-            assert!(t.contains(&format!("<{}> = {};", e.name, e.keycode)), "{}", e.name);
-            assert!(t.contains(&format!("key <{}> {{", e.name)), "{} symbols", e.name);
+            assert!(
+                t.contains(&format!("<{}> = {};", e.name, e.keycode)),
+                "{}",
+                e.name
+            );
+            assert!(
+                t.contains(&format!("key <{}> {{", e.name)),
+                "{} symbols",
+                e.name
+            );
         }
     }
 
@@ -236,7 +258,10 @@ mod tests {
         assert!(t.contains("XF86AudioMute"), "vendor name not normalised");
         assert!(t.contains("[ a, A ]"), "plain letters not normalised");
         assert!(t.contains("KP_Home"), "keypad name not normalised");
-        assert!(!t.contains("XK_"), "emitted a C macro name, not XKB's spelling");
+        assert!(
+            !t.contains("XK_"),
+            "emitted a C macro name, not XKB's spelling"
+        );
     }
 
     #[test]

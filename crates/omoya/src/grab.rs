@@ -30,10 +30,10 @@
 use smithay::{
     desktop::Window,
     input::pointer::{
-        AxisFrame, ButtonEvent, GestureHoldBeginEvent, GestureHoldEndEvent,
-        GesturePinchBeginEvent, GesturePinchEndEvent, GesturePinchUpdateEvent,
-        GestureSwipeBeginEvent, GestureSwipeEndEvent, GestureSwipeUpdateEvent, GrabStartData,
-        MotionEvent, PointerGrab, PointerInnerHandle, RelativeMotionEvent,
+        AxisFrame, ButtonEvent, GestureHoldBeginEvent, GestureHoldEndEvent, GesturePinchBeginEvent,
+        GesturePinchEndEvent, GesturePinchUpdateEvent, GestureSwipeBeginEvent,
+        GestureSwipeEndEvent, GestureSwipeUpdateEvent, GrabStartData, MotionEvent, PointerGrab,
+        PointerInnerHandle, RelativeMotionEvent,
     },
     utils::{Logical, Point},
 };
@@ -99,7 +99,10 @@ impl PointerGrab<Omoya> for MoveGrab {
         &mut self,
         data: &mut Omoya,
         handle: &mut PointerInnerHandle<'_, Omoya>,
-        _focus: Option<(<Omoya as smithay::input::SeatHandler>::PointerFocus, Point<f64, Logical>)>,
+        _focus: Option<(
+            <Omoya as smithay::input::SeatHandler>::PointerFocus,
+            Point<f64, Logical>,
+        )>,
         event: &MotionEvent,
     ) {
         // ★ FOCUS IS FORCED TO None while a grab is active. Letting the pointer
@@ -117,7 +120,10 @@ impl PointerGrab<Omoya> for MoveGrab {
         &mut self,
         data: &mut Omoya,
         handle: &mut PointerInnerHandle<'_, Omoya>,
-        focus: Option<(<Omoya as smithay::input::SeatHandler>::PointerFocus, Point<f64, Logical>)>,
+        focus: Option<(
+            <Omoya as smithay::input::SeatHandler>::PointerFocus,
+            Point<f64, Logical>,
+        )>,
         event: &RelativeMotionEvent,
     ) {
         handle.relative_motion(data, focus, event);
@@ -153,8 +159,7 @@ impl PointerGrab<Omoya> for MoveGrab {
                     threshold,
                 );
                 if (nx, ny) != (geo.loc.x, geo.loc.y) {
-                    data.space
-                        .map_element(self.window.clone(), (nx, ny), true);
+                    data.space.map_element(self.window.clone(), (nx, ny), true);
                 }
             }
             data.introspect.mark(crate::owed::Owed::Windows);
@@ -162,20 +167,81 @@ impl PointerGrab<Omoya> for MoveGrab {
         }
     }
 
-    fn axis(&mut self, data: &mut Omoya, handle: &mut PointerInnerHandle<'_, Omoya>, details: AxisFrame) {
+    fn axis(
+        &mut self,
+        data: &mut Omoya,
+        handle: &mut PointerInnerHandle<'_, Omoya>,
+        details: AxisFrame,
+    ) {
         handle.axis(data, details);
     }
     fn frame(&mut self, data: &mut Omoya, handle: &mut PointerInnerHandle<'_, Omoya>) {
         handle.frame(data);
     }
-    fn gesture_swipe_begin(&mut self, d: &mut Omoya, h: &mut PointerInnerHandle<'_, Omoya>, e: &GestureSwipeBeginEvent) { h.gesture_swipe_begin(d, e); }
-    fn gesture_swipe_update(&mut self, d: &mut Omoya, h: &mut PointerInnerHandle<'_, Omoya>, e: &GestureSwipeUpdateEvent) { h.gesture_swipe_update(d, e); }
-    fn gesture_swipe_end(&mut self, d: &mut Omoya, h: &mut PointerInnerHandle<'_, Omoya>, e: &GestureSwipeEndEvent) { h.gesture_swipe_end(d, e); }
-    fn gesture_pinch_begin(&mut self, d: &mut Omoya, h: &mut PointerInnerHandle<'_, Omoya>, e: &GesturePinchBeginEvent) { h.gesture_pinch_begin(d, e); }
-    fn gesture_pinch_update(&mut self, d: &mut Omoya, h: &mut PointerInnerHandle<'_, Omoya>, e: &GesturePinchUpdateEvent) { h.gesture_pinch_update(d, e); }
-    fn gesture_pinch_end(&mut self, d: &mut Omoya, h: &mut PointerInnerHandle<'_, Omoya>, e: &GesturePinchEndEvent) { h.gesture_pinch_end(d, e); }
-    fn gesture_hold_begin(&mut self, d: &mut Omoya, h: &mut PointerInnerHandle<'_, Omoya>, e: &GestureHoldBeginEvent) { h.gesture_hold_begin(d, e); }
-    fn gesture_hold_end(&mut self, d: &mut Omoya, h: &mut PointerInnerHandle<'_, Omoya>, e: &GestureHoldEndEvent) { h.gesture_hold_end(d, e); }
+    fn gesture_swipe_begin(
+        &mut self,
+        d: &mut Omoya,
+        h: &mut PointerInnerHandle<'_, Omoya>,
+        e: &GestureSwipeBeginEvent,
+    ) {
+        h.gesture_swipe_begin(d, e);
+    }
+    fn gesture_swipe_update(
+        &mut self,
+        d: &mut Omoya,
+        h: &mut PointerInnerHandle<'_, Omoya>,
+        e: &GestureSwipeUpdateEvent,
+    ) {
+        h.gesture_swipe_update(d, e);
+    }
+    fn gesture_swipe_end(
+        &mut self,
+        d: &mut Omoya,
+        h: &mut PointerInnerHandle<'_, Omoya>,
+        e: &GestureSwipeEndEvent,
+    ) {
+        h.gesture_swipe_end(d, e);
+    }
+    fn gesture_pinch_begin(
+        &mut self,
+        d: &mut Omoya,
+        h: &mut PointerInnerHandle<'_, Omoya>,
+        e: &GesturePinchBeginEvent,
+    ) {
+        h.gesture_pinch_begin(d, e);
+    }
+    fn gesture_pinch_update(
+        &mut self,
+        d: &mut Omoya,
+        h: &mut PointerInnerHandle<'_, Omoya>,
+        e: &GesturePinchUpdateEvent,
+    ) {
+        h.gesture_pinch_update(d, e);
+    }
+    fn gesture_pinch_end(
+        &mut self,
+        d: &mut Omoya,
+        h: &mut PointerInnerHandle<'_, Omoya>,
+        e: &GesturePinchEndEvent,
+    ) {
+        h.gesture_pinch_end(d, e);
+    }
+    fn gesture_hold_begin(
+        &mut self,
+        d: &mut Omoya,
+        h: &mut PointerInnerHandle<'_, Omoya>,
+        e: &GestureHoldBeginEvent,
+    ) {
+        h.gesture_hold_begin(d, e);
+    }
+    fn gesture_hold_end(
+        &mut self,
+        d: &mut Omoya,
+        h: &mut PointerInnerHandle<'_, Omoya>,
+        e: &GestureHoldEndEvent,
+    ) {
+        h.gesture_hold_end(d, e);
+    }
 
     fn start_data(&self) -> &GrabStartData<Omoya> {
         &self.start_data
@@ -190,7 +256,11 @@ mod snap_tests {
 
     #[test]
     fn within_the_threshold_snaps_flush() {
-        assert_eq!(snap_to(14, 0, 16), 0, "14px from the edge is a deliberate nudge");
+        assert_eq!(
+            snap_to(14, 0, 16),
+            0,
+            "14px from the edge is a deliberate nudge"
+        );
         assert_eq!(snap_to(-9, 0, 16), 0, "snapping works from outside too");
     }
 

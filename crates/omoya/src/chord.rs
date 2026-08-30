@@ -199,7 +199,11 @@ mod tests {
         // reserved chord quietly reaching the client, which is exactly the
         // thing nobody notices until they need the escape hatch.
         let reserved = Reserved::fleet_linux();
-        assert!(reserved.len() >= 13, "catalog shrank unexpectedly: {}", reserved.len());
+        assert!(
+            reserved.len() >= 13,
+            "catalog shrank unexpectedly: {}",
+            reserved.len()
+        );
 
         let producible: Vec<Key> = MAPPED_SYMS
             .iter()
@@ -210,7 +214,8 @@ mod tests {
         for (name, _claim) in reserved.iter() {
             // The catalog is keyed by the chord's canonical spelling; parse it
             // back rather than restating the 13 chords here.
-            let hk = Hotkey::parse(name).unwrap_or_else(|e| panic!("catalog key {name:?} does not parse: {e:?}"));
+            let hk = Hotkey::parse(name)
+                .unwrap_or_else(|e| panic!("catalog key {name:?} does not parse: {e:?}"));
             if !producible.contains(&hk.key) {
                 unreachable.push(name.to_string());
             }
@@ -297,7 +302,12 @@ mod tests {
         // mapped here is one the seat can consume, so mapping letters nobody
         // binds would put a chord's worth of risk on the client's keys for no
         // benefit.
-        for raw in [keysyms::KEY_a, keysyms::KEY_z, keysyms::KEY_Escape, keysyms::KEY_Tab] {
+        for raw in [
+            keysyms::KEY_a,
+            keysyms::KEY_z,
+            keysyms::KEY_Escape,
+            keysyms::KEY_Tab,
+        ] {
             assert_eq!(
                 key_from(Keysym::from(raw)),
                 None,

@@ -591,17 +591,23 @@ impl Introspect for OmoyaIntrospect {
 
         match head {
             "backend" => Ok(serde_json::json!(
-                if self.backend.load(Ordering::Relaxed) == 1 { "drm" } else { "nested" }
+                if self.backend.load(Ordering::Relaxed) == 1 {
+                    "drm"
+                } else {
+                    "nested"
+                }
             )),
             // ★ `unknown` is its own arm, not a default to one of the two.
             // A seat that has not modeset yet genuinely does not know, and
             // reporting a guess here would be worse than reporting nothing:
             // the whole point of the leaf is to settle which path is live.
-            "atomic" => Ok(serde_json::json!(match self.atomic.load(Ordering::Relaxed) {
-                1 => "atomic",
-                2 => "legacy",
-                _ => "unknown",
-            })),
+            "atomic" => Ok(serde_json::json!(
+                match self.atomic.load(Ordering::Relaxed) {
+                    1 => "atomic",
+                    2 => "legacy",
+                    _ => "unknown",
+                }
+            )),
             "frames" => Ok(n(&self.frames)),
             "presented" => Ok(n(&self.presented)),
             // ── ★ THE ONE MUTATING LEAF ──────────────────────────────
@@ -668,8 +674,8 @@ impl Introspect for OmoyaIntrospect {
                 // unmappable character is refused; doing it here means the
                 // caller is told, instead of the render thread silently
                 // dropping half a string an hour later.
-                let steps = crate::synth::expand(&synth)
-                    .map_err(|e| QueryError::unknown_field(e))?;
+                let steps =
+                    crate::synth::expand(&synth).map_err(|e| QueryError::unknown_field(e))?;
                 let n = steps.len();
                 self.queue_input(synth);
                 Ok(serde_json::json!({ "queued": text, "steps": n }))
@@ -687,13 +693,21 @@ impl Introspect for OmoyaIntrospect {
                     // No explicit state: a tap, so a caller never has to
                     // remember to release and cannot strand a modifier.
                     None => {
-                        self.queue_input(crate::synth::Synth::Key { code, pressed: true });
-                        self.queue_input(crate::synth::Synth::Key { code, pressed: false });
+                        self.queue_input(crate::synth::Synth::Key {
+                            code,
+                            pressed: true,
+                        });
+                        self.queue_input(crate::synth::Synth::Key {
+                            code,
+                            pressed: false,
+                        });
                         Ok(serde_json::json!({ "queued": "tap", "code": code }))
                     }
                     Some(pressed) => {
                         self.queue_input(crate::synth::Synth::Key { code, pressed });
-                        Ok(serde_json::json!({ "queued": "hold", "code": code, "pressed": pressed }))
+                        Ok(
+                            serde_json::json!({ "queued": "hold", "code": code, "pressed": pressed }),
+                        )
                     }
                 }
             }
@@ -718,8 +732,14 @@ impl Introspect for OmoyaIntrospect {
                     .and_then(serde_json::Value::as_u64)
                     .and_then(|c| u32::try_from(c).ok())
                     .unwrap_or(272);
-                self.queue_input(crate::synth::Synth::Button { code, pressed: true });
-                self.queue_input(crate::synth::Synth::Button { code, pressed: false });
+                self.queue_input(crate::synth::Synth::Button {
+                    code,
+                    pressed: true,
+                });
+                self.queue_input(crate::synth::Synth::Button {
+                    code,
+                    pressed: false,
+                });
                 Ok(serde_json::json!({ "queued": "click", "code": code }))
             }
             "synth_performed" => Ok(n(&self.synth_performed)),
@@ -730,9 +750,10 @@ impl Introspect for OmoyaIntrospect {
                 self.focus_rect
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
-                    .map_or_else(|| "none".to_string(), |(x, y, w, h)| format!(
-                        "{x},{y} {w}x{h}"
-                    ))
+                    .map_or_else(
+                        || "none".to_string(),
+                        |(x, y, w, h)| format!("{x},{y} {w}x{h}")
+                    )
             )),
             "frame_us" => Ok(n(&self.frame_us)),
             "blit_fast" => Ok(n(&self.blit_fast)),
@@ -742,13 +763,14 @@ impl Introspect for OmoyaIntrospect {
             // ★ WHICH MODE IS LIVE. Reading `td_dirty_pct` without this is a
             // measurement with no idea whether it changed anything: `verify`
             // publishes identical counters while leaving the screen untouched.
-            "td_mode" => Ok(serde_json::json!(
-                match self.td_mode.load(std::sync::atomic::Ordering::Relaxed) {
-                    0 => "off",
-                    2 => "verify",
-                    _ => "on",
-                }
-            )),
+            "td_mode" => Ok(serde_json::json!(match self
+                .td_mode
+                .load(std::sync::atomic::Ordering::Relaxed)
+            {
+                0 => "off",
+                2 => "verify",
+                _ => "on",
+            })),
             // ★ THE LIVE KNOB. Flipping the mode without a rebuild or a
             // relogin is what makes an A/B possible AT ALL on a seat whose
             // console is the machine's only local access — the alternative is
@@ -762,7 +784,9 @@ impl Introspect for OmoyaIntrospect {
                 };
                 match crate::truedamage::Mode::parse(name) {
                     Ok(m) => {
-                        let was = self.td_mode.swap(m.to_u64(), std::sync::atomic::Ordering::Relaxed);
+                        let was = self
+                            .td_mode
+                            .swap(m.to_u64(), std::sync::atomic::Ordering::Relaxed);
                         Ok(serde_json::json!({
                             "was": crate::truedamage::Mode::from_u64(was).name(),
                             "now": m.name(),
@@ -857,8 +881,12 @@ impl Introspect for OmoyaIntrospect {
             // surface a commit really changes. Derived here rather than left
             // to the caller so the denominator cannot be dropped on the way.
             "td_dirty_pct" => {
-                let ex = self.td_rows_examined.load(std::sync::atomic::Ordering::Relaxed);
-                let di = self.td_rows_dirty.load(std::sync::atomic::Ordering::Relaxed);
+                let ex = self
+                    .td_rows_examined
+                    .load(std::sync::atomic::Ordering::Relaxed);
+                let di = self
+                    .td_rows_dirty
+                    .load(std::sync::atomic::Ordering::Relaxed);
                 Ok(if ex == 0 {
                     // ★ NOT 0.0. Zero examined means the refinement never ran,
                     // which would render as "0% dirty" — a perfect score for a
@@ -897,10 +925,7 @@ impl Introspect for OmoyaIntrospect {
                     .clone()
             )),
             "modes" => Ok(serde_json::json!(
-                self.modes
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .clone()
+                self.modes.lock().unwrap_or_else(|e| e.into_inner()).clone()
             )),
             "last_frame_causes" => Ok(serde_json::json!(
                 self.last_frame_causes
@@ -955,17 +980,22 @@ impl Introspect for OmoyaIntrospect {
                     .request_seq
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
                     + 1;
-                *self.capture_request.lock().unwrap_or_else(|e| e.into_inner()) =
-                    Some(CaptureRequest {
-                        id,
-                        path: path.to_string(),
-                        region,
-                        hash_only,
-                    });
+                *self
+                    .capture_request
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = Some(CaptureRequest {
+                    id,
+                    path: path.to_string(),
+                    region,
+                    hash_only,
+                });
                 // ★ Cleared so a caller cannot read the PREVIOUS request's
                 // result and believe it is this one's. The id below is what
                 // makes that check possible at all; clearing alone is a race.
-                *self.capture_result.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                *self
+                    .capture_result
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = None;
                 // Same pairing as `do` above: owe the frame, then wake. A
                 // screenshot of an idle seat is precisely the case where no
                 // client is going to commit on our behalf.
@@ -1217,13 +1247,22 @@ mod tests {
             // Every one of them has a READ counterpart that IS advertised —
             // `td_mode_set` writes what `td_mode` reads back — so excluding
             // the verb never hides state from an agent enumerating the seat.
-            let Some(rest) = t.strip_prefix('"') else { continue };
-            let Some((name, after)) = rest.split_once('"') else { continue };
+            let Some(rest) = t.strip_prefix('"') else {
+                continue;
+            };
+            let Some((name, after)) = rest.split_once('"') else {
+                continue;
+            };
             if !after.trim_start().starts_with("=>") {
                 continue;
             }
             const VERBS: &[&str] = &[
-                "do", "type", "key", "pointer", "click", "capture",
+                "do",
+                "type",
+                "key",
+                "pointer",
+                "click",
+                "capture",
                 // A diagnostic REQUEST, not a field: it schedules a scan on
                 // the next naturally-drawn frame. `stale_result` reads the
                 // verdict back, and IS advertised as a leaf.
@@ -1399,7 +1438,10 @@ mod capture_identity_tests {
         sorted.sort_unstable();
         sorted.dedup();
         assert_eq!(sorted.len(), ids.len(), "ids must not repeat: {ids:?}");
-        assert!(ids.windows(2).all(|w| w[1] > w[0]), "must increase: {ids:?}");
+        assert!(
+            ids.windows(2).all(|w| w[1] > w[0]),
+            "must increase: {ids:?}"
+        );
     }
 
     /// The id must start above zero, so "no request yet" (0 / absent) is never

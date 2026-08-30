@@ -23,10 +23,10 @@ use smithay::{
     utils::{Logical, Point},
     wayland::{
         compositor::{CompositorClientState, CompositorState},
+        dmabuf::{DmabufGlobal, DmabufState},
         output::OutputManagerState,
         selection::data_device::DataDeviceState,
         shell::xdg::XdgShellState,
-        dmabuf::{DmabufGlobal, DmabufState},
         shm::ShmState,
         socket::ListeningSocketSource,
     },
@@ -471,11 +471,14 @@ impl Omoya {
 
         let Some(output) = self.space.outputs().next() else {
             // No output means no layer map to consult; fall back to windows.
-            return self.space.element_under(pos).and_then(|(window, location)| {
-                window
-                    .surface_under(pos - location.to_f64(), Wst::ALL)
-                    .map(|(s, p)| (s, (p + location).to_f64()))
-            });
+            return self
+                .space
+                .element_under(pos)
+                .and_then(|(window, location)| {
+                    window
+                        .surface_under(pos - location.to_f64(), Wst::ALL)
+                        .map(|(s, p)| (s, (p + location).to_f64()))
+                });
         };
         let output_geo = self.space.output_geometry(output).unwrap_or_default();
         let map = layer_map_for_output(output);

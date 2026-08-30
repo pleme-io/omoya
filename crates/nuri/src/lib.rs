@@ -321,7 +321,10 @@ impl<'a> Surface<'a> {
             && alpha >= 1.0;
 
         for d in damage {
-            let Some(clip) = d.intersect(dst_rect).and_then(|r| r.intersect(self.bounds())) else {
+            let Some(clip) = d
+                .intersect(dst_rect)
+                .and_then(|r| r.intersect(self.bounds()))
+            else {
                 continue;
             };
             if one_to_one {
@@ -556,15 +559,36 @@ mod tests {
             px[3] = 0x80;
         }
         let sref = SurfaceRef::new(&src, W, H, (W * 4) as usize).unwrap();
-        let r = Rect { x: 0, y: 0, w: W, h: H };
+        let r = Rect {
+            x: 0,
+            y: 0,
+            w: W,
+            h: H,
+        };
 
         let mut honest_buf = vec![0u8; (W * H * 4) as usize];
         let mut honest = Surface::new(&mut honest_buf, W, H, (W * 4) as usize).unwrap();
-        honest.blit(&sref, r, r, Transform::Normal, 1.0, &[r], OpaqueHint::Unknown);
+        honest.blit(
+            &sref,
+            r,
+            r,
+            Transform::Normal,
+            1.0,
+            &[r],
+            OpaqueHint::Unknown,
+        );
 
         let mut lying_buf = vec![0u8; (W * H * 4) as usize];
         let mut lying = Surface::new(&mut lying_buf, W, H, (W * 4) as usize).unwrap();
-        lying.blit(&sref, r, r, Transform::Normal, 1.0, &[r], OpaqueHint::Opaque);
+        lying.blit(
+            &sref,
+            r,
+            r,
+            Transform::Normal,
+            1.0,
+            &[r],
+            OpaqueHint::Opaque,
+        );
 
         assert_ne!(
             honest_buf, lying_buf,
@@ -593,17 +617,41 @@ mod tests {
             px[3] = 0xff;
         }
         let sref = SurfaceRef::new(&src, W, H, (W * 4) as usize).unwrap();
-        let r = Rect { x: 0, y: 0, w: W, h: H };
+        let r = Rect {
+            x: 0,
+            y: 0,
+            w: W,
+            h: H,
+        };
 
         let mut scanned_buf = vec![0u8; (W * H * 4) as usize];
         let mut scanned = Surface::new(&mut scanned_buf, W, H, (W * 4) as usize).unwrap();
-        let a = scanned.blit(&sref, r, r, Transform::Normal, 1.0, &[r], OpaqueHint::Unknown);
+        let a = scanned.blit(
+            &sref,
+            r,
+            r,
+            Transform::Normal,
+            1.0,
+            &[r],
+            OpaqueHint::Unknown,
+        );
 
         let mut hinted_buf = vec![0u8; (W * H * 4) as usize];
         let mut hinted = Surface::new(&mut hinted_buf, W, H, (W * 4) as usize).unwrap();
-        let b = hinted.blit(&sref, r, r, Transform::Normal, 1.0, &[r], OpaqueHint::Opaque);
+        let b = hinted.blit(
+            &sref,
+            r,
+            r,
+            Transform::Normal,
+            1.0,
+            &[r],
+            OpaqueHint::Opaque,
+        );
 
-        assert_eq!(scanned_buf, hinted_buf, "the shortcut must not change pixels");
+        assert_eq!(
+            scanned_buf, hinted_buf,
+            "the shortcut must not change pixels"
+        );
         assert_eq!(a, b, "and both must report the same arms taken");
         assert_eq!(a.rows_copied, u64::from(H as u32));
     }
@@ -620,8 +668,21 @@ mod tests {
         let sref = SurfaceRef::new(&src, W, H, (W * 4) as usize).unwrap();
         let mut buf = vec![0u8; (W * H * 4) as usize];
         let mut dst = Surface::new(&mut buf, W, H, (W * 4) as usize).unwrap();
-        let r = Rect { x: 0, y: 0, w: W, h: H };
-        let t = dst.blit(&sref, r, r, Transform::Normal, 1.0, &[r], OpaqueHint::Unknown);
+        let r = Rect {
+            x: 0,
+            y: 0,
+            w: W,
+            h: H,
+        };
+        let t = dst.blit(
+            &sref,
+            r,
+            r,
+            Transform::Normal,
+            1.0,
+            &[r],
+            OpaqueHint::Unknown,
+        );
 
         assert_eq!(t.rows_copied, 0, "no row is wholly opaque");
         assert_eq!(t.rows_blended, u64::from(H as u32), "every row blends");
@@ -636,8 +697,21 @@ mod tests {
         let sref = SurfaceRef::new(&src, W, H, (W * 4) as usize).unwrap();
         let mut buf = vec![0u8; (W * H * 4) as usize];
         let mut dst = Surface::new(&mut buf, W, H, (W * 4) as usize).unwrap();
-        let r = Rect { x: 0, y: 0, w: W, h: H };
-        let t = dst.blit(&sref, r, r, Transform::Normal, 1.0, &[r], OpaqueHint::Unknown);
+        let r = Rect {
+            x: 0,
+            y: 0,
+            w: W,
+            h: H,
+        };
+        let t = dst.blit(
+            &sref,
+            r,
+            r,
+            Transform::Normal,
+            1.0,
+            &[r],
+            OpaqueHint::Unknown,
+        );
         assert_eq!(t.rows_copied, u64::from(H as u32));
         assert_eq!(t.rows_blended, 0);
         assert_eq!(t.pixels_general, 0);
@@ -654,9 +728,27 @@ mod tests {
         let sref = SurfaceRef::new(&src, W, H, (W * 4) as usize).unwrap();
         let mut buf = vec![0u8; (W * 2 * H * 2 * 4) as usize];
         let mut dst = Surface::new(&mut buf, W * 2, H * 2, (W * 2 * 4) as usize).unwrap();
-        let s = Rect { x: 0, y: 0, w: W, h: H };
-        let d = Rect { x: 0, y: 0, w: W * 2, h: H * 2 };
-        let t = dst.blit(&sref, s, d, Transform::Normal, 1.0, &[d], OpaqueHint::Unknown);
+        let s = Rect {
+            x: 0,
+            y: 0,
+            w: W,
+            h: H,
+        };
+        let d = Rect {
+            x: 0,
+            y: 0,
+            w: W * 2,
+            h: H * 2,
+        };
+        let t = dst.blit(
+            &sref,
+            s,
+            d,
+            Transform::Normal,
+            1.0,
+            &[d],
+            OpaqueHint::Unknown,
+        );
         assert_eq!(t.rows_copied, 0);
         assert_eq!(t.rows_blended, 0);
         assert!(t.pixels_general > 0, "the general path must be counted");
@@ -676,8 +768,21 @@ mod tests {
         let sref = SurfaceRef::new(&src, W, H, (W * 4) as usize).unwrap();
         let mut buf = vec![0u8; (W * H * 4) as usize];
         let mut dst = Surface::new(&mut buf, W, H, (W * 4) as usize).unwrap();
-        let r = Rect { x: 0, y: 0, w: W, h: H };
-        let t = dst.blit(&sref, r, r, Transform::Normal, 1.0, &[r], OpaqueHint::Unknown);
+        let r = Rect {
+            x: 0,
+            y: 0,
+            w: W,
+            h: H,
+        };
+        let t = dst.blit(
+            &sref,
+            r,
+            r,
+            Transform::Normal,
+            1.0,
+            &[r],
+            OpaqueHint::Unknown,
+        );
         assert_eq!(
             t.rows_copied + t.rows_blended,
             u64::from(H as u32),
@@ -722,7 +827,15 @@ mod tests {
         let mut fast_px = vec![0u8; stride * H as usize];
         {
             let mut dst = Surface::new(&mut fast_px, W, H, stride).expect("dst");
-            dst.blit(&src, whole, whole, Transform::Normal, 1.0, &[whole], OpaqueHint::Unknown);
+            dst.blit(
+                &src,
+                whole,
+                whole,
+                Transform::Normal,
+                1.0,
+                &[whole],
+                OpaqueHint::Unknown,
+            );
         }
 
         // The general path, reached by asking for a transform the fast path
@@ -736,7 +849,15 @@ mod tests {
             // alpha < 1.0 also declines the fast path; 1.0 exactly is what
             // the fast path requires, so use a hair under and accept that
             // the blend is a no-op against an opaque source.
-            dst.blit(&src, whole, whole, Transform::Normal, 0.999_999, &[whole], OpaqueHint::Unknown);
+            dst.blit(
+                &src,
+                whole,
+                whole,
+                Transform::Normal,
+                0.999_999,
+                &[whole],
+                OpaqueHint::Unknown,
+            );
         }
 
         assert_eq!(
@@ -853,7 +974,11 @@ mod tests {
             OpaqueHint::Unknown,
         );
         assert_eq!(&dst_buf[0..4], &[255, 255, 255, 255]);
-        assert_eq!(&dst_buf[4..8], &[0, 0, 0, 0], "outside damage stays untouched");
+        assert_eq!(
+            &dst_buf[4..8],
+            &[0, 0, 0, 0],
+            "outside damage stays untouched"
+        );
     }
 
     #[test]

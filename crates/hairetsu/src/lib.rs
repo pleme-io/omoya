@@ -123,11 +123,18 @@ impl Keymap {
             })
             .collect();
         let text = emit::keymap_text(layout::US, "English (US)");
-        Self { keys, layout_name: "English (US)".to_owned(), text }
+        Self {
+            keys,
+            layout_name: "English (US)".to_owned(),
+            text,
+        }
     }
 
     fn key(&self, keycode: u32) -> Option<&CompiledKey> {
-        self.keys.binary_search_by_key(&keycode, |k| k.keycode).ok().map(|i| &self.keys[i])
+        self.keys
+            .binary_search_by_key(&keycode, |k| k.keycode)
+            .ok()
+            .map(|i| &self.keys[i])
     }
 
     /// The keymap as XKB text — what gets sent to Wayland clients.
@@ -149,8 +156,9 @@ impl Keymap {
 
     #[must_use]
     pub fn num_levels_for_key(&self, keycode: u32) -> u32 {
-        self.key(keycode)
-            .map_or(0, |k| u32::try_from(k.levels.len()).expect("level count is small"))
+        self.key(keycode).map_or(0, |k| {
+            u32::try_from(k.levels.len()).expect("level count is small")
+        })
     }
 
     #[must_use]
@@ -169,7 +177,9 @@ impl Keymap {
     /// `xkb_keymap_key_get_syms_by_level`.
     #[must_use]
     pub fn key_syms_by_level(&self, keycode: u32, level: u32) -> &[Keysym] {
-        let Some(k) = self.key(keycode) else { return &[] };
+        let Some(k) = self.key(keycode) else {
+            return &[];
+        };
         if k.levels.is_empty() {
             return &[];
         }
@@ -182,9 +192,8 @@ impl Keymap {
     /// Modifier and lock keys must not, or holding Shift types a stream of them.
     #[must_use]
     pub fn key_repeats(&self, keycode: u32) -> bool {
-        self.key(keycode).is_some_and(|k| {
-            k.levels.first().is_none_or(|s| !is_modifier_keysym(*s))
-        })
+        self.key(keycode)
+            .is_some_and(|k| k.levels.first().is_none_or(|s| !is_modifier_keysym(*s)))
     }
 }
 
@@ -305,7 +314,10 @@ impl State {
                 // bit: with both Shifts down, releasing one must keep Shift.
                 self.depressed = 0;
                 for held in &self.held {
-                    if let Some(s) = self.keymap.key(*held).and_then(|k| k.levels.first().copied())
+                    if let Some(s) = self
+                        .keymap
+                        .key(*held)
+                        .and_then(|k| k.levels.first().copied())
                     {
                         if let Some(bit) = modifier_bit(s) {
                             self.depressed |= bit;
@@ -418,7 +430,9 @@ impl State {
     /// and nothing else, Num Lock reaches the keypad and nothing else.
     #[must_use]
     pub fn level_for_key(&self, keycode: u32) -> u32 {
-        let Some(k) = self.keymap.key(keycode) else { return 0 };
+        let Some(k) = self.keymap.key(keycode) else {
+            return 0;
+        };
         let mods = self.effective_mods();
         let shift = mods & modifier::SHIFT != 0;
         let caps = mods & modifier::LOCK != 0;
@@ -433,19 +447,27 @@ impl State {
             layout::KeyType::Keypad => u32::from(shift || num),
         };
         // Level 3/4 only exist on keys that declare them.
-        if level3 && k.levels.len() >= 4 { base + 2 } else { base }
+        if level3 && k.levels.len() >= 4 {
+            base + 2
+        } else {
+            base
+        }
     }
 
     /// Keysyms produced by a key right now.
     #[must_use]
     pub fn key_syms(&self, keycode: u32) -> &[Keysym] {
-        self.keymap.key_syms_by_level(keycode, self.level_for_key(keycode))
+        self.keymap
+            .key_syms_by_level(keycode, self.level_for_key(keycode))
     }
 
     /// The single keysym a key produces, or `NoSymbol`.
     #[must_use]
     pub fn key_sym(&self, keycode: u32) -> Keysym {
-        self.key_syms(keycode).first().copied().unwrap_or(Keysym::new(0))
+        self.key_syms(keycode)
+            .first()
+            .copied()
+            .unwrap_or(Keysym::new(0))
     }
 
     /// Active LED mask, bit order matching [`LED_NAMES`].
@@ -500,7 +522,11 @@ mod tests {
         s.update_key(LSHIFT, KeyDirection::Down);
         s.update_key(RSHIFT, KeyDirection::Down);
         s.update_key(LSHIFT, KeyDirection::Up);
-        assert_eq!(s.key_sym(A).raw(), key::A, "Shift lost while RSHIFT still held");
+        assert_eq!(
+            s.key_sym(A).raw(),
+            key::A,
+            "Shift lost while RSHIFT still held"
+        );
         s.update_key(RSHIFT, KeyDirection::Up);
         assert_eq!(s.key_sym(A).raw(), key::a);
     }

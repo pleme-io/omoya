@@ -25,8 +25,8 @@
 
 use std::sync::Arc;
 
-use smithay::backend::allocator::{Buffer as _, Fourcc};
 use smithay::backend::allocator::dmabuf::Dmabuf;
+use smithay::backend::allocator::{Buffer as _, Fourcc};
 use smithay::backend::renderer::{
     Bind, Color32F, DebugFlags, Frame, ImportDma, ImportDmaWl, ImportMem, ImportMemWl, Renderer,
     RendererSuper, Texture, TextureFilter, sync::SyncPoint,
@@ -643,9 +643,14 @@ impl Frame for NuriFrame<'_, '_> {
         self.context.clone()
     }
 
-    fn clear(&mut self, color: Color32F, at: &[Rectangle<i32, Physical>]) -> Result<(), Self::Error> {
+    fn clear(
+        &mut self,
+        color: Color32F,
+        at: &[Rectangle<i32, Physical>],
+    ) -> Result<(), Self::Error> {
         for r in at {
-            self.surface.fill(to_rect(*r), nuri::Rgba(color.components()));
+            self.surface
+                .fill(to_rect(*r), nuri::Rgba(color.components()));
         }
         Ok(())
     }
@@ -919,9 +924,11 @@ impl ImportMemWl for NuriRenderer {
             // malicious or buggy client reads compositor memory, and the only
             // place to stop it is here, before the copy.
             let need = offset
-                .checked_add(stride.checked_mul(height).ok_or(Error::Unsupported(
-                    "shm stride * height overflows",
-                ))?)
+                .checked_add(
+                    stride
+                        .checked_mul(height)
+                        .ok_or(Error::Unsupported("shm stride * height overflows"))?,
+                )
                 .ok_or(Error::Unsupported("shm offset + size overflows"))?;
             if need > len {
                 return Err(Error::Unsupported("shm buffer shorter than its geometry"));
@@ -1209,9 +1216,8 @@ impl Bind<Dmabuf> for NuriRenderer {
         // SAFETY: the mapping is valid for `length()` bytes and is moved into
         // the returned framebuffer, so it outlives the slice. The range is
         // bounds-checked above.
-        let data = unsafe {
-            std::slice::from_raw_parts_mut(mapping.ptr().cast::<u8>(), mapping.length())
-        };
+        let data =
+            unsafe { std::slice::from_raw_parts_mut(mapping.ptr().cast::<u8>(), mapping.length()) };
 
         // ★ TAKE THE POOLED SHADOW AND SIZE IT TO THIS BUFFER.
         //
@@ -1395,8 +1401,7 @@ mod tests {
         // hands the damage over with the element's origin subtracted, so a
         // full-surface damage arrives as 0,0 250x250 — NOT 512,0.
         let dst: Rectangle<i32, Physical> = Rectangle::new((512, 0).into(), (250, 250).into());
-        let relative: Rectangle<i32, Physical> =
-            Rectangle::new((0, 0).into(), (250, 250).into());
+        let relative: Rectangle<i32, Physical> = Rectangle::new((0, 0).into(), (250, 250).into());
 
         // The bug: intersecting as-is.
         assert!(
