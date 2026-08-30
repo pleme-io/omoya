@@ -317,6 +317,18 @@ smithay::delegate_presentation!(Omoya);
 // across a Nord desktop.
 impl smithay::wayland::shell::xdg::decoration::XdgDecorationHandler for Omoya {
     fn new_decoration(&mut self, toplevel: ToplevelSurface) {
+        // ★ Record what the client is being TOLD, at the point of telling.
+        // Re-deriving it later would report the POLICY rather than the answer
+        // the client actually received -- and those differ during a race.
+        {
+            use smithay::reexports::wayland_server::Resource as _;
+            let key = format!("{:?}", toplevel.wl_surface().id());
+            self.introspect
+                .decoration_sent
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(key, "ServerSide".to_owned());
+        }
         toplevel.with_pending_state(|state| {
             state.decoration_mode = Some(
                 smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode::ServerSide,

@@ -386,6 +386,58 @@ impl crate::state::Omoya {
             .lock()
             .unwrap_or_else(|e| e.into_inner()) =
             seen.iter().map(|(_, id)| id.clone()).collect();
+
+        // ── ★ THE JOINED TABLE, BUILT FROM THE SAME WALK ────────────────────
+        //
+        // Built here rather than beside `geometry` in drm.rs on purpose: this
+        // walk is per-WINDOW, while drm.rs walks RENDER ELEMENTS and therefore
+        // counts the bar and four focus-ring edges among "windows". Sharing the
+        // walk is what makes the row's app_id and rect refer to the same thing
+        // -- the property the three legacy lists never had.
+        {
+            use smithay::reexports::wayland_server::Resource as _;
+            let focused = self.introspect.focus_rect.lock().unwrap_or_else(|e| e.into_inner());
+            let sent = self
+                .introspect
+                .decoration_sent
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let rows: Vec<crate::introspect::ToplevelRow> = seen
+                .iter()
+                .enumerate()
+                .map(|(i, (w, app))| {
+                    let rect = self.space.element_geometry(w).map(|g| {
+                        (g.loc.x, g.loc.y, g.size.w, g.size.h)
+                    });
+                    let key = w
+                        .toplevel()
+                        .map(|t| format!("{:?}", t.wl_surface().id()));
+                    crate::introspect::ToplevelRow {
+                        id: i as u64,
+                        app_id: app.clone(),
+                        decoration_mode_sent: key.and_then(|k| sent.get(&k).cloned()),
+                        rect,
+                        // ★ The focus ring is the ONLY chrome omoya draws, and
+                        // only for the focused window. Counting it here is what
+                        // makes `0` on an unfocused window a readable fact
+                        // rather than an absence nobody looked for.
+                        decoration_elements_drawn: u32::from(
+                            rect.is_some() && *focused == rect.map(|r| (r.0, r.1, r.2, r.3)),
+                        ) * 4,
+                        focused: rect.is_some()
+                            && *focused == rect.map(|r| (r.0, r.1, r.2, r.3)),
+                        tiled: false,
+                    }
+                })
+                .collect();
+            drop(sent);
+            drop(focused);
+            *self
+                .introspect
+                .toplevels
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = rows;
+        }
         // ★ THE MODE DECIDES FIRST, THE PER-APP LIST SECOND.
         //
         // In `Floating` every window floats and `floating_app_ids` becomes
@@ -399,6 +451,15 @@ impl crate::state::Omoya {
         // someone adds a third mode.
         let floating_mode =
             self.config.layout.mode == crate::config::LayoutMode::Floating;
+        // ★ Published from the point of DECISION, so the leaf reports the mode
+        // the arrangement actually used rather than a re-read of config that
+        // could drift from it.
+        *self
+            .introspect
+            .layout_mode
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) =
+            if floating_mode { "floating" } else { "tiling" }.to_owned();
         let floats: Vec<smithay::desktop::Window> = seen
             .iter()
             .filter(|(_, id)| {

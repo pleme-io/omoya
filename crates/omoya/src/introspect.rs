@@ -60,6 +60,51 @@ use kanshou::{Introspect, Query, QueryError, QueryResult};
 /// the instant asked; for "is it rendering, what is it rendering on, how many
 /// clients" that is the right trade, and it is stated so nobody reads these as
 /// transactional.
+/// One toplevel, with the protocol side and the pixel side in the same row.
+///
+/// ★ `Option` is load-bearing on the P-side field: "the client was told
+/// ServerSide" and "the client has not been told anything yet" are different
+/// answers, and a default would collapse them into the first -- the round-up
+/// that makes a race look like a policy.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ToplevelRow {
+    /// Stable within a run. Not a surface pointer: those get reused.
+    pub id: u64,
+    pub app_id: Option<String>,
+    /// `"ServerSide"` / `"ClientSide"`, or `None` if no decoration object exists.
+    pub decoration_mode_sent: Option<String>,
+    /// The window's rect in the Space, `(x, y, w, h)`.
+    pub rect: Option<(i32, i32, i32, i32)>,
+    /// Chrome elements the compositor drew FOR THIS WINDOW.
+    ///
+    /// ★ Zero is the whole finding when `decoration_mode_sent` is
+    /// `ServerSide`: the client drew nothing because it was told not to, and
+    /// the compositor drew nothing because only the focused window gets a ring.
+    pub decoration_elements_drawn: u32,
+    pub focused: bool,
+    /// Whether the layout tree holds this window. `false` in floating mode for
+    /// EVERY window (`layout.rs` unmaps them all), which is why a resize deed
+    /// is a silent no-op there independently of the `move_request` stubs.
+    pub tiled: bool,
+}
+
+impl ToplevelRow {
+    /// The one-line verdict a reader actually wants.
+    ///
+    /// ★ Names the CONJUNCTION. Each input is individually legal; the
+    /// combination is the defect, and no per-field view can show it.
+    #[must_use]
+    pub fn chrome_verdict(&self, floating: bool) -> &'static str {
+        let told_server = self.decoration_mode_sent.as_deref() == Some("ServerSide");
+        match (told_server, floating, self.decoration_elements_drawn) {
+            (true, true, 0) => "no-grabbable-chrome: told ServerSide, floating, none drawn",
+            (true, _, 0) => "server-side promised, none drawn",
+            (true, _, _) => "server-side drawn",
+            (false, _, _) => "client-side (client draws its own)",
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct OmoyaIntrospect {
     /// Which backend is driving pixels: 0 = nested (winit), 1 = drm.
@@ -280,6 +325,40 @@ pub struct OmoyaIntrospect {
     pub stale_result: std::sync::Mutex<Option<String>>,
     /// What became of the last capture: the path written, or the error.
     pub capture_result: std::sync::Mutex<Option<String>>,
+    /// ── ★ THE JOINED WINDOW TABLE ────────────────────────────────────────
+    ///
+    /// One row per toplevel, keyed by a stable id, carrying what the client was
+    /// TOLD beside what was actually DRAWN for it.
+    ///
+    /// It exists because `window_app_ids`, `geometry` and `layout` are three
+    /// `" | "`-joined lists with THREE DIFFERENT DENOMINATORS and no join key:
+    /// `window_app_ids` walks Space elements (windows only), `geometry` walks
+    /// RENDER elements (windows plus the bar plus four focus-ring edges), and
+    /// `layout` is structurally EMPTY in floating mode. Nothing could answer
+    /// "which window is wrong" -- only "something is".
+    ///
+    /// ★ The defect class this makes readable is the CONJUNCTION, not any
+    /// single value. On plo: `decoration_mode_sent = ServerSide` is a correct
+    /// answer, `mode = Floating` is a correct configuration, and
+    /// `decoration_elements_drawn = 0` is a correct render -- and together they
+    /// mean the operator has no grabbable chrome by any route, which is
+    /// precisely the report "the windows have no borders to drag around".
+    /// Three legal values, one illegal state, and no leaf could see it.
+    pub toplevels: std::sync::Mutex<Vec<ToplevelRow>>,
+    /// The resolved layout mode, `"tiling"` or `"floating"`.
+    ///
+    /// ★ Published because the decoration policy's own justification depends on
+    /// it: `handlers.rs` answers ServerSide "on a tiling seat the compositor
+    /// owns geometry", and plo runs `floating`. A reader could not previously
+    /// check that premise from any leaf.
+    pub layout_mode: std::sync::Mutex<String>,
+    /// What decoration mode each toplevel was TOLD, keyed by a surface id.
+    ///
+    /// ★ The P side of the table. Recorded where the answer is SENT
+    /// (`handlers.rs`'s `XdgDecorationHandler`), not re-derived later, so it
+    /// reports what the client actually received rather than what a reader
+    /// believes the policy would have said.
+    pub decoration_sent: std::sync::Mutex<std::collections::BTreeMap<String, String>>,
     /// The input device table: what the backend opened, what it believes
     /// about each one, and whether it is in the poll set.
     ///
@@ -606,6 +685,37 @@ impl Introspect for OmoyaIntrospect {
             //
             // `null` for a window that has not set one — distinct from the
             // empty string, which is a client that set one and chose nothing.
+            // ★ The joined table. Supersedes window_app_ids/geometry/layout,
+            // which stay for now as legacy projections -- coexistence is
+            // only-mitigated; re-deriving them FROM this table is what would
+            // make a disagreement unrepresentable, and that is a later step.
+            "toplevels" => {
+                let floating = self
+                    .layout_mode
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .as_str()
+                    == "floating";
+                let rows = self.toplevels.lock().unwrap_or_else(|e| e.into_inner());
+                Ok(serde_json::json!({
+                    "count": rows.len(),
+                    "floating": floating,
+                    "rows": rows.iter().map(|r| {
+                        let mut v = serde_json::to_value(r).unwrap_or(serde_json::Value::Null);
+                        if let Some(o) = v.as_object_mut() {
+                            o.insert("chrome_verdict".into(),
+                                serde_json::Value::String(r.chrome_verdict(floating).to_owned()));
+                        }
+                        v
+                    }).collect::<Vec<_>>(),
+                }))
+            }
+            "layout_mode" => Ok(serde_json::json!(
+                self.layout_mode
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone()
+            )),
             "window_app_ids" => Ok(serde_json::json!(
                 self.window_app_ids
                     .lock()
@@ -825,6 +935,8 @@ impl Introspect for OmoyaIntrospect {
             "owed_vt_switches",
             "capture_result",
             "stale_result",
+            "toplevels",
+            "layout_mode",
             "atomic",
             // ★ THESE WERE ANSWERED AND UNLISTED. `schema()` is how an agent
             // discovers what it can ask, so a leaf missing here is a leaf that
@@ -982,5 +1094,76 @@ impl OmoyaIntrospect {
         self.td_rows_dirty.store(shadows.rows_dirty, Relaxed);
         self.td_rows_examined.store(shadows.rows_examined, Relaxed);
         self.td_shadows.store(shadows.len() as u64, Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod toplevel_table_tests {
+    use super::ToplevelRow;
+
+    fn row(sent: Option<&str>, drawn: u32) -> ToplevelRow {
+        ToplevelRow {
+            id: 0,
+            app_id: Some("mado".into()),
+            decoration_mode_sent: sent.map(ToOwned::to_owned),
+            rect: Some((518, 280, 883, 547)),
+            decoration_elements_drawn: drawn,
+            focused: true,
+            tiled: false,
+        }
+    }
+
+    /// ★ THE OPERATOR'S REPORT, AS A TEST (plo, 2026-08-29).
+    ///
+    /// "the windows have no borders for me to drag around and such" / "or snap".
+    /// Every input below is individually correct: omoya answers ServerSide by
+    /// deliberate policy, the seat is configured floating, and the renderer
+    /// draws a focus ring only for the focused window. The CONJUNCTION is the
+    /// defect, and no per-field leaf could show it -- which is exactly why the
+    /// three legacy lists could not answer "which window is wrong".
+    #[test]
+    fn the_operators_report_is_a_named_verdict() {
+        let v = row(Some("ServerSide"), 0).chrome_verdict(true);
+        assert!(v.starts_with("no-grabbable-chrome"), "{v}");
+        assert!(v.contains("ServerSide") && v.contains("floating"), "{v}");
+    }
+
+    /// Anti-vacuity: the verdict must DISCRIMINATE, not always accuse.
+    /// A constant "no-grabbable-chrome" would pass the test above.
+    #[test]
+    fn a_healthy_window_is_not_accused() {
+        assert_eq!(
+            row(Some("ServerSide"), 4).chrome_verdict(true),
+            "server-side drawn"
+        );
+        assert_eq!(
+            row(Some("ClientSide"), 0).chrome_verdict(true),
+            "client-side (client draws its own)",
+            "a client drawing its own titlebar has chrome even at 0 server elements"
+        );
+    }
+
+    /// Tiling is the case the ServerSide policy was WRITTEN for, and there the
+    /// same promise-with-nothing-drawn is a milder statement -- the compositor
+    /// owns geometry, so the operator still has keyboard control.
+    #[test]
+    fn tiling_and_floating_are_not_the_same_verdict() {
+        assert_ne!(
+            row(Some("ServerSide"), 0).chrome_verdict(true),
+            row(Some("ServerSide"), 0).chrome_verdict(false),
+            "the layout mode must change the verdict -- it is the premise the \
+             decoration policy cites for itself"
+        );
+    }
+
+    /// `None` is not `ServerSide`. A default would collapse "not told yet" into
+    /// "told server-side", turning a startup race into a policy report.
+    #[test]
+    fn not_yet_told_is_its_own_answer() {
+        assert_eq!(
+            row(None, 0).chrome_verdict(true),
+            "client-side (client draws its own)",
+            "absence must not be read as a ServerSide promise"
+        );
     }
 }
