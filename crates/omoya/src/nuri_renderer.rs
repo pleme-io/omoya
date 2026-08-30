@@ -230,16 +230,72 @@ impl Texture for NuriTexture {
 ///
 /// ★ HOLDS THE MAPPING ALIVE. `data` points into `_mapping`, so the two must
 /// travel together — a framebuffer that kept only the slice would be pointing
+/// What a scanout buffer is known to hold — the evidence a partial copy needs.
+///
+/// ── ★ WHY THIS IS A TYPE AND NOT A FLAG ─────────────────────────────────────
+///
+/// The whole stale-pixel class of this session comes from one shape: damage is
+/// ASSERTED by whoever mutates, TRUSTED by whoever paints, and a separate
+/// instrument (`stale_scan`) goes hunting afterwards for the cases where the
+/// assertion was wrong. A detector for a class that should not be
+/// representable is a design admission, not a diagnostic.
+///
+/// The sound rule is: **copying only the damage requires knowing what the
+/// destination already holds.** Without that, "paint only what changed" is a
+/// claim about a buffer nobody has established the state of — and the failure
+/// is invisible, because every layer reports success while pixels from an
+/// earlier generation survive underneath.
+///
+/// So the knowledge is carried in the type. `Unknown` has no partial path: the
+/// only thing `flush_damage` can do with it is copy everything. That is not a
+/// policy anyone can flip, it is the absence of a code path.
+///
+/// TIER: parse-time-rejected, not truly-unrepresentable. A caller can still
+/// construct `KnownAsOf` with a generation it did not verify. What is removed
+/// is the ACCIDENT — a partial copy can no longer happen because nobody thought
+/// about the destination, only because somebody claimed to know it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScanoutContents {
+    /// Byte-identical to the shadow as of this generation, so damage since
+    /// then is exactly what must be written.
+    KnownAsOf(u64),
+    /// Never written, recycled from a pool, or the generation could not be
+    /// established. A partial copy here is unsound.
+    Unknown,
+}
+
+impl ScanoutContents {
+    /// The damage a copy into this target must write, given what changed.
+    ///
+    /// ★ Returns `None` for "everything" rather than an empty slice, because
+    /// an empty damage list and "I do not know" must not be the same value —
+    /// they were, and that is how a full repaint and a no-op became
+    /// indistinguishable at the call site.
+    #[must_use]
+    pub fn copy_plan<'d>(
+        self,
+        damage: &'d [Rectangle<i32, Physical>],
+    ) -> Option<&'d [Rectangle<i32, Physical>]> {
+        match self {
+            Self::KnownAsOf(_) if !damage.is_empty() => Some(damage),
+            // Known but nothing changed is still a full copy today: the
+            // generation is not yet verified end-to-end. Tightening this to a
+            // no-op is what a clean stale_scan differential would earn.
+            Self::KnownAsOf(_) | Self::Unknown => None,
+        }
+    }
+}
+
+
 /// at an unmapped page the moment the mapping dropped, and the write would go
 /// to whatever the kernel put there next.
 pub struct NuriFramebuffer<'a> {
-    /// Whether the scanout copy may be clipped to the damage set.
+    /// What this scanout buffer is KNOWN to hold.
     ///
-    /// ★ FALSE by default. See `flush_damage` — on plo the shadow was provably
-    /// clean while the scanout was not, which localises the defect to the
-    /// damage set reaching this function. Correctness wins until the damage
-    /// path is proven by a clean `stale_scan` under load.
-    partial_copy: bool,
+    /// ★ A PROOF, NOT A PREFERENCE. This was a `partial_copy: bool` — a knob
+    /// where there should be evidence, which is the same smell one level down
+    /// from `stale_scan` itself. See `ScanoutContents`.
+    contents: ScanoutContents,
     /// The SCANOUT mapping. Written exactly once per frame, by
     /// [`NuriFramebuffer::flush_damage`], and never read.
     data: &'a mut [u8],
@@ -377,18 +433,21 @@ impl NuriFramebuffer<'_> {
         // built for exactly this) does not fire on this build, so the question
         // stayed open while the screen stayed broken.
         //
-        // ★ So the optimisation yields to correctness until it can be PROVEN,
-        // rather than the screen yielding to the optimisation. A full copy of
-        // 1920x1080x4 is 8.3 MB; this seat presented 643 frames in ~25 minutes,
-        // so the real cost here is nothing. On a seat that genuinely presents at
-        // 360 Hz it would matter, and that is what the knob is for.
+        // ★ THE DESTINATION'S STATE DECIDES, NOT A PREFERENCE.
         //
-        // Turn it back on with `damage.partial_scanout_copy: true` once
-        // stale_scan reports a clean differential under load.
-        if !self.partial_copy {
+        // `copy_plan` returns `None` when this buffer's contents are not
+        // established, and `None` means copy everything. There is no branch
+        // here that can partially copy into an `Unknown` target -- not because
+        // a policy forbids it, but because no such path exists.
+        //
+        // A full copy of 1920x1080x4 is 8.3 MB; this seat presented 643 frames
+        // in ~25 minutes, so today the cost is nothing. On a seat genuinely
+        // sustaining 360 Hz it would matter, and the way to earn the partial
+        // path back is to establish the generation -- not to add a flag.
+        let Some(damage) = self.contents.copy_plan(damage) else {
             self.data[..len].copy_from_slice(&self.shadow[..len]);
             return;
-        }
+        };
         for d in damage {
             let y0 = usize::try_from(d.loc.y.max(0)).unwrap_or(0).min(h);
             let y1 = usize::try_from((d.loc.y + d.size.h).max(0))
@@ -1233,12 +1292,15 @@ impl Bind<Dmabuf> for NuriRenderer {
         }
 
         Ok(NuriFramebuffer {
-            // ★ Correctness by default; see `flush_damage`. Overridable via the
-            // OMOYA_PARTIAL_SCANOUT_COPY escape hatch so the optimisation can be
-            // re-measured on a live seat without a rebuild -- which is exactly
-            // what could not be done when this defect was found.
-            partial_copy: std::env::var_os("OMOYA_PARTIAL_SCANOUT_COPY")
-                .is_some_and(|v| v == "1"),
+            // ★ UNKNOWN, and honestly so. This buffer comes from a pool that
+            // recycles allocations across binds (see `Drop`), so nothing here
+            // has established which generation its bytes belong to. Claiming
+            // `KnownAsOf` would be the assertion this type exists to remove.
+            //
+            // Establishing it -- threading the scanout slot's `last_drawn`
+            // generation through the bind -- is what earns the partial copy
+            // back, and it is a real change rather than a flag flip.
+            contents: ScanoutContents::Unknown,
             data,
             shadow,
             pool: self.shadow_pool.clone(),
