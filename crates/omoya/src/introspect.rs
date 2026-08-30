@@ -353,6 +353,24 @@ pub struct OmoyaIntrospect {
     /// still has to compare. That is only-mitigated, not unrepresentable: the
     /// leaf cannot refuse to answer a client that declines to check.
     pub request_seq: std::sync::atomic::AtomicU64,
+    /// `frames` at the moment a stale scan was armed.
+    ///
+    /// ── ★ SO "WAITING" CAN SAY WHICH WAITING IT IS ──────────────────────
+    ///
+    /// The scan reported `waiting: no frame drawn since the request` and kept
+    /// reporting it while the seat was demonstrably compositing --
+    /// `last_frame_causes` moved from `chrome` to `commit+deed` under the same
+    /// probing. Those are two different situations with the same message:
+    ///
+    ///   frames unchanged  -> genuinely idle; drive the seat
+    ///   frames advanced   -> composites ARE happening and the hook is not
+    ///                        being reached, which is a defect in the scan
+    ///                        rather than in the seat
+    ///
+    /// One message for both is the kotae failure this fleet keeps finding: an
+    /// answer that cannot distinguish `empty` from `blind`. Recording the frame
+    /// count at arm time is the whole cost of telling them apart.
+    pub stale_armed_at_frame: std::sync::atomic::AtomicU64,
     /// A pending stale-pixel scan: where to write the mask image.
     ///
     /// ★ Separate from `capture_request` because the two are OPPOSITE
@@ -982,6 +1000,10 @@ impl Introspect for OmoyaIntrospect {
                 *self.stale_request.lock().unwrap_or_else(|e| e.into_inner()) =
                     Some(path.to_string());
                 *self.stale_result.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                self.stale_armed_at_frame.store(
+                    self.frames.load(std::sync::atomic::Ordering::Relaxed),
+                    std::sync::atomic::Ordering::Relaxed,
+                );
                 // ★ NOT `Owed::Capture`, and this is the whole subtlety: a
                 // scan must observe a frame the seat was going to draw
                 // ANYWAY. Owing one would compose a fresh frame whose damage
@@ -994,7 +1016,45 @@ impl Introspect for OmoyaIntrospect {
                 Ok(serde_json::json!({ "requested": path, "note":
                     "runs on the next naturally-drawn frame; read stale_result" }))
             }
-            "stale_result" => Ok(serde_json::json!(
+            "stale_result" => {
+                let pending = self
+                    .stale_request
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .is_some();
+                let done = self
+                    .stale_result
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone();
+                if let Some(v) = done {
+                    return Ok(serde_json::json!(v));
+                }
+                if !pending {
+                    return Ok(serde_json::json!("no scan has been requested"));
+                }
+                let since = self
+                    .frames
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                    .saturating_sub(
+                        self.stale_armed_at_frame
+                            .load(std::sync::atomic::Ordering::Relaxed),
+                    );
+                // ★ TWO DIFFERENT WAITS, NAMED. Same message for both is the
+                // kotae failure: `empty` and `blind` rendered identically.
+                Ok(serde_json::json!({
+                    "outcome": "waiting",
+                    "frames_since_armed": since,
+                    "verdict": if since == 0 {
+                        "the seat is idle — drive it (move the pointer, type) to \
+                         produce a naturally-drawn frame"
+                    } else {
+                        "composites ARE happening and the scan hook was not \
+                         reached — this is a defect in the scan, not the seat"
+                    },
+                }))
+            }
+            "stale_result_raw" => Ok(serde_json::json!(
                 self.stale_result
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
@@ -1078,6 +1138,7 @@ impl Introspect for OmoyaIntrospect {
             "owed_vt_switches",
             "capture_result",
             "stale_result",
+            "stale_result_raw",
             "toplevels",
             "layout_mode",
             "bar_height",
