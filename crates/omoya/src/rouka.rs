@@ -290,6 +290,101 @@ pub fn choose(source: &mut impl PlaneSource, req: &Requirement, cpu_composited: 
     }
 }
 
+/// A candidate surface for direct scanout, in output-physical pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Candidate {
+    /// Where the surface lands on the output.
+    pub x: i32,
+    /// Y position on the output.
+    pub y: i32,
+    /// Width in physical pixels.
+    pub w: i32,
+    /// Height in physical pixels.
+    pub h: i32,
+    /// Buffer dimensions. Differing from `w`/`h` means the compositor is
+    /// SCALING, which a plane without a scaler cannot reproduce.
+    pub buffer_w: i32,
+    /// Buffer height.
+    pub buffer_h: i32,
+    /// Whether every pixel is opaque. A plane composites below everything
+    /// drawn by the CPU path, so a translucent surface would show the wrong
+    /// thing behind it.
+    pub opaque: bool,
+}
+
+/// Why a candidate cannot be scanned out.
+///
+/// ★ CLOSED, AND EVERY ARM IS A REAL KMS CONSTRAINT. A `bool` here would be
+/// the R5 mistake one level up: "not eligible" is unactionable, while
+/// "`Scaled`" tells the caller to stop scaling and "`Occluded`" tells it to
+/// try again when the overlap clears.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ineligible {
+    /// No plane advertises this (fourcc, modifier).
+    UnsupportedFormat,
+    /// Destination differs from buffer size and no scaler was proven.
+    Scaled,
+    /// Something the compositor draws lands on top of this rectangle.
+    Occluded,
+    /// Translucent, so what shows through the plane would be wrong.
+    Translucent,
+    /// Degenerate geometry.
+    Empty,
+}
+
+/// Decide whether `cand` may be handed to a plane, given what the compositor
+/// itself draws on top (`occluders`).
+///
+/// ── ★ OCCLUSION IS THE ONE THAT BITES ───────────────────────────────────────
+///
+/// The format and scaling checks fail loudly at commit time if you get them
+/// wrong. Occlusion does not: a plane composites UNDER the primary, so an
+/// overlapping element still draws correctly — until the frame where the
+/// compositor skips repainting that region because nothing damaged it, and the
+/// plane's content shows through a hole that should have been covered. That is
+/// the stale-pixel class again, arriving from a new direction, which is why it
+/// is checked here rather than trusted to the caller.
+///
+/// Measured on plo 2026-08-30, and it is why this is worth having: the bar sits
+/// at `0,0 1920x28`, mado's window at `518,280 883x547`, and the four focus-ring
+/// edges surround rather than cover it. Nothing overlaps, so mado is eligible —
+/// a fact no amount of reading the compositor would have told you.
+///
+/// # Errors
+/// [`Ineligible`] naming which constraint failed.
+pub fn eligible_for_plane(
+    cand: &Candidate,
+    req: &Requirement,
+    occluders: &[(i32, i32, i32, i32)],
+    plane_formats: &[(u32, u64)],
+) -> Result<(), Ineligible> {
+    if cand.w <= 0 || cand.h <= 0 {
+        return Err(Ineligible::Empty);
+    }
+    if !cand.opaque {
+        return Err(Ineligible::Translucent);
+    }
+    if cand.w != cand.buffer_w || cand.h != cand.buffer_h {
+        return Err(Ineligible::Scaled);
+    }
+    if !plane_formats.contains(&(req.fourcc, req.modifier)) {
+        return Err(Ineligible::UnsupportedFormat);
+    }
+    let (l, t, r, b) = (cand.x, cand.y, cand.x + cand.w, cand.y + cand.h);
+    for &(ox, oy, ow, oh) in occluders {
+        if ow <= 0 || oh <= 0 {
+            continue;
+        }
+        // Half-open intervals: an occluder whose edge merely TOUCHES the
+        // candidate shares no pixel. Using closed intervals here would reject
+        // plo's focus ring, which abuts the window exactly.
+        if ox < r && ox + ow > l && oy < b && oy + oh > t {
+            return Err(Ineligible::Occluded);
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -381,6 +476,96 @@ mod tests {
             }
             other => panic!("expected a readback, got {}", other.label()),
         }
+    }
+
+    fn cand(x: i32, y: i32, w: i32, h: i32) -> Candidate {
+        Candidate {
+            x,
+            y,
+            w,
+            h,
+            buffer_w: w,
+            buffer_h: h,
+            opaque: true,
+        }
+    }
+
+    /// ★ THE REAL plo LAYOUT, from `geometry` on the live seat 2026-08-30.
+    /// The bar does not reach the window and the focus ring only abuts it, so
+    /// mado IS eligible — the measurement that makes M3b worth building.
+    #[test]
+    fn the_measured_plo_layout_is_eligible_for_a_plane() {
+        let occluders = [
+            (0, 0, 1920, 28),    // the bar
+            (516, 278, 887, 2),  // focus ring: top
+            (516, 827, 887, 2),  // bottom
+            (516, 280, 2, 547),  // left
+            (1401, 280, 2, 547), // right
+        ];
+        assert_eq!(
+            eligible_for_plane(
+                &cand(518, 280, 883, 547),
+                &req(),
+                &occluders,
+                &[(ARGB, LINEAR)]
+            ),
+            Ok(())
+        );
+    }
+
+    /// An occluder that merely ABUTS shares no pixel. Closed intervals here
+    /// would reject plo's real layout, so this pins the half-open rule.
+    #[test]
+    fn an_abutting_edge_does_not_occlude() {
+        assert_eq!(
+            eligible_for_plane(
+                &cand(100, 100, 50, 50),
+                &req(),
+                &[(50, 100, 50, 50)], // ends exactly at x=100
+                &[(ARGB, LINEAR)]
+            ),
+            Ok(())
+        );
+    }
+
+    /// One pixel of real overlap is a refusal.
+    #[test]
+    fn a_single_overlapping_pixel_refuses() {
+        assert_eq!(
+            eligible_for_plane(
+                &cand(100, 100, 50, 50),
+                &req(),
+                &[(51, 100, 50, 50)], // ends at x=101, overlaps by 1
+                &[(ARGB, LINEAR)]
+            ),
+            Err(Ineligible::Occluded)
+        );
+    }
+
+    /// Each constraint is reported distinctly — the reason is the payload.
+    #[test]
+    fn each_refusal_names_its_own_constraint() {
+        let ok_fmt = [(ARGB, LINEAR)];
+        let mut scaled = cand(0, 0, 100, 100);
+        scaled.buffer_w = 50;
+        let mut clear = cand(0, 0, 100, 100);
+        clear.opaque = false;
+        assert_eq!(
+            eligible_for_plane(&scaled, &req(), &[], &ok_fmt),
+            Err(Ineligible::Scaled)
+        );
+        assert_eq!(
+            eligible_for_plane(&clear, &req(), &[], &ok_fmt),
+            Err(Ineligible::Translucent)
+        );
+        assert_eq!(
+            eligible_for_plane(&cand(0, 0, 100, 100), &req(), &[], &[]),
+            Err(Ineligible::UnsupportedFormat)
+        );
+        assert_eq!(
+            eligible_for_plane(&cand(0, 0, 0, 10), &req(), &[], &ok_fmt),
+            Err(Ineligible::Empty)
+        );
     }
 
     /// ANTI-VACUITY. If `try_promise` accepted everything these tests would

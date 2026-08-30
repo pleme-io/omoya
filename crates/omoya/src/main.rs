@@ -18,6 +18,7 @@ mod chord;
 mod config;
 mod cursor;
 mod deed;
+mod denpa;
 #[cfg(target_os = "linux")]
 mod drm;
 mod evdev_backend;
