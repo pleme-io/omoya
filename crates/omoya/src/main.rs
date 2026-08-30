@@ -33,6 +33,7 @@ mod nuri_renderer;
 mod owed;
 mod placement;
 mod remap;
+mod rouka;
 mod scanout;
 mod stale;
 mod state;
