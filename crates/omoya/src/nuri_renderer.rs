@@ -930,6 +930,19 @@ impl ImportMemWl for NuriRenderer {
                 .sum();
             i.shm_damage_area
                 .store(u64::try_from(area).unwrap_or(0), Relaxed);
+            // Per-import, so the leaf reads "what did THIS keystroke cost"
+            // rather than a number that only ever grows. The cumulative
+            // figure lives in `route_cpu_bytes_total`.
+            i.route_cpu_bytes.store(0, Relaxed);
+            // ★ The route, through rouka's own type rather than a loose
+            // string — so the label cannot drift from the enum (R7).
+            *i.route_label.lock().unwrap_or_else(|e| e.into_inner()) = Some(
+                crate::rouka::Route::CpuReadback {
+                    reason: crate::rouka::ReadbackReason::CompositorIsCpu,
+                    bytes: 0,
+                }
+                .label(),
+            );
         }
 
         shm::with_buffer_contents(buffer, |ptr, len, data| {
@@ -987,6 +1000,10 @@ impl ImportMemWl for NuriRenderer {
             // field, not a method" rather than "missing trait".
             use smithay::reexports::wayland_server::Resource as _;
             let key = buffer.id();
+            // Cloned BEFORE the `get_mut` below, which borrows `self`
+            // mutably; an `Arc` handle sidesteps the conflict without
+            // restructuring the hot path.
+            let sink = self.introspect.clone();
             let reused = self.shm_cache.get_mut(&key).and_then(|tex| {
                 let same = tex.width == width_u32
                     && tex.height == height_u32
@@ -1022,6 +1039,17 @@ impl ImportMemWl for NuriRenderer {
                         // followed by `normalise_opaque` over the bytes it had
                         // just written — see `copy_normalising`, which is where
                         // the 24 MB-per-keystroke arithmetic is recorded.
+                        // ★ COUNTED AT THE COPY, not derived from the damage
+                        // rects. Deriving it would mean re-implementing this
+                        // loop's clipping in a second place, and two
+                        // implementations of one clip is how the numbers start
+                        // disagreeing.
+                        if let Some(i) = sink.as_ref() {
+                            i.route_cpu_bytes_total
+                                .fetch_add((b - a) as u64, std::sync::atomic::Ordering::Relaxed);
+                            i.route_cpu_bytes
+                                .fetch_add((b - a) as u64, std::sync::atomic::Ordering::Relaxed);
+                        }
                         let row_opaque = copy_normalising(&mut buf[a..b], &bytes[a..b], fourcc);
                         // ★ AND, NEVER ASSIGN. This pass examined only the
                         // DAMAGED rows; the rest were not re-read, so their
@@ -1047,6 +1075,15 @@ impl ImportMemWl for NuriRenderer {
             }
             if let Some(c) = IMPORT_COUNTS.get() {
                 c.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            // The FULL path: every byte of the client buffer crosses the CPU.
+            // On plo at 1920x1080 that is the 8 294 400 the ledger names.
+            if let Some(i) = sink.as_ref() {
+                let n = bytes.len() as u64;
+                i.route_cpu_bytes
+                    .fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+                i.route_cpu_bytes_total
+                    .fetch_add(n, std::sync::atomic::Ordering::Relaxed);
             }
 
             // One walk: allocate uninitialised-then-filled rather than

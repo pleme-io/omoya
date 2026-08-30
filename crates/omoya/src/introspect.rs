@@ -189,6 +189,20 @@ pub struct OmoyaIntrospect {
     pub shm_damage_rects: AtomicU64,
     /// Total damaged area, in pixels, in the most recent import.
     pub shm_damage_area: AtomicU64,
+
+    // ── ★ THE COST, IN THE ONE UNIT THAT MAKES IT ALARMING ───────────────
+    //
+    // This number existed all along as "frames per second" and "percent of a
+    // core", and in those units 7.9 MB per keystroke is INVISIBLE — it reads
+    // as a slow frame. `rouka::Cost` holds bytes and nothing else for exactly
+    // this reason; these leaves are that type made observable at runtime.
+    /// Bytes the CPU moved for the most recent import.
+    pub route_cpu_bytes: AtomicU64,
+    /// Bytes the CPU has moved across every import since start.
+    pub route_cpu_bytes_total: AtomicU64,
+    /// Which `rouka::Route` the last import took, as its stable label (R7 —
+    /// a route nobody records is a regression nobody can see).
+    pub route_label: std::sync::Mutex<Option<&'static str>>,
     /// The rectangles the layout last assigned, as `"x,y,wxh"` per window.
     ///
     /// ★ PUBLISHED BECAUSE GUESSING AT A LAYOUT FROM PIXELS IS BACKWARDS.
@@ -785,6 +799,17 @@ impl Introspect for OmoyaIntrospect {
             "blit_fast" => Ok(n(&self.blit_fast)),
             "blit_slow" => Ok(n(&self.blit_slow)),
             "blit_general" => Ok(n(&self.blit_general)),
+            "route_cpu_bytes" => Ok(serde_json::json!(
+                self.route_cpu_bytes
+                    .load(std::sync::atomic::Ordering::Relaxed)
+            )),
+            "route_cpu_bytes_total" => Ok(serde_json::json!(
+                self.route_cpu_bytes_total
+                    .load(std::sync::atomic::Ordering::Relaxed)
+            )),
+            "route_label" => Ok(serde_json::json!(
+                *self.route_label.lock().unwrap_or_else(|e| e.into_inner())
+            )),
             "shm_imports" => Ok(serde_json::json!(
                 self.shm_imports.load(std::sync::atomic::Ordering::Relaxed)
             )),
@@ -1203,6 +1228,9 @@ impl Introspect for OmoyaIntrospect {
             "chord_deeds",
             "focus_rect",
             "frame_us",
+            "route_cpu_bytes",
+            "route_cpu_bytes_total",
+            "route_label",
             "shm_imports",
             "shm_imports_empty_damage",
             "shm_damage_rects",
