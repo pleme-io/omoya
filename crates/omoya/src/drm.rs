@@ -1027,6 +1027,11 @@ where
                 let wanted = crate::bar::BarState { parcels, clock };
                 if wanted != bar_text || bar_buffer.is_none() {
                     let bar_h = data.state.config.bar.height;
+                    // Published so a caller can DERIVE the content region
+                    // rather than hardcoding a number that drifts with the bar.
+                    introspect
+                        .bar_height
+                        .store(u64::try_from(bar_h).unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
                     if let Some(px) = crate::bar::rasterize_h(&wanted, mode.size.w, bar_h) {
                         bar_buffer = Some(
                             smithay::backend::renderer::element::memory::MemoryRenderBuffer::from_slice(
@@ -1442,6 +1447,42 @@ where
                     introspect
                         .presented
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+                    // ── ★ THE INTERVAL, NOT JUST THE COUNT ──────────────────
+                    //
+                    // `frames`/`presented` cannot separate idle from starved:
+                    // both give a large ratio. Measured on plo at idle,
+                    // 1190841/384 -- which reads as catastrophic loss and is a
+                    // pacing loop correctly finding nothing to draw. An idle
+                    // seat presents rarely and EVENLY; a starved one presents
+                    // in bursts. Same ratio, different distribution.
+                    let now_us = u64::try_from(
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_micros())
+                            .unwrap_or(0),
+                    )
+                    .unwrap_or(0);
+                    let prev_us = introspect
+                        .last_present_us
+                        .swap(now_us, std::sync::atomic::Ordering::Relaxed);
+                    // ★ Skip the first: 0 means no previous presentation, and
+                    // bucketing it would record time-since-process-start as a
+                    // frame gap -- one enormous outlier in every histogram.
+                    if prev_us != 0 && now_us > prev_us {
+                        let us = u128::from(now_us - prev_us);
+                        // 2778us is one frame at 360Hz.
+                        let bucket = match us {
+                            0..=2_778 => 0,
+                            2_779..=8_333 => 1,
+                            8_334..=16_667 => 2,
+                            16_668..=50_000 => 3,
+                            50_001..=250_000 => 4,
+                            _ => 5,
+                        };
+                        introspect.present_buckets[bucket]
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
                 }
                 Ok(())
             })());

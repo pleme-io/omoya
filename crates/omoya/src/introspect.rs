@@ -385,6 +385,45 @@ pub struct OmoyaIntrospect {
     /// precisely the report "the windows have no borders to drag around".
     /// Three legal values, one illegal state, and no leaf could see it.
     pub toplevels: std::sync::Mutex<Vec<ToplevelRow>>,
+    /// The bar's height in pixels, so a caller can derive the CONTENT region.
+    ///
+    /// ── ★ WHY A MASK IS MANDATORY, NOT A NICETY ─────────────────────────
+    ///
+    /// Measured on plo: three full-frame captures 0.5 s apart are BIT-IDENTICAL,
+    /// and across 70 s the ONLY difference is the top 28 rows -- the 1 Hz clock
+    /// in the bar. So an unmasked full-frame hash is a clock detector: it
+    /// differs every second, for a reason nobody debugging a window cares
+    /// about, and a caller learns to ignore it -- which is how a real
+    /// regression gets ignored too.
+    ///
+    /// Published as a NUMBER rather than baked into a `mask: bool` flag so the
+    /// caller can see WHY the region starts where it does. A boolean would hide
+    /// the derivation, and the derivation is the part worth checking.
+    pub bar_height: std::sync::atomic::AtomicU64,
+    /// Present intervals in microseconds, bucketed.
+    ///
+    /// ── ★ WHY A DISTRIBUTION AND NOT A COUNTER ──────────────────────────
+    ///
+    /// `frames` and `presented` together actively mislead. Measured on plo at
+    /// idle: `frames 1190841, presented 384` -- which reads like catastrophic
+    /// frame loss and is in fact a pacing loop correctly finding nothing to
+    /// draw. Two counters cannot separate "idle" from "starved": both produce
+    /// a large ratio.
+    ///
+    /// A distribution can. An idle seat presents rarely and EVENLY; a starved
+    /// one presents in bursts with long gaps. Same ratio, different shape.
+    ///
+    /// Buckets are fixed and coarse on purpose -- an unbounded histogram of a
+    /// 360 Hz seat is a memory leak with a nice name.
+    pub present_buckets: [std::sync::atomic::AtomicU64; 6],
+    /// Monotonic microseconds at the last presentation, 0 = none yet.
+    ///
+    /// ★ An atomic rather than a local threaded through the render closure:
+    /// the value must survive across loop iterations, and the closure's scope
+    /// is not where loop-lifetime state belongs. 0 means "no previous
+    /// presentation", which is why the FIRST interval is never bucketed --
+    /// bucketing it would record the time since process start as a frame gap.
+    pub last_present_us: std::sync::atomic::AtomicU64,
     /// The resolved layout mode, `"tiling"` or `"floating"`.
     ///
     /// ★ Published because the decoration policy's own justification depends on
@@ -750,6 +789,35 @@ impl Introspect for OmoyaIntrospect {
                     }).collect::<Vec<_>>(),
                 }))
             }
+            "bar_height" => Ok(n(&self.bar_height)),
+            "present_intervals" => {
+                // Bucket edges in microseconds. 2778us is one frame at 360Hz,
+                // so the first bucket is "kept up" and the last is "a human
+                // would call that a freeze".
+                const EDGES: [&str; 6] = [
+                    "<=2.8ms (360Hz)",
+                    "<=8.3ms (120Hz)",
+                    "<=16.7ms (60Hz)",
+                    "<=50ms",
+                    "<=250ms",
+                    ">250ms",
+                ];
+                let counts: Vec<u64> = self
+                    .present_buckets
+                    .iter()
+                    .map(|b| b.load(std::sync::atomic::Ordering::Relaxed))
+                    .collect();
+                let total: u64 = counts.iter().sum();
+                Ok(serde_json::json!({
+                    "total": total,
+                    "buckets": EDGES.iter().zip(&counts)
+                        .map(|(e, c)| serde_json::json!({ "upto": e, "count": c }))
+                        .collect::<Vec<_>>(),
+                    "note": "an idle seat presents rarely and EVENLY; a starved \
+                             one presents in bursts. frames/presented cannot \
+                             tell those apart -- this can.",
+                }))
+            }
             "layout_mode" => Ok(serde_json::json!(
                 self.layout_mode
                     .lock()
@@ -1012,6 +1080,8 @@ impl Introspect for OmoyaIntrospect {
             "stale_result",
             "toplevels",
             "layout_mode",
+            "bar_height",
+            "present_intervals",
             "atomic",
             // ★ THESE WERE ANSWERED AND UNLISTED. `schema()` is how an agent
             // discovers what it can ask, so a leaf missing here is a leaf that
