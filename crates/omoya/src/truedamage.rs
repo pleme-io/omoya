@@ -179,6 +179,27 @@ pub fn changed_rows(prev: &[u8], next: &[u8], stride: usize, height: usize) -> V
 #[derive(Debug)]
 struct Shadow {
     data: Vec<u8>,
+    /// ★ EVERY SPAN REPORTED SINCE THE LAST PRESENT, and the reason this
+    /// type is not just `data`.
+    ///
+    /// `data` advances on every COMMIT, because adopting per-commit is what
+    /// makes the comparison cheap. But the compositor does not render every
+    /// commit — measured on plo during a 20-line burst: 28 commits, 25
+    /// renders. Reporting only `diff(last_commit, this_commit)` therefore
+    /// DISCARDS the damage of any commit that was never rendered, and those
+    /// pixels are never repainted again.
+    ///
+    /// That is under-damage, which `changed_rows`' own doc calls "the one
+    /// direction that breaks". Measured as a caret trail: a 2-pixel column
+    /// left on every row the text cursor crossed, 6 of 8 bursts staleing with
+    /// refinement on versus 1 of 8 with it off.
+    ///
+    /// So the ledger is the invariant: what we hand the compositor is the
+    /// union of every span since the last PRESENT, and it can only be cleared
+    /// by [`Shadows::mark_presented`] — which the render path calls after a
+    /// flip actually happened. A commit cannot clear it, so a commit cannot
+    /// lose damage.
+    unpresented: Vec<RowSpan>,
     stride: usize,
     height: usize,
     /// The fourcc the pixels were in. A format change makes the byte
@@ -200,6 +221,33 @@ pub struct Shadows {
     /// Rows it examined, summed. **The denominator** — `rows_dirty` alone
     /// cannot distinguish "nothing changes" from "nothing is being compared".
     pub rows_examined: u64,
+    /// How many times a present cleared the ledgers. **The denominator for
+    /// the invariant itself**: if this stays 0 while `refined` climbs, the
+    /// render path is not calling `mark_presented` and every ledger grows
+    /// without bound — over-damage, which is safe but means the refinement
+    /// has quietly stopped refining.
+    pub presented_marks: u64,
+}
+
+/// Union two ordered row-span lists into one coalesced list.
+///
+/// Total, allocating, and deliberately dumb: the lists this merges are a
+/// handful of spans from a text edit, so a sort-and-sweep is both obviously
+/// correct and faster than being clever about it. Adjacent spans coalesce
+/// (`end == start`) as well as overlapping ones, because two touching bands
+/// are one band and leaving them split would report the same rows twice.
+#[must_use]
+fn union_spans(a: &[RowSpan], b: &[RowSpan]) -> Vec<RowSpan> {
+    let mut all: Vec<RowSpan> = a.iter().chain(b.iter()).copied().collect();
+    all.sort_by_key(|s| (s.start, s.end));
+    let mut out: Vec<RowSpan> = Vec::with_capacity(all.len());
+    for s in all {
+        match out.last_mut() {
+            Some(last) if s.start <= last.end => last.end = last.end.max(s.end),
+            _ => out.push(s),
+        }
+    }
+    out
 }
 
 impl Shadows {
@@ -245,6 +293,10 @@ impl Shadows {
                     key,
                     Shadow {
                         data: next[..stride.saturating_mul(height).min(next.len())].to_vec(),
+                        // A fresh shadow has nothing outstanding: the path that
+                        // creates one is a REFUSAL, and a refusal leaves the
+                        // client's full-surface damage standing.
+                        unpresented: Vec::new(),
                         stride,
                         height,
                         format,
@@ -252,6 +304,46 @@ impl Shadows {
                 );
             }
         }
+
+        // ★ WIDEN TO EVERYTHING UNPRESENTED, THEN REMEMBER IT.
+        //
+        // `spans` is the truth about THIS commit against the previous one.
+        // The compositor, though, is repainting against what is on the GLASS,
+        // and between two flips there may have been several commits. Handing
+        // it this commit's spans alone silently drops the others.
+        //
+        // So the reported verdict is the union with everything since the last
+        // present, and that union becomes the new ledger. It can only grow
+        // until `mark_presented` clears it, which means the reported damage is
+        // always a SUPERSET of what is actually stale. Over-damage costs a few
+        // rows; under-damage leaves pixels on the screen forever.
+        let verdict = match verdict {
+            Verdict::Refined {
+                spans,
+                rows_examined,
+            } => {
+                let widened = match self.by_surface.get_mut(&key) {
+                    Some(shadow) => {
+                        shadow.unpresented = union_spans(&shadow.unpresented, &spans);
+                        shadow.unpresented.clone()
+                    }
+                    None => spans,
+                };
+                Verdict::Refined {
+                    spans: widened,
+                    rows_examined,
+                }
+            }
+            // A refusal leaves the client's own (whole-surface) damage in
+            // place, which already covers everything unpresented — so the
+            // ledger is satisfied and starts clean.
+            Verdict::Refused(why) => {
+                if let Some(shadow) = self.by_surface.get_mut(&key) {
+                    shadow.unpresented.clear();
+                }
+                Verdict::Refused(why)
+            }
+        };
 
         match &verdict {
             Verdict::Refined {
@@ -265,6 +357,30 @@ impl Shadows {
             Verdict::Refused(_) => self.refused += 1,
         }
         verdict
+    }
+
+    /// The frame reached the screen: every surface's unpresented ledger is
+    /// now on the glass and may be forgotten.
+    ///
+    /// ★ THIS IS THE ONLY THING THAT MAY CLEAR THE LEDGER, and that is the
+    /// whole invariant. A commit adds to it; only a PRESENT clears it. Call
+    /// this after a flip has actually happened — calling it speculatively (at
+    /// composite time, or on a frame that is then dropped) reintroduces
+    /// exactly the defect the ledger exists to close, and it will look like it
+    /// works because the damage is still *usually* right.
+    ///
+    /// Returns how many surfaces had something outstanding, so a caller can
+    /// see the ledger doing work rather than infer it.
+    pub fn mark_presented(&mut self) -> usize {
+        let mut had = 0;
+        for shadow in self.by_surface.values_mut() {
+            if !shadow.unpresented.is_empty() {
+                had += 1;
+                shadow.unpresented.clear();
+            }
+        }
+        self.presented_marks += 1;
+        had
     }
 
     /// Drop a surface's shadow. Called when the surface is destroyed — a
@@ -425,6 +541,100 @@ mod tests {
     }
 
     #[test]
+    /// ★ THE INVARIANT, AND THE BUG IT CLOSES.
+    ///
+    /// Two commits between two presents. The first changes row 1, the second
+    /// changes row 5. Before this fix the second commit reported row 5 ALONE —
+    /// row 1 had already been adopted into the shadow, so it compared equal
+    /// and vanished. The compositor repainted row 5, row 1 stayed stale, and
+    /// nothing ever repainted it again.
+    ///
+    /// Measured as a caret trail on plo 2026-09-02: a 2px column left on every
+    /// row the text cursor crossed.
+    #[test]
+    fn damage_from_a_commit_that_was_never_presented_is_not_lost() {
+        let (stride, height) = (4, 8);
+        let base = vec![0u8; stride * height];
+        let mut sh = Shadows::default();
+        // First commit refuses (no prior shadow) — the client's full damage stands.
+        assert!(matches!(
+            sh.refine(1, &base, stride, height, 0),
+            Verdict::Refused(_)
+        ));
+
+        let mut a = base.clone();
+        a[1 * stride] = 0xAA; // row 1 changes
+        let v1 = sh.refine(1, &a, stride, height, 0);
+        assert_eq!(v1.rows(), Some(1), "first change is one row");
+
+        // NO present happens here — this is the whole point.
+        let mut b = a.clone();
+        b[5 * stride] = 0xBB; // row 5 changes
+        let v2 = sh.refine(1, &b, stride, height, 0);
+
+        let Verdict::Refined { spans, .. } = &v2 else {
+            panic!("expected a refinement");
+        };
+        let covered: Vec<usize> = spans.iter().flat_map(|s| s.start..s.end).collect();
+        assert!(
+            covered.contains(&1),
+            "row 1 changed in an UNPRESENTED commit and must still be reported; \
+             got {spans:?} — this is the under-damage that leaves pixels on screen"
+        );
+        assert!(covered.contains(&5), "row 5 changed too; got {spans:?}");
+    }
+
+    /// And a present is what clears it — nothing else may.
+    #[test]
+    fn a_present_clears_the_ledger_and_a_commit_does_not() {
+        let (stride, height) = (4, 8);
+        let base = vec![0u8; stride * height];
+        let mut sh = Shadows::default();
+        let _ = sh.refine(1, &base, stride, height, 0);
+
+        let mut a = base.clone();
+        a[2 * stride] = 0xAA;
+        let _ = sh.refine(1, &a, stride, height, 0);
+        assert_eq!(
+            sh.mark_presented(),
+            1,
+            "one surface had something outstanding"
+        );
+
+        // After the present, an UNCHANGED commit must report nothing: the
+        // ledger is on the glass and carrying it forward would be permanent
+        // over-damage.
+        let v = sh.refine(1, &a, stride, height, 0);
+        assert_eq!(
+            v.rows(),
+            Some(0),
+            "a present cleared the ledger, so an unchanged commit is free"
+        );
+    }
+
+    /// Over-damage is the safe direction, but it must not be UNBOUNDED: if
+    /// nothing ever presents, the ledger grows and the counter says so.
+    #[test]
+    fn presented_marks_is_the_denominator_for_the_ledger() {
+        let mut sh = Shadows::default();
+        assert_eq!(sh.presented_marks, 0);
+        assert_eq!(sh.mark_presented(), 0, "nothing outstanding yet");
+        assert_eq!(sh.presented_marks, 1, "the mark is counted even when empty");
+    }
+
+    #[test]
+    fn union_spans_coalesces_touching_and_overlapping_bands() {
+        let u = union_spans(
+            &[RowSpan { start: 0, end: 2 }, RowSpan { start: 5, end: 7 }],
+            &[RowSpan { start: 2, end: 4 }, RowSpan { start: 6, end: 9 }],
+        );
+        assert_eq!(
+            u,
+            vec![RowSpan { start: 0, end: 4 }, RowSpan { start: 5, end: 9 }],
+            "touching bands coalesce; disjoint ones stay apart"
+        );
+    }
+
     fn the_first_commit_refuses_and_the_second_refines() {
         // A shadow has to exist before it can be compared against, and the
         // commit that creates it must not claim a saving it did not make.
@@ -461,9 +671,21 @@ mod tests {
         // The partial shadow update is the subtle one: only changed rows are
         // copied back, so a bug there makes the NEXT diff report a row as
         // dirty forever, or as clean when it is not.
+        //
+        // ★ AMENDED 2026-09-02, AND THE AMENDMENT IS THE POINT. This test used
+        // to run the third commit with no present in between and require ZERO
+        // rows — which asserted the exact defect that left a caret trail on
+        // plo: damage measured per COMMIT rather than per PRESENT, so a change
+        // that never reached the glass was reported once and then forgotten.
+        //
+        // The INTENT was always the shadow's pixels, not the ledger, so the
+        // present is added rather than the assertion weakened: with the ledger
+        // cleared, a re-commit of identical pixels is genuinely free, and that
+        // still fails if the partial copy-back is wrong.
         let mut sh = Shadows::default();
         sh.refine(1, &buf(&[1, 1, 1], 8), 8, 3, 0);
         sh.refine(1, &buf(&[1, 9, 1], 8), 8, 3, 0);
+        sh.mark_presented();
         // Committing the SAME pixels again must now be a no-op.
         let v = sh.refine(1, &buf(&[1, 9, 1], 8), 8, 3, 0);
         assert_eq!(

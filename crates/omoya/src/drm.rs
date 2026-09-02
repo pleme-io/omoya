@@ -1550,6 +1550,26 @@ where
                     scanout.flip()?;
                     // Accepted, not retired — the VBlank event clears this.
                     flip_pending.store(true, std::sync::atomic::Ordering::Release);
+
+                    // ── ★ THE LEDGER CLEARS HERE, AND NOWHERE ELSE ──────────
+                    //
+                    // Every truedamage refinement reports the union of what
+                    // changed since the last PRESENT, not since the last
+                    // commit, because the compositor does not render every
+                    // commit — measured on plo, 28 commits to 25 renders in a
+                    // 20-line burst. Clearing that ledger anywhere but here
+                    // reintroduces the defect: a commit whose damage is
+                    // dropped before it reaches the glass is never repainted.
+                    //
+                    // Placed AFTER `flip()?` on purpose. A refused flip must
+                    // not clear anything — the pixels are still not on screen,
+                    // and `?` leaves the ledger intact for the next attempt.
+                    //
+                    // It is also deliberately not at composite time: a frame
+                    // can be composed and then skipped, and clearing there
+                    // would look correct because the damage is still USUALLY
+                    // right — which is exactly how the original bug survived.
+                    data.state.shadows.mark_presented();
                     // Counted HERE and not beside `frames`, because the gap
                     // between the two counters IS the partial-repaint
                     // measurement. Incremented after the flip is accepted, so
