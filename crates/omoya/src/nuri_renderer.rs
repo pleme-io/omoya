@@ -1059,8 +1059,37 @@ impl ImportMemWl for NuriRenderer {
                     && tex.stride == stride
                     && tex.format == fourcc
                     && tex.data.read().map(|d| d.len()).unwrap_or(0) == bytes.len();
-                if !same || damage.is_empty() {
+                if !same {
                     return None;
+                }
+                // ★ AN EMPTY DAMAGE SET IS THE CHEAPEST FRAME THERE IS, AND
+                // THIS ARM USED TO MAKE IT THE DEAREST.
+                //
+                // `!same || damage.is_empty()` collapsed two opposite
+                // situations into one `return None`, and `None` means the FULL
+                // path: 8 294 400 bytes of the client's buffer across the CPU.
+                // So truedamage's BEST outcome — a refinement that finds
+                // nothing changed and writes zero spans (`truedamage.rs`,
+                // `attrs.damage = spans`) — triggered the importer's WORST
+                // cost. The better the change detector got, the more often the
+                // seat paid for a full copy.
+                //
+                // Trusting an empty set here is not a new act of trust. The
+                // loop below ALREADY believes the damage about which rows
+                // changed; a client that lies by omission inside a non-empty
+                // set is not caught by anything, so believing "no rows
+                // changed" costs exactly the credit already extended to "these
+                // rows changed". The asymmetry was in the code, never in the
+                // protocol.
+                //
+                // `same` still has to hold. Geometry, stride, format and length
+                // all matching is what makes "unchanged" a statement about
+                // THIS texture rather than about some earlier one, and an
+                // absent cache entry never reaches here at all — it takes the
+                // full path and establishes the baseline the next commit
+                // measures from.
+                if damage.is_empty() {
+                    return Some(tex.clone());
                 }
                 let mut buf = tex
                     .data
@@ -1469,6 +1498,37 @@ mod tests {
             "the per-buffer accumulator must LOSE rows across a rotating \
              swapchain — if this stops being true the model no longer \
              reproduces the defect and this test has stopped guarding anything"
+        );
+    }
+
+    /// An empty damage set takes the CHEAP arm, not the full-import arm.
+    ///
+    /// ★ SOURCE-LEVEL BECAUSE THE BEHAVIOUR IS UNREACHABLE FROM A UNIT TEST:
+    /// `import_shm_buffer` needs a live `WlBuffer` and a `SurfaceData`, which
+    /// need a Wayland display and a client. What CAN be pinned here is the
+    /// shape of the decision — that "cache matches" and "nothing changed" are
+    /// two separate questions, because collapsing them is precisely the defect:
+    /// `!same || damage.is_empty()` sent BOTH to the full 8 MB path, so
+    /// truedamage refining to zero spans — its best possible outcome — cost the
+    /// most a frame can cost.
+    #[test]
+    fn an_empty_damage_set_is_not_answered_with_a_full_import() {
+        let src = include_str!("nuri_renderer.rs");
+        let head = src
+            .split_once("#[cfg(test)]")
+            .map_or(src, |(before, _)| before);
+
+        assert!(
+            !head.contains("if !same || damage.is_empty()"),
+            "the empty-damage inversion is back: `!same || damage.is_empty()` \
+             answers `None`, which is the FULL import path, so a refinement \
+             that found nothing changed pays 8 294 400 bytes across the CPU"
+        );
+        assert!(
+            head.contains("if damage.is_empty() {\n                    return Some(tex.clone());"),
+            "the cheap arm is gone — an unchanged surface must reuse its cached \
+             texture without copying, which is the whole point of computing \
+             damage in the first place"
         );
     }
 

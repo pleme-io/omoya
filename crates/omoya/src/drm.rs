@@ -1314,7 +1314,31 @@ where
                     // everything for an empty slice.
                     {
                         use crate::nuri_renderer::ScanoutFlush as _;
+                        // ★ TIMED SEPARATELY, FOR THE SAME REASON `gather_us`
+                        // WAS SPLIT OUT — and this is the second time the same
+                        // shape has hidden the largest term inside a total.
+                        //
+                        // `frame_us` brackets this call (its `frame_start` is
+                        // well above), so the flush has always been INSIDE the
+                        // number and never separable FROM it. That matters
+                        // because `flush_damage` is currently unconditional: it
+                        // copies stride x height into write-combining memory
+                        // whatever the damage says. Whether that is the dominant
+                        // cost of a frame is the question the whole
+                        // damage-strategy question turns on, and until now it
+                        // could only be argued from arithmetic.
+                        //
+                        // Read it against `frame_us`. If `flush_us` is most of
+                        // `frame_us`, the seat is bound by one memcpy into
+                        // uncached memory and no change detector can help;
+                        // re-opening the damage-clipped flush is then the only
+                        // move that pays.
+                        let flush_start = std::time::Instant::now();
                         fb.flush_damage(drawn.as_deref().unwrap_or(&[]));
+                        introspect.flush_us.store(
+                            u64::try_from(flush_start.elapsed().as_micros()).unwrap_or(u64::MAX),
+                            std::sync::atomic::Ordering::Relaxed,
+                        );
                     }
 
                     // ── ★ THE STALE SCAN — AFTER THE FLUSH, BEFORE THE FLIP ──

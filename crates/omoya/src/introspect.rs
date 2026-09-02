@@ -274,6 +274,20 @@ pub struct OmoyaIntrospect {
     /// and equally conclusive that the instrumentation was pointed at the
     /// wrong place.
     pub gather_us: AtomicU64,
+    /// Microseconds the last presented frame spent FLUSHING the composed
+    /// shadow into the scanout mapping.
+    ///
+    /// ★ THE THIRD TERM, AND THE ONE THAT WAS INSIDE A TOTAL. `frame_us`
+    /// brackets the flush and `gather_us` does not overlap it, so between them
+    /// the largest single write in the frame had no name. `flush_damage`
+    /// copies stride x height into write-combining memory unconditionally —
+    /// 8 294 400 bytes at 1920x1080 — because the partial path is gated behind
+    /// a `Target<Known>` nobody constructs yet.
+    ///
+    /// Read as a fraction of `frame_us`: a flush that dominates says the seat
+    /// is bound by one memcpy into uncached memory, which no change detector
+    /// upstream can improve.
+    pub flush_us: AtomicU64,
     /// shm imports that copied the WHOLE buffer, versus only their damage.
     /// `import_full` staying high means the incremental path's precondition
     /// never holds — most likely `Arc::get_mut` failing because smithay is
@@ -302,6 +316,24 @@ pub struct OmoyaIntrospect {
     /// Shadows held. One per live surface; a number that only grows is a leak
     /// of ~8 MB per window, which otherwise shows up only as RSS.
     pub td_shadows: AtomicU64,
+    /// Presents that CLEARED the unpresented ledger — the denominator of the
+    /// per-present damage invariant.
+    ///
+    /// ★ IT EXISTED, IT WAS COUNTED, IT WAS TESTED, AND NOTHING COULD READ IT.
+    /// `Shadows::presented_marks` has been declared, incremented on every
+    /// `mark_presented()` and unit-tested since the per-present fix landed, and
+    /// `publish_truedamage` stored five fields beside it and not this one. So
+    /// the invariant "damage from a commit that was never presented is carried
+    /// forward, and released only by a real flip" could be argued from source
+    /// and never *observed* on a running seat.
+    ///
+    /// Read it against `td_refined`: refinements that never reached the glass
+    /// are `td_refined - td_presented_marks`, which is exactly the backlog the
+    /// ledger exists to hold. A gap that grows without bound is a ledger that
+    /// is accumulating and never being released; a gap pinned at zero on a
+    /// seat that is definitely painting means `mark_presented` is being reached
+    /// on a path that never flipped.
+    pub td_presented_marks: AtomicU64,
     pub import_full: AtomicU64,
     pub import_partial: AtomicU64,
     /// Each render element's geometry, as the RENDERER sees it.
@@ -839,6 +871,7 @@ impl Introspect for OmoyaIntrospect {
                     .load(std::sync::atomic::Ordering::Relaxed)
             )),
             "gather_us" => Ok(n(&self.gather_us)),
+            "flush_us" => Ok(n(&self.flush_us)),
             // ★ WHICH MODE IS LIVE. Reading `td_dirty_pct` without this is a
             // measurement with no idea whether it changed anything: `verify`
             // publishes identical counters while leaving the screen untouched.
@@ -956,6 +989,7 @@ impl Introspect for OmoyaIntrospect {
             "td_rows_dirty" => Ok(n(&self.td_rows_dirty)),
             "td_rows_examined" => Ok(n(&self.td_rows_examined)),
             "td_shadows" => Ok(n(&self.td_shadows)),
+            "td_presented_marks" => Ok(n(&self.td_presented_marks)),
             // The one number an operator actually wants: what fraction of the
             // surface a commit really changes. Derived here rather than left
             // to the caller so the denominator cannot be dropped on the way.
@@ -1253,6 +1287,7 @@ impl Introspect for OmoyaIntrospect {
             "blit_general",
             "blit_slow",
             "gather_us",
+            "flush_us",
             "window_app_ids",
             "td_mode",
             "td_refined",
@@ -1260,6 +1295,7 @@ impl Introspect for OmoyaIntrospect {
             "td_rows_dirty",
             "td_rows_examined",
             "td_shadows",
+            "td_presented_marks",
             "td_dirty_pct",
             "import_full",
             "import_partial",
@@ -1441,6 +1477,8 @@ impl OmoyaIntrospect {
         self.td_rows_dirty.store(shadows.rows_dirty, Relaxed);
         self.td_rows_examined.store(shadows.rows_examined, Relaxed);
         self.td_shadows.store(shadows.len() as u64, Relaxed);
+        self.td_presented_marks
+            .store(shadows.presented_marks, Relaxed);
     }
 }
 
