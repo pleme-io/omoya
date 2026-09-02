@@ -752,12 +752,20 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 /// first time anything looks wrong.
 ///
 /// Selected once from `OMOYA_TRUEDAMAGE` at startup.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "kebab-case")]
 pub enum Mode {
     /// Compute nothing. Byte-for-byte the behaviour that shipped before this
     /// module existed — the client's declaration reaches the renderer intact.
     Off,
     /// Compute, and REPLACE the client's declaration. The fast path.
+    ///
+    /// ★ THE `Default`, AND IT MUST STAY THE DEFAULT. `from_env` falls back to
+    /// `On` for an absent variable, so any other default here would make a
+    /// seat with no config behave differently from a seat with an empty one.
+    #[default]
     On,
     /// ★ Compute, publish the counters, and **throw the answer away** — the
     /// client's declaration still reaches the renderer untouched.
@@ -778,6 +786,28 @@ impl Mode {
     /// performance regression nobody can find, and one that silently enables it
     /// is at least the state the operator was already in.
     #[must_use]
+    /// The starting mode, from typed config, with the environment as an
+    /// override.
+    ///
+    /// ★ CONFIG IS THE SOURCE; ENV IS THE OVERRIDE — that order, and not the
+    /// reverse. `OMOYA_TRUEDAMAGE` exists so an operator can A/B the seat
+    /// without a rebuild, which is an act of deliberate, temporary
+    /// intervention; the config is what the machine IS. A resolver that let
+    /// the config win would make the escape hatch useless exactly when it is
+    /// wanted.
+    ///
+    /// The exclusivity itself needs no check: `Mode` is a closed enum, so
+    /// "off and verify at once" has no representation to reject. That is the
+    /// truly-unrepresentable tier rather than a validated one, and it is why
+    /// this returns a `Mode` instead of a `Result<Mode, _>`.
+    #[must_use]
+    pub fn resolve(configured: Self) -> Self {
+        match std::env::var("OMOYA_TRUEDAMAGE") {
+            Ok(_) => Self::from_env(),
+            Err(_) => configured,
+        }
+    }
+
     pub fn from_env() -> Self {
         match std::env::var("OMOYA_TRUEDAMAGE").as_deref() {
             Ok("off" | "0" | "false") => Self::Off,

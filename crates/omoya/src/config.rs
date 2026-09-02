@@ -74,6 +74,36 @@ pub struct OmoyaConfig {
     /// How windows are arranged — tiling or floating, and how floating
     /// windows snap and cascade.
     pub layout: LayoutConfig,
+    /// How the seat decides what changed on screen.
+    pub damage: DamageConfig,
+}
+
+/// How the seat decides what changed on screen.
+///
+/// ── ★ WHY THIS IS TYPED CONFIG AND NOT AN ENV VAR ────────────────────────
+/// It was an env var — `OMOYA_TRUEDAMAGE`, read once by
+/// `truedamage::Mode::from_env` — which made the single most safety-relevant
+/// knob in the compositor the one thing outside its own config. The seat could
+/// not answer "what damage policy am I running" from `omoya config-show`, and
+/// the fleet's CONFIGURATION MANAGEMENT rule says every operator-facing knob
+/// resolves through shikumi's tiers. Now it does, and the env var survives as
+/// an OVERRIDE (see `Mode::resolve`) because A/B-ing a live seat without a
+/// rebuild is exactly what an escape hatch is for.
+///
+/// ── ★ THE EXCLUSIVITY NEEDS NO CHECK ─────────────────────────────────────
+/// `authority` is a closed enum, so "off and verify at once" has no
+/// representation — truly-unrepresentable, not validated-at-startup. That
+/// distinction is the whole reason this is an enum and not three booleans:
+/// three booleans would need a cross-field rule, and a cross-field rule on the
+/// thing that draws the login screen is a rule that can refuse you a seat.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct DamageConfig {
+    /// How much authority the compositor's own shadow diff has over what the
+    /// client declared: `off` computes nothing, `on` replaces the declaration,
+    /// `verify` computes and publishes the counters but throws the answer away
+    /// — an honest A/B whose pixels are identical to `off`.
+    pub authority: crate::truedamage::Mode,
 }
 
 /// How windows are arranged by default.
@@ -233,6 +263,11 @@ impl OmoyaConfig {
             bar: BarConfig::default(),
             placement: PlacementConfig::default(),
             layout: LayoutConfig::default(),
+            // `Mode`'s `Default` is `On`, which is what `from_env` already
+            // fell back to for an absent variable — so the bare tier and the
+            // pre-config behaviour agree by construction rather than by two
+            // constants that could drift.
+            damage: DamageConfig::default(),
         }
     }
 

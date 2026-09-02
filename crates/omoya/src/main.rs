@@ -913,6 +913,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     data.state.session_command = cfg.terminal.clone();
     data.state.launcher_command = cfg.launcher.clone();
     data.state.remaps = cfg.remap_pairs();
+    // ★ RE-SEED THE DAMAGE MODE ONCE THE REAL CONFIG EXISTS.
+    //
+    // `State::new` seeds `td_mode` from the environment alone, because it runs
+    // BEFORE `config::load()` — its `config` field is `prescribed()` until the
+    // line below replaces it. Leaving it there would mean the typed knob was
+    // parsed, published by `config-show`, and silently ignored by the hot path:
+    // the worst of the three possible outcomes, because the config would LOOK
+    // authoritative.
+    //
+    // `resolve` keeps the environment winning when it is set, so this narrows
+    // nothing an operator could already do; it only gives the config a say
+    // where previously there was none. From here the atomic remains the single
+    // source of truth and `td_mode_set` over kanshou still overrides both.
+    data.state.introspect.td_mode.store(
+        crate::truedamage::Mode::resolve(cfg.damage.authority).to_u64(),
+        std::sync::atomic::Ordering::Relaxed,
+    );
     data.state.config = cfg;
 
     if let Some(cmd) = args.spawn
