@@ -463,6 +463,57 @@ impl Texture for NuriFramebuffer<'_> {
     }
 }
 
+/// One surface's imported pixels, cached ON THE SURFACE ITSELF.
+///
+/// ★ KEYED BY SURFACE, NOT BY `wl_buffer`, AND THAT IS THE WHOLE POINT — it
+/// is not a preference, it is the soundness precondition of the incremental
+/// import.
+///
+/// An incremental (damage-clipped) update of a cached copy is sound only when
+/// the damage is measured over the SAME interval the destination has been
+/// stale for. smithay hands `import_shm_buffer` a damage set baselined on the
+/// SURFACE — `RendererSurfaceState::damage_since(renderer_seen[context_id])`,
+/// "rows changed since this surface was last imported" — and truedamage
+/// narrows it against a shadow that is itself keyed by surface and says so in
+/// its own header.
+///
+/// This cache used to be a `HashMap<ObjectId, NuriTexture>` keyed by the
+/// buffer, on the reasoning that a client cycles a small set of buffers and
+/// re-uses them. Both halves of the pipeline cited that same true fact and
+/// drew OPPOSITE conclusions from it, and nothing tied them together. The
+/// result, measured on plo 2026-09-02: mado presents through lavapipe into
+/// `wl_shm` with exactly TWO rotating images, so buffer A received the damage
+/// of commits N, N+2, N+4 … and never that of N+1. Every row touched only on
+/// an odd frame kept two-frame-old pixels, and the stale set was exactly
+/// `D_prev \ D_this` — empty while consecutive frames damage the same text row
+/// (typing slowly), large while they damage disjoint bands (a scrolling
+/// prompt). That is precisely the reported "type once or twice and it follows,
+/// spam it and it leaves things behind", and it measured 6 stale bursts of 8.
+///
+/// Living in the surface's `data_map` is what makes the bad state
+/// unrepresentable rather than merely fixed: there is no longer a map that
+/// COULD be keyed by anything else, the entry dies with the surface, and a
+/// caller with no surface (`None`) has no baseline and therefore cannot reach
+/// the incremental path at all.
+#[derive(Debug, Default)]
+struct SurfaceShmTexture {
+    /// The cached texture and the renderer context whose damage stream it was
+    /// built from.
+    ///
+    /// ★ THE `ContextId` IS PART OF THE BASELINE, not decoration. smithay
+    /// tracks `renderer_seen` per `(surface, ContextId)`, so a second renderer
+    /// would be handed damage measured over an interval this texture has never
+    /// seen. Today omoya mints one context at construction, which makes the
+    /// mismatch arm dead — and it is kept anyway, because the arm is the thing
+    /// that stays correct when that stops being true.
+    inner: std::sync::Mutex<
+        Option<(
+            smithay::backend::renderer::ContextId<NuriTexture>,
+            NuriTexture,
+        )>,
+    >,
+}
+
 /// The renderer.
 #[derive(Debug)]
 pub struct NuriRenderer {
@@ -471,29 +522,10 @@ pub struct NuriRenderer {
     /// client declared. `Option` because `Default`/`new()` must keep working
     /// for the tests and the winit backend, which have no sidecar.
     introspect: Option<std::sync::Arc<crate::introspect::OmoyaIntrospect>>,
-    /// The last texture imported for each shm buffer, kept so a re-import
-    /// can copy only what changed.
-    ///
-    /// ★ THIS IS THE KEYSTROKE-LATENCY FIX. `import_shm_buffer` is handed a
-    /// DAMAGE list and used to ignore it, copying the client's entire buffer
-    /// — 8 MB for a 1920x1045 terminal — and then running `normalise_opaque`
-    /// over all two million pixels. Every commit. Typing one character
-    /// redrew, re-copied and re-normalised the whole window.
-    ///
-    /// Measured before the fix: 99% of a core, every `gdb` sample inside
-    /// `memmove`, ~2 frames per second on an otherwise idle 16-core machine.
-    ///
-    /// Keyed by the buffer's `ObjectId`, because a client cycles a small set
-    /// of buffers and re-uses them; keying on anything derived from the
-    /// CONTENTS would defeat the point.
     /// The recycled shadow allocation. See `NuriFramebuffer::shadow` — one
     /// buffer, handed out at `bind` and returned on drop, so a frame costs no
     /// allocation and no 8 MB zeroing.
     shadow_pool: Arc<std::sync::Mutex<Vec<u8>>>,
-    shm_cache: std::collections::HashMap<
-        smithay::reexports::wayland_server::backend::ObjectId,
-        NuriTexture,
-    >,
     /// ★ MINTED ONCE, AT CONSTRUCTION — NOT PER CALL.
     ///
     /// `ContextId` is an Arc IDENTITY, not a value: `ContextId::new()`
@@ -537,7 +569,6 @@ impl NuriRenderer {
             introspect: None,
             debug: DebugFlags::empty(),
             shadow_pool: Arc::new(std::sync::Mutex::new(Vec::new())),
-            shm_cache: std::collections::HashMap::new(),
             context: smithay::backend::renderer::ContextId::new(),
         }
     }
@@ -909,7 +940,7 @@ impl ImportMemWl for NuriRenderer {
     fn import_shm_buffer(
         &mut self,
         buffer: &smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer,
-        _surface: Option<&smithay::wayland::compositor::SurfaceData>,
+        surface: Option<&smithay::wayland::compositor::SurfaceData>,
         damage: &[Rectangle<i32, BufferCoord>],
     ) -> Result<Self::TextureId, Self::Error> {
         use smithay::wayland::shm;
@@ -998,13 +1029,31 @@ impl ImportMemWl for NuriRenderer {
             // `Resource::id` — the trait must be in scope; `buffer.id` alone
             // resolves to a private FIELD, and the error says "private
             // field, not a method" rather than "missing trait".
-            use smithay::reexports::wayland_server::Resource as _;
-            let key = buffer.id();
-            // Cloned BEFORE the `get_mut` below, which borrows `self`
-            // mutably; an `Arc` handle sidesteps the conflict without
-            // restructuring the hot path.
             let sink = self.introspect.clone();
-            let reused = self.shm_cache.get_mut(&key).and_then(|tex| {
+            // ★ THE BASELINE IS THE SURFACE, SO THE DESTINATION IS TOO.
+            //
+            // `None` means this buffer reached us without a surface, so there
+            // is no interval the damage could be measured over and no cached
+            // generation to apply it to. That is not a degraded case to patch
+            // around — it is the absence of a baseline, and the only sound
+            // answer is the full copy below. Expressing it as `Option` is what
+            // keeps "partial copy against an unknown baseline" from having a
+            // spelling.
+            let slot = surface
+                .map(|sd| sd.data_map.get_or_insert_threadsafe(SurfaceShmTexture::default));
+            let ctx = self.context.clone();
+            let reused = slot.and_then(|slot| {
+                let mut held = slot
+                    .inner
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let (cached_ctx, tex) = held.as_mut()?;
+                // A texture built from another renderer's damage stream is a
+                // stale baseline, not a usable cache — fall through to the
+                // full copy, which re-establishes one.
+                if *cached_ctx != ctx {
+                    return None;
+                }
                 let same = tex.width == width_u32
                     && tex.height == height_u32
                     && tex.stride == stride
@@ -1100,10 +1149,17 @@ impl ImportMemWl for NuriRenderer {
                 opaque: Arc::new(std::sync::atomic::AtomicBool::new(opaque)),
             };
             // Cached for the NEXT commit, which is the one that gets to copy
-            // only its damage. Bounded by how many buffers a client cycles
-            // through — a handful — because the key is the buffer's identity
-            // and a client re-uses them.
-            self.shm_cache.insert(key, tex.clone());
+            // only its damage. Exactly one texture per surface — not one per
+            // buffer the client cycles — because this full copy is what makes
+            // the surface's baseline true, and the next commit's damage is
+            // measured from precisely here.
+            if let Some(slot) = slot {
+                *slot
+                    .inner
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                    Some((ctx.clone(), tex.clone()));
+            }
             Ok(tex)
         })
         .map_err(|e| Error::Map(format!("shm pool: {e:?}")))?
@@ -1335,6 +1391,116 @@ impl Bind<Dmabuf> for NuriRenderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A client's rotating swapchain, applied to ONE accumulator, reproduces
+    /// the full-import oracle — and applied to a PER-BUFFER accumulator does
+    /// not.
+    ///
+    /// ★ THIS TEST IS THE DEFECT, WRITTEN DOWN. It is not a model of the fix,
+    /// it is a model of the arithmetic both policies perform, run against an
+    /// oracle that is simply "what the client's latest buffer actually says".
+    /// The surface-keyed chain agrees with the oracle; the buffer-keyed chain
+    /// is off by exactly the rows of every second frame, which is the
+    /// measured `D_prev \ D_this`.
+    ///
+    /// The rows are disjoint per frame on purpose — that is the SCROLLING
+    /// case. Overlapping bands (typing into one row) heal themselves under
+    /// either policy, which is why the bug was invisible until the operator
+    /// held Enter down.
+    #[test]
+    fn a_rotating_swapchain_accumulates_to_the_full_import_oracle() {
+        const ROWS: usize = 8;
+        const STRIDE: usize = 4 * 4; // 4 px wide, 4 bytes each
+        const N: usize = 6;
+
+        // Frame k differs from frame k-1 in row k ONLY, so "damage = row k" is
+        // the TRUE delta rather than an assertion about it. Building the
+        // frames this way is what makes the oracle reachable at all: a frame
+        // that changes everywhere cannot be described by a one-row damage set,
+        // and a test that says otherwise is testing its own fiction.
+        let damaged_row = |k: usize| k % ROWS;
+        let frames: Vec<Vec<u8>> = (0..N).fold(Vec::new(), |mut acc, k| {
+            let mut f = acc.last().cloned().unwrap_or_else(|| vec![0u8; ROWS * STRIDE]);
+            if k > 0 {
+                let r = damaged_row(k);
+                f[r * STRIDE..(r + 1) * STRIDE].fill(u8::try_from(k).unwrap_or(0));
+            }
+            acc.push(f);
+            acc
+        });
+        // The oracle: a full import of the latest buffer IS the latest buffer.
+        let oracle = frames[N - 1].clone();
+
+        // ── surface-keyed: ONE accumulator, every frame's damage applied ──
+        let mut surface_keyed = frames[0].clone();
+        for (k, f) in frames.iter().enumerate().skip(1) {
+            let r = damaged_row(k);
+            let (a, b) = (r * STRIDE, (r + 1) * STRIDE);
+            copy_normalising(&mut surface_keyed[a..b], &f[a..b], Fourcc::Argb8888);
+        }
+
+        // ── buffer-keyed: TWO accumulators, each seeing every OTHER frame ──
+        let mut buffer_keyed = [frames[0].clone(), frames[0].clone()];
+        for (k, f) in frames.iter().enumerate().skip(1) {
+            let slot = k % 2;
+            let r = damaged_row(k);
+            let (a, b) = (r * STRIDE, (r + 1) * STRIDE);
+            copy_normalising(&mut buffer_keyed[slot][a..b], &f[a..b], Fourcc::Argb8888);
+        }
+        let presented = &buffer_keyed[(N - 1) % 2];
+
+        // Only the rows this slot happened to receive are current; the rest
+        // still hold the generation from two frames ago.
+        let stale_rows = (0..ROWS)
+            .filter(|r| {
+                let (a, b) = (r * STRIDE, (r + 1) * STRIDE);
+                presented[a..b] != oracle[a..b]
+            })
+            .count();
+
+        assert_eq!(
+            surface_keyed, oracle,
+            "a continuous per-surface accumulator must equal a full import of \
+             the latest buffer — if this fails the incremental path is unsound \
+             even without any rotation"
+        );
+        assert!(
+            stale_rows > 0,
+            "the per-buffer accumulator must LOSE rows across a rotating \
+             swapchain — if this stops being true the model no longer \
+             reproduces the defect and this test has stopped guarding anything"
+        );
+    }
+
+    /// The incremental import's destination is keyed by SURFACE, structurally.
+    ///
+    /// ★ THE SOURCE IS CUT AT `#[cfg(test)]` BEFORE SCANNING. A source-scanning
+    /// test that reads its own file matches its own forbidden literals and
+    /// passes — or fails — for reasons that have nothing to do with the code
+    /// under test. Cutting at the test module is what makes the scan mean
+    /// something; without it this assertion is self-referential noise.
+    #[test]
+    fn the_incremental_import_destination_is_never_keyed_by_buffer() {
+        let src = include_str!("nuri_renderer.rs");
+        let head = src
+            .split_once("#[cfg(test)]")
+            .map_or(src, |(before, _)| before);
+
+        assert!(
+            head.contains("get_or_insert_threadsafe"),
+            "the per-surface cache seam is gone — the incremental import has \
+             lost the only place its baseline can honestly live"
+        );
+        for forbidden in ["shm_cache", "buffer.id()"] {
+            assert!(
+                !head.contains(forbidden),
+                "`{forbidden}` is back: the incremental import is keyed by the \
+                 wl_buffer again, while the damage it applies is baselined on \
+                 the surface. That is the two-rotating-buffer defect measured \
+                 on plo 2026-09-02 (6 stale bursts of 8)."
+            );
+        }
+    }
 
     /// ★ THE DIFFERENTIAL THAT LETS `copy_normalising` REPLACE THE PAIR.
     ///
