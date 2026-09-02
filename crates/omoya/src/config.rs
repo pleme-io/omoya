@@ -104,6 +104,55 @@ pub struct DamageConfig {
     /// `verify` computes and publishes the counters but throws the answer away
     /// — an honest A/B whose pixels are identical to `off`.
     pub authority: crate::truedamage::Mode,
+    /// How the composed shadow reaches the scanout mapping.
+    pub flush: FlushPolicy,
+}
+
+/// How the composed shadow reaches the scanout mapping.
+///
+/// ── ★ WHY THIS IS A KNOB AND NOT SIMPLY FIXED ────────────────────────────
+/// The full copy is 8 294 400 bytes into write-combining memory on every
+/// presented frame. Measured on plo 2026-09-02 with `flush_us` — which exists
+/// because this number had never been separable from `frame_us` — it is
+/// **3 729 µs of a 3 756 µs frame, 99.3%**, against a 2 778 µs vblank
+/// interval at 360 Hz. Under a typing burst: 7 722 of 7 858 µs. The seat is
+/// bound almost entirely by this one memcpy, and nothing upstream of it — no
+/// change detector, no sketch, no predictor — can reach that term.
+///
+/// ── ★ WHY IT IS NOT SIMPLY FLIPPED ───────────────────────────────────────
+/// The partial copy was DISABLED on 2026-08-30 for cause: the scanout held
+/// stale content the shadow did not, so some damage term under-reported, and
+/// `nuri_renderer.rs`'s own header records that *which* term was never
+/// identified. Re-opening it on a hunch is how the defect shipped the first
+/// time.
+///
+/// It is a knob rather than a flip because the evidence now points one way and
+/// is not yet conclusive. `stale_scan` renders the same scene twice in one
+/// frame — once at the natural buffer age, once at age 0 — and compares, so it
+/// measures under-reporting directly and independently of this policy. On
+/// 2026-09-02, after the shm import was re-keyed from `wl_buffer` to surface,
+/// eight typing bursts scored **0 stale pixels, 8/8 clean**, against a 6/8
+/// baseline. That is a named, fixed under-reporting term and a green
+/// instrument — but the instrument proves the DAMAGE SET is sound, not that
+/// every consumer of it is, so the operator opts in rather than inherits it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FlushPolicy {
+    /// Copy the whole shadow every presented frame. Today's behaviour, and
+    /// the default — a policy that cannot under-copy, at the price measured
+    /// above.
+    #[default]
+    Full,
+    /// Copy only what `render_output` drew, which is already unioned across
+    /// this buffer's age.
+    ///
+    /// ★ REFUSES RATHER THAN GUESSES. The copy runs only when
+    /// `mekuri::kentou::Target<Known>::load_preserving` accepts the damage's
+    /// baseline; a `Coverage::StaleBaseline` or `OutOfBounds` falls back to a
+    /// full copy for that frame. So the failure direction is "copied more than
+    /// needed", never "left a stale pixel" — the same one-sided-error
+    /// discipline the row-span refinement obeys.
+    Baselined,
 }
 
 /// How windows are arranged by default.

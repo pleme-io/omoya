@@ -282,6 +282,16 @@ pub struct NuriFramebuffer<'a> {
     /// Where `shadow` goes when this framebuffer dies, so the next frame does
     /// not allocate and zero 8 MB. See `Drop`.
     pool: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    /// How this frame is allowed to reach the scanout mapping, and the
+    /// generation the destination slot is known to hold.
+    ///
+    /// ★ `None` MEANS "NOTHING TRUE TO SAY", NOT "OFF". The caller supplies a
+    /// generation only when it actually tracks one for THIS slot; absent that,
+    /// there is no baseline a partial copy could be measured against and the
+    /// full copy is the only sound answer. Expressing it as `Option` is what
+    /// keeps "partial copy against an invented generation" from having a
+    /// spelling — the same shape as the shm import's absent baseline.
+    flush_plan: Option<(crate::config::FlushPolicy, mekuri::kentou::Revision)>,
     width: i32,
     height: i32,
     stride: usize,
@@ -407,6 +417,57 @@ impl NuriFramebuffer<'_> {
         // appears -- refusing on its own terms with `Coverage::StaleBaseline`
         // when the damage baseline and the target's revision disagree, which is
         // the exact defect this whole investigation was chasing.
+        // ── ★ THE PARTIAL PATH, WHEN AND ONLY WHEN A BASELINE EXISTS ────
+        //
+        // `damage` is what `render_output` actually drew, and it was drawn at
+        // `back_buffer_age()`, so it is ALREADY the union of everything that
+        // changed since this slot was last drawn into — not just this frame's
+        // damage. That is the property the two-slot alternation needs, and it
+        // is the property a hand-rolled clip list would not have had.
+        //
+        // kentou adjudicates rather than trusting that: `load_preserving`
+        // refuses with `StaleBaseline` when the damage's base and the slot's
+        // generation disagree, and with `OutOfBounds` when the region does not
+        // fit. Both refusals fall through to the full copy below, so the
+        // failure direction is ALWAYS "copied more than needed". A stale pixel
+        // is not reachable from here — not because this code is careful, but
+        // because the only method that could produce one does not exist on a
+        // target whose contents are unestablished.
+        if let Some((crate::config::FlushPolicy::Baselined, generation)) = self.flush_plan {
+            let (w, h) = (
+                u32::try_from(self.width).unwrap_or(0),
+                u32::try_from(self.height).unwrap_or(0),
+            );
+            let mut known = mekuri::kentou::Target::<mekuri::kentou::Known>::owned(w, h, generation);
+            let region = bounding_region(damage, w, h);
+            let claim = mekuri::kentou::Damage::since(generation, region);
+            match known.load_preserving(&claim) {
+                Ok(_painted) => {
+                    // Row-major, so a rectangle is a contiguous run per row —
+                    // one `copy_from_slice` each, which is what a streaming
+                    // write into write-combining memory wants.
+                    let x0 = usize::try_from(region.x).unwrap_or(0) * 4;
+                    let x1 = x0 + usize::try_from(region.width).unwrap_or(0) * 4;
+                    let y0 = usize::try_from(region.y).unwrap_or(0);
+                    let y1 = y0 + usize::try_from(region.height).unwrap_or(0);
+                    for y in y0..y1 {
+                        let a = y * self.stride + x0;
+                        let b = (y * self.stride + x1).min(len);
+                        if a >= b {
+                            continue;
+                        }
+                        self.data[a..b].copy_from_slice(&self.shadow[a..b]);
+                    }
+                    return;
+                }
+                Err(_refused) => {
+                    // Fall through. A refusal is the type saying the partial
+                    // copy would be unsound for THIS frame; the answer is more
+                    // bytes, never fewer.
+                }
+            }
+        }
+
         self.data[..len].copy_from_slice(&self.shadow[..len]);
 
         // ★ The adopted `Target<Known>` is deliberately NOT stored back.
@@ -425,6 +486,54 @@ impl NuriFramebuffer<'_> {
             .target
             .adopt_by_clearing(mekuri::kentou::Revision::ORIGIN);
         let _ = damage;
+    }
+}
+
+/// The smallest rectangle containing every damage rect, clamped to the target.
+///
+/// ★ A BOUNDING BOX, NOT A RECT LIST, AND THAT IS A DELIBERATE OVER-COPY.
+/// Copying each rect separately would move fewer bytes, and it would also make
+/// the copied set depend on the damage set's SHAPE rather than only its
+/// extent — one dropped rect becomes one stale band. The union is monotone: it
+/// can only ever grow with the input, so a damage set that under-reports by a
+/// rect still gets that rect copied whenever another rect straddles it. That
+/// is the conservative direction, and on the workload this exists for — text
+/// rows spanning the full width — the bound is close to tight anyway.
+///
+/// An empty slice yields a zero-area region, which `load_preserving` accepts
+/// and the copy loop skips. The caller has already handled "no damage means
+/// everything" before reaching here, so a zero region here means "nothing
+/// changed", not "we do not know".
+fn bounding_region(
+    damage: &[Rectangle<i32, Physical>],
+    width: u32,
+    height: u32,
+) -> mekuri::kentou::Region {
+    let (mut x0, mut y0) = (i32::MAX, i32::MAX);
+    let (mut x1, mut y1) = (i32::MIN, i32::MIN);
+    for d in damage {
+        x0 = x0.min(d.loc.x);
+        y0 = y0.min(d.loc.y);
+        x1 = x1.max(d.loc.x.saturating_add(d.size.w));
+        y1 = y1.max(d.loc.y.saturating_add(d.size.h));
+    }
+    if x1 <= x0 || y1 <= y0 {
+        return mekuri::kentou::Region {
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+        };
+    }
+    let x = x0.max(0);
+    let y = y0.max(0);
+    let w = u32::try_from(x1.max(0) - x).unwrap_or(0).min(width.saturating_sub(u32::try_from(x).unwrap_or(0)));
+    let h = u32::try_from(y1.max(0) - y).unwrap_or(0).min(height.saturating_sub(u32::try_from(y).unwrap_or(0)));
+    mekuri::kentou::Region {
+        x: u32::try_from(x).unwrap_or(0),
+        y: u32::try_from(y).unwrap_or(0),
+        width: w,
+        height: h,
     }
 }
 
@@ -526,6 +635,15 @@ pub struct NuriRenderer {
     /// buffer, handed out at `bind` and returned on drop, so a frame costs no
     /// allocation and no 8 MB zeroing.
     shadow_pool: Arc<std::sync::Mutex<Vec<u8>>>,
+    /// What the NEXT `bind` should hand its framebuffer as a flush plan.
+    ///
+    /// ★ A SETTER RATHER THAN A `bind` ARGUMENT, BECAUSE `bind` IS FOREIGN.
+    /// Its signature belongs to smithay's `Bind` trait and takes the target and
+    /// nothing else, so the slot's generation cannot be passed down it. Parking
+    /// the plan here is the seam; it is set by the frame loop immediately
+    /// before `bind` and cleared by `bind` itself, so a plan can never outlive
+    /// the frame it was computed for and be applied to a different slot.
+    next_flush_plan: Option<(crate::config::FlushPolicy, mekuri::kentou::Revision)>,
     /// ★ MINTED ONCE, AT CONSTRUCTION — NOT PER CALL.
     ///
     /// `ContextId` is an Arc IDENTITY, not a value: `ContextId::new()`
@@ -569,6 +687,7 @@ impl NuriRenderer {
             introspect: None,
             debug: DebugFlags::empty(),
             shadow_pool: Arc::new(std::sync::Mutex::new(Vec::new())),
+            next_flush_plan: None,
             context: smithay::backend::renderer::ContextId::new(),
         }
     }
@@ -1195,6 +1314,32 @@ impl ImportMemWl for NuriRenderer {
     }
 }
 
+/// Tell a renderer how the next bound framebuffer may reach scanout.
+///
+/// ★ A TRAIT BECAUSE THE FRAME LOOP IS GENERIC, the same reason `ScanoutFlush`
+/// is one. `drm::run` is written against `R: Renderer + ImportAll + ...` so
+/// that a second renderer can drive the seat, and an inherent method on
+/// `NuriRenderer` is unreachable from there (E0599). The DEFAULT is a no-op, so
+/// a renderer with no shadow — one that composites straight into the scanout —
+/// satisfies this by ignoring it rather than by implementing a policy it has no
+/// use for.
+pub trait ArmFlush {
+    /// Arm the next `bind` with a flush policy and the destination slot's
+    /// generation.
+    ///
+    /// Call immediately before `bind`, with the generation of the slot about to
+    /// be bound. `None` — a slot never drawn into — means there is no baseline,
+    /// so the framebuffer takes the full copy whatever the policy says.
+    fn arm_flush(&mut self, _policy: crate::config::FlushPolicy, _generation: Option<u64>) {}
+}
+
+impl ArmFlush for NuriRenderer {
+    fn arm_flush(&mut self, policy: crate::config::FlushPolicy, generation: Option<u64>) {
+        self.next_flush_plan =
+            generation.map(|g| (policy, mekuri::kentou::Revision::from_raw(g)));
+    }
+}
+
 impl NuriRenderer {
     /// The predicate BOTH the protocol handler and the renderer obey.
     ///
@@ -1387,6 +1532,11 @@ impl Bind<Dmabuf> for NuriRenderer {
             shadow.resize(need, 0);
         }
 
+        // `take`, never `clone`: a plan is computed for ONE slot in ONE frame,
+        // and a stale plan applied to the other slot is precisely the
+        // alternating-buffer defect this whole design exists to prevent.
+        let flush_plan = self.next_flush_plan.take();
+
         Ok(NuriFramebuffer {
             // ★ UNKNOWN, and honestly so. This buffer comes from a pool that
             // recycles allocations across binds (see `Drop`), so nothing here
@@ -1408,6 +1558,7 @@ impl Bind<Dmabuf> for NuriRenderer {
             data,
             shadow,
             pool: self.shadow_pool.clone(),
+            flush_plan,
             width: size.w,
             height: size.h,
             stride,
@@ -1499,6 +1650,70 @@ mod tests {
              swapchain — if this stops being true the model no longer \
              reproduces the defect and this test has stopped guarding anything"
         );
+    }
+
+    /// The bounding region is MONOTONE: more damage never yields less copy.
+    ///
+    /// ★ THIS IS THE ONE-SIDED-ERROR PROPERTY, AS A TEST. The partial flush is
+    /// only safe because its failure direction is "copied more than needed".
+    /// A bounding box gives that for free — adding a rect can only grow the
+    /// union — whereas a per-rect copy would make the copied set depend on the
+    /// damage set's SHAPE, so one dropped rect would become one stale band.
+    /// The property is what earns the optimization; assert it rather than
+    /// trusting the geometry.
+    #[test]
+    fn the_flush_region_only_ever_grows_with_its_damage() {
+        let r = |x, y, w, h| Rectangle::<i32, Physical>::new((x, y).into(), (w, h).into());
+        let base = vec![r(10, 20, 30, 40)];
+        let more = vec![r(10, 20, 30, 40), r(100, 200, 50, 60)];
+
+        let a = bounding_region(&base, 1920, 1080);
+        let b = bounding_region(&more, 1920, 1080);
+
+        assert!(
+            b.x <= a.x && b.y <= a.y,
+            "the union's origin moved AWAY from the added rect: {b:?} vs {a:?}"
+        );
+        assert!(
+            b.x + b.width >= a.x + a.width && b.y + b.height >= a.y + a.height,
+            "the union's extent SHRANK when damage was added: {b:?} vs {a:?}"
+        );
+        assert!(
+            b.width * b.height > a.width * a.height,
+            "adding disjoint damage did not grow the copied area at all"
+        );
+    }
+
+    /// A region is clamped to the target, so a damage rect reaching past the
+    /// edge cannot make the copy index out of bounds.
+    #[test]
+    fn a_region_never_escapes_its_target() {
+        let r = |x, y, w, h| Rectangle::<i32, Physical>::new((x, y).into(), (w, h).into());
+        for dmg in [
+            vec![r(-50, -50, 100, 100)],
+            vec![r(1900, 1070, 500, 500)],
+            vec![r(0, 0, 4000, 4000)],
+        ] {
+            let got = bounding_region(&dmg, 1920, 1080);
+            assert!(
+                got.fits_within(1920, 1080),
+                "region {got:?} escapes a 1920x1080 target — load_preserving \
+                 would refuse it as OutOfBounds and the copy would fall back, \
+                 but the clamp is what keeps that from being the common case"
+            );
+        }
+    }
+
+    /// Empty damage yields a zero-area region rather than a whole-target one.
+    ///
+    /// The caller handles "no damage means repaint everything" BEFORE reaching
+    /// the region, so a zero region here means "nothing changed". Returning
+    /// `everything` instead would silently make the partial path copy the whole
+    /// buffer and look like it was working.
+    #[test]
+    fn empty_damage_is_a_zero_region_not_the_whole_target() {
+        let got = bounding_region(&[], 1920, 1080);
+        assert_eq!((got.width, got.height), (0, 0), "got {got:?}");
     }
 
     /// An empty damage set takes the CHEAP arm, not the full-import arm.

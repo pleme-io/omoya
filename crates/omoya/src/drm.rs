@@ -552,6 +552,10 @@ where
         // constraint as `ExportMem` below and stated for the same reason.
         + ImportMem
         + smithay::backend::renderer::Bind<smithay::backend::allocator::dmabuf::Dmabuf>
+        // ★ How this frame may reach scanout. The trait's default is a no-op,
+        // so this excludes nothing: a renderer that composites straight into
+        // the mapping satisfies it by ignoring the plan.
+        + crate::nuri_renderer::ArmFlush
         // ★ `ExportMem` so the seat can be SCREENSHOT. This is a real
         // constraint on what may drive this loop, and it is the right one: a
         // renderer whose output cannot be read back produces a seat that can
@@ -1206,6 +1210,29 @@ where
                 } else {
                     scanout.back_buffer_age()
                 };
+
+                // ★ ARM THE FLUSH FOR THIS SLOT, IMMEDIATELY BEFORE BINDING IT.
+                //
+                // The generation is the slot's own `last_drawn`, so the damage
+                // `render_output` produces at `age` and the baseline the flush
+                // adjudicates against describe the SAME interval by
+                // construction. `None` (never drawn into) leaves no plan, and
+                // no plan is a full copy.
+                //
+                // A capture request forces `age = 0`, i.e. a full repaint, and
+                // a full repaint has no baseline to preserve — so the policy is
+                // deliberately not applied on those frames.
+                {
+                    use crate::nuri_renderer::ArmFlush as _;
+                    renderer.arm_flush(
+                    if age == 0 {
+                        crate::config::FlushPolicy::Full
+                    } else {
+                        data.state.config.damage.flush
+                    },
+                    scanout.back_buffer_generation(),
+                    );
+                }
 
                 let presented = {
                     let mut fb = renderer.bind(&mut dmabuf)?;

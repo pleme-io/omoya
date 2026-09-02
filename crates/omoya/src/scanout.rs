@@ -186,6 +186,24 @@ impl DirectScanout {
         }
     }
 
+    /// The generation the back slot's CONTENTS belong to — `None` when it has
+    /// never been drawn into.
+    ///
+    /// ★ THE SAME FACT `back_buffer_age` REPORTS, WITHOUT THE SUBTRACTION.
+    /// Age is a distance and answers "how many frames stale"; a partial copy
+    /// needs the IDENTITY of the generation, so that the damage it is handed
+    /// can be compared against it rather than assumed to match. Deriving one
+    /// from the other at the call site would mean reconstructing `presented`
+    /// there, which is how two copies of a counter start disagreeing.
+    ///
+    /// `None` is the honest answer for a slot with no history, and it is what
+    /// keeps a partial copy from being attempted against a buffer whose bytes
+    /// nothing has established.
+    #[must_use]
+    pub fn back_buffer_generation(&self) -> Option<u64> {
+        self.last_drawn[self.back]
+    }
+
     pub fn back_buffer(&mut self) -> &mut DumbBuffer {
         &mut self.slots[self.back].buffer
     }
