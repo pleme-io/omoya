@@ -389,7 +389,7 @@ impl Default for Pointer {
 }
 
 /// The seat's whole intake policy, as one value.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Ukeire {
     /// What a keyboard event means.
@@ -402,6 +402,183 @@ pub struct Ukeire {
     pub pointer: Pointer,
     /// Which modifier the chord vocabulary hangs off.
     pub modifier: SeatModifier,
+    /// evdev-level rewrites, proven safe by their own type.
+    pub remaps: Remaps,
+}
+
+impl Default for Ukeire {
+    /// ★ NOT `#[derive(Default)]`, because `Remaps::default()` is EMPTY and
+    /// the seat's default is not: CapsLock -> Escape survives even the bare
+    /// tier, for the reason `remap.rs` gives — the worst-placed key on the
+    /// board, under the strongest finger. Deriving would have silently
+    /// dropped it the moment remaps moved onto this struct, and nothing in
+    /// the diff would have said so.
+    fn default() -> Self {
+        Self {
+            keymap: Keymap::default(),
+            repeat: Repeat::default(),
+            scroll: Scroll::default(),
+            pointer: Pointer::default(),
+            modifier: SeatModifier::default(),
+            remaps: Remaps::unchecked(crate::remap::DEFAULT_REMAPS),
+        }
+    }
+}
+
+// ── Remaps: refused at the parse boundary, not validated afterwards ──────
+
+/// One evdev-level rewrite.
+///
+/// Lives here rather than in `config.rs` because a remap is an *intake*
+/// decision — it changes what a physical key means before xkb ever sees it.
+/// `config::Remap` is a re-export, so existing spellings still resolve.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Remap {
+    /// evdev code to rewrite, e.g. 58 for `KEY_CAPSLOCK`.
+    pub from: u32,
+    /// evdev code to rewrite it to, e.g. 1 for `KEY_ESC`.
+    pub to: u32,
+}
+
+/// A remap set that has already been proven safe.
+///
+/// ── ★ WHY THIS IS A NEWTYPE AND NOT A `Vec<Remap>` + A CHECK ─────────────
+/// `Ukeire::refusals` was a *validator*: it returned a list, `main.rs`
+/// reported it, and the ledger graded both its rows `only-mitigated (C1)`
+/// because a caller who forgot to consult it would apply a soft-bricking
+/// remap with no complaint. That ceiling was real and named, and this type
+/// removes it.
+///
+/// The move that makes it possible: **`awase::Reserved::fleet_linux()` is a
+/// pure function of nothing.** It needs no config, no environment and no
+/// caller context, so `Deserialize` can construct the claim set itself and
+/// refuse at the parse boundary rather than deferring to a later check.
+/// There is no `Remaps` value anywhere in this crate that rewrites a
+/// reserved key, and no constructor that produces one — `parse` does not
+/// validate, it *refuses*.
+///
+/// Three conditions, all refused:
+/// - **a reserved source** — rewriting evdev 60 removes `Ctrl+Alt+F2` from
+///   existence, including the operator's own route to a TTY to undo the
+///   edit. A soft-brick reachable from a two-number yaml edit.
+/// - **a self-remap** — a no-op that reads as an intentional rewrite.
+/// - **a duplicated source** — last-write-wins would be a silent choice
+///   between two stated intentions.
+///
+/// `unchecked` exists for the ONE caller that has a compile-time-known set
+/// (the seat's own defaults), and it is `pub(crate)` so no config path can
+/// reach it.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
+#[serde(transparent)]
+pub struct Remaps(Vec<Remap>);
+
+impl Remaps {
+    /// Refuse anything unsafe. The single public constructor.
+    ///
+    /// # Errors
+    /// Every problem, not the first: an operator fixing a config wants the
+    /// whole list rather than one rebuild cycle per mistake.
+    pub fn parse(pairs: &[(u32, u32)]) -> Result<Self, Vec<UkeireError>> {
+        Self::parse_against(pairs, &awase::Reserved::fleet_linux())
+    }
+
+    /// `parse`, against an explicit claim set.
+    ///
+    /// Exists so a test can prove the refusal fires off the *claims* rather
+    /// than off this file's table — pass an empty `Reserved` and the reserved
+    /// arm must go quiet while the other two still fire.
+    ///
+    /// # Errors
+    /// As `parse`.
+    pub fn parse_against(
+        pairs: &[(u32, u32)],
+        reserved: &awase::Reserved,
+    ) -> Result<Self, Vec<UkeireError>> {
+        let protected = reserved_codes(reserved);
+        let mut out = Vec::new();
+        let mut seen: Vec<u32> = Vec::new();
+
+        for &(from, to) in pairs {
+            if from == to {
+                out.push(UkeireError::SelfRemap { code: from });
+            }
+            if seen.contains(&from) {
+                out.push(UkeireError::DuplicateRemapSource { code: from });
+            } else {
+                seen.push(from);
+            }
+            if let Some((code, key)) = protected.iter().find(|(c, _)| *c == from) {
+                out.push(UkeireError::RemapOfReservedKey {
+                    code: *code,
+                    key: *key,
+                });
+            }
+        }
+
+        if out.is_empty() {
+            Ok(Self(
+                pairs.iter().map(|&(from, to)| Remap { from, to }).collect(),
+            ))
+        } else {
+            Err(out)
+        }
+    }
+
+    /// The seat's own compile-time-known defaults.
+    ///
+    /// `pub(crate)` on purpose: this is the one place a set skips the
+    /// refusal, and it must stay unreachable from any config path. The
+    /// defaults are still put through `parse` in a test, because a guard
+    /// that refuses the shipped default is a guard that gets deleted.
+    pub(crate) fn unchecked(pairs: &[(u32, u32)]) -> Self {
+        Self(pairs.iter().map(|&(from, to)| Remap { from, to }).collect())
+    }
+
+    /// The pairs `remap::apply` wants.
+    #[must_use]
+    pub fn pairs(&self) -> Vec<(u32, u32)> {
+        self.0.iter().map(|r| (r.from, r.to)).collect()
+    }
+
+    /// How many rewrites.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// True when nothing is rewritten.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl<'de> Deserialize<'de> for Remaps {
+    /// ★ REFUSES, rather than clamping like the bounded leaves do.
+    ///
+    /// The asymmetry is deliberate and is the difference between a *preference*
+    /// and a *hazard*. An out-of-band repeat rate has an obviously-right
+    /// nearest legal value, so clamping keeps the seat alive at no cost. A
+    /// remap that eats the VT escape has no nearest legal value — silently
+    /// dropping it would leave the operator believing CapsLock was remapped
+    /// when it was not, and silently keeping it would cost them the machine.
+    /// So this one is an error, and `config::load`'s existing fall-back to the
+    /// prescribed tier is what keeps a seat on screen.
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let raw = Vec::<Remap>::deserialize(d)?;
+        let pairs: Vec<(u32, u32)> = raw.iter().map(|r| (r.from, r.to)).collect();
+        Self::parse(&pairs).map_err(|errs| {
+            // One message naming every problem. `Display` on each arm already
+            // names the offending code, so this is a join, not a re-write.
+            let joined = errs
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("; ");
+            serde::de::Error::custom(joined)
+        })
+    }
 }
 
 // ── Refusals ─────────────────────────────────────────────────────────────
@@ -510,39 +687,19 @@ fn reserved_codes(reserved: &awase::Reserved) -> Vec<(u32, &'static str)> {
 }
 
 impl Ukeire {
-    /// Refuse an intake policy that would break the seat.
+    /// What a remap set would be refused for, without constructing one.
     ///
-    /// Returns **every** problem, not the first: an operator fixing a config
-    /// wants the whole list, and a one-at-a-time validator turns a two-line
-    /// mistake into two rebuild cycles.
-    ///
-    /// `remaps` is passed in rather than held on `Ukeire` because remaps
-    /// already have a home on `OmoyaConfig` and moving them would be a second
-    /// declaration during the transition. Named as a follow-up in
-    /// `docs/UKEIRE.md` rather than left implicit.
+    /// ★ NO LONGER THE GUARD — `Remaps`'s own `Deserialize` is, and it
+    /// refuses at the parse boundary. This is kept as the readable question
+    /// ("why would this be rejected?") for diagnostics and for the tests that
+    /// name each arm, and it DELEGATES so the two cannot disagree. Before
+    /// this, it was the only check, which is exactly why the ledger graded
+    /// its rows `only-mitigated (C1)`.
+    #[must_use]
     pub fn refusals(&self, remaps: &[(u32, u32)], reserved: &awase::Reserved) -> Vec<UkeireError> {
-        let mut out = Vec::new();
-        let protected = reserved_codes(reserved);
-        let mut seen: Vec<u32> = Vec::new();
-
-        for &(from, to) in remaps {
-            if from == to {
-                out.push(UkeireError::SelfRemap { code: from });
-            }
-            if seen.contains(&from) {
-                out.push(UkeireError::DuplicateRemapSource { code: from });
-            } else {
-                seen.push(from);
-            }
-            if let Some((code, key)) = protected.iter().find(|(c, _)| *c == from) {
-                out.push(UkeireError::RemapOfReservedKey {
-                    code: *code,
-                    key: *key,
-                });
-            }
-        }
-
-        out
+        Remaps::parse_against(remaps, reserved)
+            .err()
+            .unwrap_or_default()
     }
 }
 

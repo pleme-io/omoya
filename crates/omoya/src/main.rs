@@ -909,7 +909,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!(
         terminal = ?cfg.terminal,
         launcher = ?cfg.launcher,
-        remaps = cfg.remaps.len(),
+        remaps = cfg.ukeire.remaps.len(),
         "seat configuration resolved"
     );
     data.state.session_command = cfg.terminal.clone();
@@ -946,24 +946,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // `wl_keyboard.repeat_info` and the keymap fd to every bound keyboard.
     // Re-adding a keyboard instead would replace the handle every client
     // holds.
-    {
-        let reserved = awase::Reserved::fleet_linux();
-        let refusals = data
-            .state
-            .config
-            .ukeire
-            .refusals(&data.state.config.remap_pairs(), &reserved);
-        // ★ REPORTED, NEVER FATAL, and the remaps are DROPPED rather than
-        // partially applied. A refused intake policy means the operator's
-        // yaml would have cost them their way back in; the seat's job is to
-        // come up anyway and say so.
-        for r in &refusals {
-            tracing::error!(refusal = %r, "ukeire: refused, remaps NOT applied");
-        }
-        if !refusals.is_empty() {
-            data.state.config.remaps.clear();
-        }
-    }
+    // ★ NO REFUSAL CHECK HERE, AND THAT IS THE IMPROVEMENT. An earlier cut of
+    // this block called `ukeire.refusals(...)` and cleared the remap set when
+    // it complained — a runtime guard, and one a future caller could simply
+    // forget, which is why the ledger graded it `only-mitigated (C1)`.
+    // `Remaps` now refuses at its own parse boundary, so a `Ukeire` that
+    // rewrites a VT-switch key cannot be constructed from config at all and
+    // `config::load` falls back to the prescribed tier with the serde error
+    // named. Nothing left to check.
 
     // The chord vocabulary, re-hung on the operator's modifier.
     //
@@ -982,6 +972,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             data.state.bindings = map;
             tracing::info!(?modifier, "ukeire: seat modifier");
+        }
+    }
+
+    // ── Publish the RESOLVED policy, not the requested one ───────────────
+    //
+    // Written after every apply below would be wrong for the keymap (it may
+    // fail to compile), so the layout leaf is set inside that arm. The rest
+    // cannot fail, so they are published here.
+    {
+        use std::sync::atomic::Ordering::Relaxed;
+        let u = &data.state.config.ukeire;
+        let i = &data.state.introspect;
+        let (delay, rate) = u.repeat.smithay_repeat_info();
+        i.ukeire_repeat_delay_ms.store(delay as u64, Relaxed);
+        i.ukeire_repeat_rate_hz.store(rate as u64, Relaxed);
+        // x1000 so 3.0 does not arrive as 3 — see the field's own note.
+        i.ukeire_scroll_factor_milli
+            .store((u.scroll.factor.get() * 1000.0).round() as u64, Relaxed);
+        i.ukeire_scroll_natural.store(
+            u64::from(u.scroll.direction == crate::ukeire::ScrollDirection::Natural),
+            Relaxed,
+        );
+        i.ukeire_cursor_scale
+            .store(u.pointer.cursor_scale.get() as u64, Relaxed);
+        i.ukeire_remaps.store(u.remaps.len() as u64, Relaxed);
+        if let Ok(mut g) = i.ukeire_modifier.lock() {
+            // `Debug` is the typed surface here; the enum's two spellings are
+            // exactly the two config words.
+            *g = match u.modifier {
+                crate::ukeire::SeatModifier::Super => String::from("super"),
+                crate::ukeire::SeatModifier::Alt => String::from("alt"),
+            };
+        }
+        // The honest default until an apply succeeds: the seat IS on the bare
+        // keymap at this point.
+        if let Ok(mut g) = i.ukeire_keymap_layout.lock() {
+            *g = String::from("<bare>");
         }
     }
 
@@ -1017,7 +1044,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 layout.as_str()
             };
             match kb.set_xkb_config(&mut data.state, xkb) {
-                Ok(()) => tracing::info!(layout = shown, "ukeire: keymap"),
+                Ok(()) => {
+                    tracing::info!(layout = shown, "ukeire: keymap");
+                    // ★ Published ONLY on success. A failed compile leaves the
+                    // seat on the bare keymap, and the leaf must say `<bare>`
+                    // rather than the name that did not take — otherwise the
+                    // observation plane would confirm a change that never
+                    // happened, which is worse than publishing nothing.
+                    if let Ok(mut g) = data.state.introspect.ukeire_keymap_layout.lock() {
+                        *g = shown.to_string();
+                    }
+                }
                 Err(e) => tracing::error!(
                     layout = shown,
                     error = ?e,

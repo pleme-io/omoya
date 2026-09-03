@@ -65,8 +65,7 @@ pub struct OmoyaConfig {
     pub terminal: Option<Vec<String>>,
     /// What `Ctrl+Space` launches.
     pub launcher: Option<Vec<String>>,
-    /// Keycode remaps applied above xkb, as `(from_evdev, to_evdev)`.
-    pub remaps: Vec<Remap>,
+
     /// The status bar.
     pub bar: BarConfig,
     /// Window placement rules.
@@ -223,20 +222,14 @@ impl Default for LayoutConfig {
     }
 }
 
-/// One keycode remap.
+/// One evdev-level rewrite.
 ///
-/// ★ Typed as a struct rather than a `(u32, u32)` tuple so the YAML reads
-/// `from: 58` / `to: 1` instead of `[58, 1]`. A two-element array in a config
-/// file is a coin-flip about which end is which, and the failure — a keyboard
-/// where one key is wrong — is discovered by typing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Remap {
-    /// evdev code to rewrite, e.g. 58 for `KEY_CAPSLOCK`.
-    pub from: u32,
-    /// evdev code to rewrite it to, e.g. 1 for `KEY_ESC`.
-    pub to: u32,
-}
+/// ★ RE-EXPORTED, NOT DECLARED HERE. The type moved to `ukeire.rs` when
+/// remaps did, because a remap is an intake decision — it changes what a
+/// physical key means before xkb ever sees it. The alias stays so existing
+/// `config::Remap` spellings keep resolving (MODULARIZE, DON'T DELETE):
+/// retirement of a name is a re-binding, not a deletion.
+pub use crate::ukeire::Remap;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -306,13 +299,6 @@ impl OmoyaConfig {
             // the board, under the strongest finger — and an operator who has
             // stopped reaching for Escape should not lose it to a typo in a
             // yaml file.
-            remaps: crate::remap::DEFAULT_REMAPS
-                .iter()
-                .map(|(from, to)| Remap {
-                    from: *from,
-                    to: *to,
-                })
-                .collect(),
             bar: BarConfig::default(),
             placement: PlacementConfig::default(),
             layout: LayoutConfig::default(),
@@ -373,7 +359,7 @@ impl OmoyaConfig {
     /// The remaps as `remap::apply` wants them.
     #[must_use]
     pub fn remap_pairs(&self) -> Vec<(u32, u32)> {
-        self.remaps.iter().map(|r| (r.from, r.to)).collect()
+        self.ukeire.remaps.pairs()
     }
 }
 
@@ -463,7 +449,10 @@ mod tests {
         // fix the file. A bare tier with no remaps and no bar would strand
         // them.
         let b = OmoyaConfig::bare();
-        assert!(!b.remaps.is_empty(), "bare must keep CapsLock->Escape");
+        assert!(
+            !b.ukeire.remaps.is_empty(),
+            "bare must keep CapsLock->Escape"
+        );
         assert!(b.bar.height > 0, "bare must still draw a bar");
         assert!(
             !b.placement.floating_app_ids.is_empty(),
@@ -539,14 +528,47 @@ mod tests {
     }
 
     #[test]
+    fn a_soft_bricking_remap_is_refused_by_the_config_loader_itself() {
+        // ★ THE END-TO-END PROOF that the C1 ceiling is gone. evdev 60 is F2;
+        // rewriting it removes Ctrl+Alt+F2 from existence, including the
+        // operator's own route to a TTY to undo the edit. It is now refused
+        // by `Remaps`'s `Deserialize`, so the whole `OmoyaConfig` fails to
+        // parse and `load()` falls back to the prescribed tier — there is no
+        // `OmoyaConfig` value in this crate that carries it, and no later
+        // check a caller could forget to run.
+        let err = serde_yaml::from_str::<OmoyaConfig>(
+            "ukeire:\n  remaps:\n    - from: 60\n      to: 1\n",
+        )
+        .expect_err("a reserved-key remap must not parse");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("F2") && msg.contains("reserved"),
+            "the refusal must name the key and why: {msg}"
+        );
+
+        // And the same shape on a NON-reserved key still parses, so the gate
+        // is refusing the hazard rather than refusing remaps.
+        let ok: OmoyaConfig =
+            serde_yaml::from_str("ukeire:\n  remaps:\n    - from: 58\n      to: 1\n")
+                .expect("CapsLock is not reserved and must still work");
+        assert_eq!(ok.remap_pairs(), vec![(58, 1)]);
+    }
+
+    #[test]
     fn the_remap_shape_is_named_not_positional() {
         // A `[58, 1]` pair is a coin-flip about which end is which, and the
         // failure is a keyboard with one wrong key — found by typing.
-        let cfg: OmoyaConfig = serde_yaml::from_str("remaps:\n  - from: 58\n    to: 1\n")
-            .expect("named remap fields parse");
+        //
+        // ★ THE KEY MOVED to `ukeire.remaps` when the type did. Safe because
+        // it was measured first: no nix file and no live seat's yaml declared
+        // a top-level `remaps`, so there was no deployed consumer to strand.
+        // A key with a consumer would have needed a serde alias instead.
+        let cfg: OmoyaConfig =
+            serde_yaml::from_str("ukeire:\n  remaps:\n    - from: 58\n      to: 1\n")
+                .expect("named remap fields parse");
         assert_eq!(cfg.remap_pairs(), vec![(58, 1)]);
         assert!(
-            serde_yaml::from_str::<OmoyaConfig>("remaps:\n  - [58, 1]\n").is_err(),
+            serde_yaml::from_str::<OmoyaConfig>("ukeire:\n  remaps:\n    - [58, 1]\n").is_err(),
             "a positional pair must not be accepted"
         );
     }

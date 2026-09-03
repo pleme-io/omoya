@@ -100,8 +100,8 @@ here is rounded up.
 | cursor dimensions disagreeing with the art | `CELLS_W`/`CELLS_H` are `ART[0].len()` / `ART.len()`; the mask is the single source | truly-unrep |
 | a typo'd knob absorbed silently | `deny_unknown_fields` at every level — the loader `Err`s | parse-time-rejected |
 | an uncompilable xkb layout | `set_xkb_config` compiles through libxkbcommon and returns `Err` **without disturbing the live keymap**, so the operator stays on a seat they can log in and fix it from. The fallback is structural, not a branch | parse-time-rejected |
-| a remap that rewrites a VT-switch key | `Ukeire::refusals` returns `RemapOfReservedKey` and `main.rs` drops the whole remap set | only-mitigated (C1 — a runtime check, not a type. The evdev code is a `u32` from yaml; making it unrepresentable needs a `Refined`-style newtype whose bounds exclude the reserved set, which is M1) |
-| a self-remap or a duplicated remap source | same validator, reported together rather than one per rebuild cycle | only-mitigated (C1) |
+| a remap that rewrites a VT-switch key | `Remaps`'s own `Deserialize` refuses it — the whole `OmoyaConfig` fails to parse and `load()` falls back to the prescribed tier. `Reserved::fleet_linux()` is a pure function of nothing, so the claim set is available *at the parse boundary*; no `Remaps` value in the crate carries one and the only bypass, `unchecked`, is `pub(crate)` and unreachable from any config path | parse-time-rejected |
+| a self-remap or a duplicated remap source | same constructor, all problems named in one message | parse-time-rejected |
 | the seat's keymap diverging from the node's declared layout | **eval-caught**: the nix module defaults `ukeire.keymap.layout` from `services.xserver.xkb.layout`, so agreement is a projection rather than two hand-lists | only-mitigated (C1 — a *default*, so an operator can still override the two apart on purpose. A `readOnly` derived option would make it truly eval-rejected; that is M1, and deliberate: a dual-layout seat on a single-layout TTY is a legitimate thing to want) |
 | the reserved-key table drifting from `awase`'s claims | `reserved_codes` filters the table **through `Reserved`**, so the claim set is the denominator; a claim on a key absent from the table fails `every_reserved_claim_maps_to_an_evdev_code_this_file_knows` | only-mitigated (C2 — CI-caught, fail-closed) |
 
@@ -115,6 +115,7 @@ House standard is a recorded red run per seal. All four, on rio:
 | `natural_scrolling_inverts_the_sign_and_nothing_else` | `Natural => 1.0` | RED |
 | `remapping_a_vt_switch_key_is_refused` | delete the reserved check | RED |
 | `an_unconfigured_keymap_is_exactly_the_old_hardcoded_behaviour` | `Default` prescribes `us` | RED — **and it also took down `config::every_tier_hands_the_seat_a_usable_intake_policy`**, which is the tier gate noticing the same defect from the other side |
+| `a_soft_bricking_remap_is_refused_by_the_config_loader_itself` | `Deserialize` returns `Ok(unchecked(...))` instead of refusing | RED |
 | `every_reserved_claim_maps_to_an_evdev_code_this_file_knows` | *none needed* | RED **for free**: it failed with `derived 0` while the matcher was broken, and passed once fixed |
 
 ★ That last row is the useful one. The first draft of `reserved_codes` had
@@ -125,26 +126,79 @@ shipped, which is what a denominator-in-the-assertion is for. The matcher now
 compares the **last `+`-segment exactly**, so the substring class is
 unrepresentable rather than carefully avoided.
 
+### The C1 rows were lifted, not merely named
+
+The first cut of this ledger graded the two remap rows `only-mitigated (C1)`
+with the ceiling stated: *"a runtime check, not a type — a caller who forgot
+to consult `refusals` would apply a soft-bricking remap with no complaint."*
+That ceiling is now gone, and the move that removed it is worth recording
+because it looked unavailable:
+
+**`awase::Reserved::fleet_linux()` is a pure function of nothing.** It takes no
+config, no environment, no caller context. So `Deserialize` — which has no way
+to receive context — can construct the claim set *itself*. The refusal moved
+from a method someone calls to the boundary every config value must cross.
+`Ukeire::refusals` survives as a delegating diagnostic ("why would this be
+rejected?") rather than as the guard, so the two cannot disagree.
+
+★ The bounded leaves **clamp** and this one **refuses**, and the asymmetry is
+the difference between a preference and a hazard. An out-of-band repeat rate
+has an obviously-right nearest legal value. A remap that eats the VT escape has
+none: dropping it silently would leave the operator believing CapsLock was
+remapped when it was not, and keeping it would cost them the machine.
+
 ## Tier honesty — what this is NOT
 
 - **M0 is plain typed Rust plus shikumi config.** The `(defukeire …)`
   tatara-lisp form and its `#[derive(DeriveTataraDomain)]` border are a
   **named M1**. `specs/ukeire.lisp` *documents* the destination form; it is
   not the wired form and nothing loads it.
-- **The remap refusals are a validator, not a type.** Two of the eleven rows
-  above are `only-mitigated (C1)`, and both are named with their ceiling.
+- **Nine of eleven rows are now truly-unrep or parse-time-rejected.** The two
+  that remain `only-mitigated` are the *keymap-agrees-with-the-node* row (a
+  nix **default**, deliberately overridable) and the *table-tracks-awase's-claims*
+  row (C2, CI-caught).
+- **Observation is not proof.** The eight `ukeire_*` introspect leaves publish
+  the policy the seat RESOLVED, which is a measurement, never a guarantee that
+  it is the right policy.
 - **Nothing here makes input *correct*.** It makes it *declared*. Whether
   `br` is the right layout for a given keyboard is a fact about the world, and
   the world's answer lives in the node's nix config — which is precisely why
   the seat projects from it instead of holding an opinion.
 
+## Observing it — the eight leaves
+
+`ukeire` publishes the policy the seat **resolved**, over kanshou/MCP. The
+distinction from the requested policy is the whole reason these exist: a seat
+whose keymap failed to compile keeps a working keymap and otherwise looks
+identical to one that applied the operator's, because both come up and both
+type.
+
+| leaf | note |
+|---|---|
+| `ukeire_repeat_delay_ms` | |
+| `ukeire_repeat_rate_hz` | `0` means repeat is off |
+| `ukeire_scroll_factor_milli` | x1000, so `3.0` does not arrive as `3` |
+| `ukeire_scroll_natural` | `1`/`0` — deliberately NOT folded into the factor's sign, which is the conflation `ScrollDirection` exists to stop |
+| `ukeire_cursor_scale` | |
+| `ukeire_remaps` | count |
+| `ukeire_modifier` | `super` / `alt` |
+| `ukeire_keymap_layout` | **`<bare>` when the requested layout did not compile** — published only on a successful apply, so the observation plane never confirms a change that did not happen |
+
 ## M1, named rather than implied
 
 1. `(defukeire …)` + the TataraDomain border.
-2. `Remaps` as a validating newtype on `Ukeire` — today remaps still live on
-   `OmoyaConfig` and are passed *into* `refusals`, because moving them during
-   the same change would have been a second declaration mid-transition.
-3. A reserved-excluding evdev newtype, to lift the two C1 rows to
-   parse-time-rejected.
-4. Live re-application (`calha`-style) so a config change reaches a running
-   seat without a logout. Today all of it applies at startup.
+2. Live re-application (`calha`-style) so a config change reaches a running
+   seat without a logout. Today all of it applies at startup, which is also
+   why a stale config cannot poison a running seat: `config::load()` is called
+   exactly once and there is no watcher.
+3. Lifting the keymap-agreement row from a nix `default` to a `readOnly`
+   derived option — deliberately NOT done: a dual-layout seat on a
+   single-layout TTY is a legitimate thing to want.
+
+### Done since the first cut
+
+- ~~`Remaps` as a newtype on `Ukeire`~~ — landed; the yaml key moved to
+  `ukeire.remaps` (measured safe: no nix file and no live seat declared a
+  top-level `remaps`).
+- ~~A reserved-excluding constructor to lift the two C1 rows~~ — landed as
+  `Remaps::parse`, refusing at the `Deserialize` boundary.

@@ -375,6 +375,37 @@ pub struct OmoyaIntrospect {
     pub tab_groups: std::sync::Mutex<Vec<Vec<u32>>>,
     pub import_full: AtomicU64,
     pub import_partial: AtomicU64,
+
+    // ── ukeire (受け入れ): the RESOLVED intake policy ────────────────────
+    //
+    // ★ PUBLISHED BECAUSE "CONFIGURABLE" IS NOT "CONFIGURED". Everything in
+    // this group is written once, in `main.rs`, from the policy the seat
+    // actually applied — not from the yaml, and not from the defaults. That
+    // distinction is the whole point: a seat whose keymap failed to compile
+    // keeps a working keymap and would otherwise look identical to one that
+    // applied the operator's, because both come up and both type. These
+    // leaves are how an agent tells those apart without a screenshot.
+    //
+    // Scalars are atomics; the two strings are behind a `Mutex` because they
+    // are set exactly once and read rarely, so a lock is cheaper in
+    // complexity than a lock-free string would be in every other way.
+    pub ukeire_repeat_delay_ms: AtomicU64,
+    pub ukeire_repeat_rate_hz: AtomicU64,
+    /// Scroll factor x1000, because the leaf plane carries integers and a
+    /// factor of 3.0 must not arrive as `3`.
+    pub ukeire_scroll_factor_milli: AtomicU64,
+    /// `1` when natural, `0` when traditional. Not folded into the factor's
+    /// sign — that is the exact conflation `ScrollDirection` exists to stop,
+    /// and re-introducing it on the observation plane would make the
+    /// published value disagree with the type.
+    pub ukeire_scroll_natural: AtomicU64,
+    pub ukeire_cursor_scale: AtomicU64,
+    pub ukeire_remaps: AtomicU64,
+    pub ukeire_modifier: std::sync::Mutex<String>,
+    /// The layout the seat is RUNNING, which is not always the one asked
+    /// for: an uncompilable name leaves the previous keymap in place, and
+    /// this then reads `<bare>` rather than the requested string.
+    pub ukeire_keymap_layout: std::sync::Mutex<String>,
     /// Each render element's geometry, as the RENDERER sees it.
     ///
     /// ★ THE THIRD INDEPENDENT VIEW OF THE SAME QUESTION. `layout` is what
@@ -1050,6 +1081,24 @@ impl Introspect for OmoyaIntrospect {
             "td_rows_examined" => Ok(n(&self.td_rows_examined)),
             "td_shadows" => Ok(n(&self.td_shadows)),
             "td_presented_marks" => Ok(n(&self.td_presented_marks)),
+            "ukeire_repeat_delay_ms" => Ok(n(&self.ukeire_repeat_delay_ms)),
+            "ukeire_repeat_rate_hz" => Ok(n(&self.ukeire_repeat_rate_hz)),
+            "ukeire_scroll_factor_milli" => Ok(n(&self.ukeire_scroll_factor_milli)),
+            "ukeire_scroll_natural" => Ok(n(&self.ukeire_scroll_natural)),
+            "ukeire_cursor_scale" => Ok(n(&self.ukeire_cursor_scale)),
+            "ukeire_remaps" => Ok(n(&self.ukeire_remaps)),
+            "ukeire_modifier" => Ok(serde_json::json!(
+                self.ukeire_modifier
+                    .lock()
+                    .map(|g| g.clone())
+                    .unwrap_or_default()
+            )),
+            "ukeire_keymap_layout" => Ok(serde_json::json!(
+                self.ukeire_keymap_layout
+                    .lock()
+                    .map(|g| g.clone())
+                    .unwrap_or_default()
+            )),
             "minimized_count" => Ok(n(&self.minimized_count)),
             "tab_groups" => Ok(serde_json::json!(
                 *self
@@ -1370,6 +1419,14 @@ impl Introspect for OmoyaIntrospect {
             "td_presented_marks",
             "minimized_count",
             "tab_groups",
+            "ukeire_repeat_delay_ms",
+            "ukeire_repeat_rate_hz",
+            "ukeire_scroll_factor_milli",
+            "ukeire_scroll_natural",
+            "ukeire_cursor_scale",
+            "ukeire_remaps",
+            "ukeire_modifier",
+            "ukeire_keymap_layout",
             "td_dirty_pct",
             "import_full",
             "import_partial",
