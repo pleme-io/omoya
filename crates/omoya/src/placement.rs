@@ -475,4 +475,30 @@ mod layout_mode_tests {
         let z = zone();
         assert_eq!(cascaded(z, 0.6, 0.6, 7, 0), centred(z, 0.6, 0.6));
     }
+
+    #[test]
+    fn the_launcher_is_an_overlay_and_a_terminal_is_not() {
+        // ★ THE DISTINCTION FLOATING MODE WAS THROWING AWAY. An overlay is
+        // centred in EVERY mode; a window that floats only because the mode
+        // says so joins the cascade. Both used to cascade, so summoning the
+        // launcher put it wherever the cascade index happened to land — the
+        // operator's "the ctrl-space isn't a nice little centered place, it
+        // is another stacked window".
+        let cfg = crate::config::PlacementConfig::default();
+        assert!(
+            matches!(
+                for_app_id_in(Some("tobira"), &cfg),
+                Placement::Floating { .. }
+            ),
+            "tobira is the launcher and must be an overlay"
+        );
+        assert!(
+            matches!(for_app_id_in(Some("mado"), &cfg), Placement::Tiled),
+            "a terminal is not an overlay — it belongs to the arrangement"
+        );
+        assert!(
+            matches!(for_app_id_in(None, &cfg), Placement::Tiled),
+            "an unidentified window must not be treated as an overlay"
+        );
+    }
 }

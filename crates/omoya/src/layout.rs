@@ -560,10 +560,9 @@ impl crate::state::Omoya {
             // the only floaters were listed apps, and a seat that maps
             // NOTHING once the mode makes every window a floater. The window
             // would be unmapped from the tiling tree and then skipped here.
-            let (width, height) = match crate::placement::for_app_id_in(
-                app_id_of(w).as_deref(),
-                &self.config.placement,
-            ) {
+            let placement =
+                crate::placement::for_app_id_in(app_id_of(w).as_deref(), &self.config.placement);
+            let (width, height) = match placement {
                 Placement::Floating { width, height } => (width, height),
                 Placement::Tiled if floating_mode => (
                     self.config.placement.float_width,
@@ -571,12 +570,28 @@ impl crate::state::Omoya {
                 ),
                 Placement::Tiled => continue,
             };
+            // ── ★ AN OVERLAY IS CENTRED IN EVERY MODE ────────────────────
+            //
+            // The distinction already exists in the type and was being
+            // thrown away one line up: `Placement::Floating` means "this app
+            // is an overlay BY ITS OWN NATURE" (it is in FLOATING_APP_IDS —
+            // tobira, the launcher), while `Tiled if floating_mode` means
+            // "this window floats only because the MODE makes everything
+            // float". Those want opposite placements and were getting the
+            // same one.
+            //
+            // The `else` branch below already says so — "a launcher summoned
+            // over a tiled desktop is still centred… cascading it would move
+            // it every time" — and then floating mode cascaded it anyway. The
+            // operator saw it exactly: "the ctrl-space isn't a nice little
+            // centered place, it is another stacked window."
+            let is_overlay = matches!(placement, Placement::Floating { .. });
             // Cascade so successive windows are individually reachable, then
             // snap so one nudged toward an edge sits flush with it. Snap
             // AFTER cascade: the cascade decides where the window wants to be
             // and the snap only tidies that answer, whereas snapping first
             // would be immediately overwritten by the offset.
-            let rect = if floating_mode {
+            let rect = if floating_mode && !is_overlay {
                 crate::placement::snap_to_edges(
                     crate::placement::cascaded(
                         usable,
@@ -589,9 +604,9 @@ impl crate::state::Omoya {
                     self.config.layout.snap_threshold,
                 )
             } else {
-                // A launcher summoned over a tiled desktop is still centred —
-                // it is a transient overlay, not a member of a floating
-                // arrangement, and cascading it would move it every time.
+                // A launcher is centred whatever the mode: it is a transient
+                // overlay, not a member of an arrangement, and cascading it
+                // would move it every time it is summoned.
                 crate::placement::centred(usable, width, height)
             };
             // ── ★ A FIXED-SIZE CLIENT KEEPS ITS SIZE; WE ONLY POSITION IT ──

@@ -143,18 +143,32 @@ pub fn cursor_for_surface(format_is_srgb: bool) -> [f32; 4] {
 /// right (see `background_for_surface`), and a third and fourth hand-expanded
 /// copy of it is a third and fourth chance to get it backwards.
 fn encode(c: irodori::Color, format_is_srgb: bool) -> [f32; 4] {
+    // ★ THE BRANCHES LOOK BACKWARDS AND ARE NOT. `format_is_srgb` describes
+    // the FRAMEBUFFER, not the value: an sRGB-encoded framebuffer has the GPU
+    // convert linear→sRGB on write, so we must hand it LINEAR; a plain one
+    // takes whatever we write unconverted, so we hand it sRGB-normalized.
+    // Every sibling in this module reads the same way — compare
+    // `background_for_surface`.
+    //
+    // I wrote this function with the branches the intuitive way round and it
+    // shipped a near-black titlebar: `polar_night[2]` (#434C5E) through the
+    // linear transform is ~(0.06, 0.08, 0.11), which on plo's non-sRGB
+    // framebuffer renders as black. The operator's words were "a black bar…
+    // it looks ugly and not nord like", and they were seeing exactly this.
+    // The bug is invisible to the compiler — both arms return `[f32; 4]` —
+    // so `the_chrome_colours_are_not_crushed_to_black` below is the guard.
     if format_is_srgb {
-        [
-            f32::from(c.r) / 255.0,
-            f32::from(c.g) / 255.0,
-            f32::from(c.b) / 255.0,
-            1.0,
-        ]
-    } else {
         [
             srgb_to_linear(c.r),
             srgb_to_linear(c.g),
             srgb_to_linear(c.b),
+            1.0,
+        ]
+    } else {
+        [
+            f32::from(c.r) / 255.0,
+            f32::from(c.g) / 255.0,
+            f32::from(c.b) / 255.0,
             1.0,
         ]
     }
@@ -311,6 +325,66 @@ mod tests {
         assert!(darker(background_for_surface), "background");
         assert!(darker(focus_border_for_surface), "focus border");
         assert!(darker(cursor_for_surface), "cursor");
+        // ★ ENROLLED 2026-09-03, AFTER SHIPPING THE DEFECT THIS TEST EXISTS
+        // TO CATCH. The chrome colours were added without being listed here
+        // and went out with the branches inverted — a black titlebar on the
+        // operator's screen. The gate was right, complete and simply not
+        // asked about the new functions.
+        assert!(darker(titlebar_for_surface), "titlebar");
+        for role in [
+            crate::chrome::Hit::Close,
+            crate::chrome::Hit::Minimize,
+            crate::chrome::Hit::Maximize,
+            crate::chrome::Hit::Drag,
+        ] {
+            // Same predicate as `darker`, inlined because
+            // `chrome_button_for_surface` takes the role as well and so is
+            // not the `fn(bool) -> [f32; 4]` shape the helper wants.
+            let srgb_surface = chrome_button_for_surface(role, true);
+            let plain = chrome_button_for_surface(role, false);
+            assert!(
+                srgb_surface[0] <= plain[0]
+                    && srgb_surface[1] <= plain[1]
+                    && srgb_surface[2] <= plain[2],
+                "chrome button {role:?} disagrees about which branch is which"
+            );
+        }
+    }
+
+    #[test]
+    fn the_chrome_colours_are_not_crushed_to_black() {
+        // ★ THE OPERATOR-FACING PROPERTY, asserted directly rather than
+        // inferred from the branch agreement above: on plo's framebuffer
+        // (`format_is_srgb = false`, the value drm.rs passes) the titlebar
+        // must be visibly lighter than the desktop behind it, and each button
+        // must be a distinct, clearly non-black colour.
+        //
+        // With the branches inverted the titlebar came out at ~0.06 — darker
+        // than the 0.18 background — which is precisely "a black bar".
+        let bg = background_for_surface(false);
+        let bar = titlebar_for_surface(false);
+        assert!(
+            bar[0] > bg[0] && bar[1] > bg[1] && bar[2] > bg[2],
+            "the titlebar must read as a surface above the desktop: bar {bar:?} vs bg {bg:?}"
+        );
+        for role in [
+            crate::chrome::Hit::Close,
+            crate::chrome::Hit::Minimize,
+            crate::chrome::Hit::Maximize,
+        ] {
+            let c = chrome_button_for_surface(role, false);
+            let brightest = c[0].max(c[1]).max(c[2]);
+            assert!(
+                brightest > 0.35,
+                "{role:?} is too dark to read as its colour: {c:?}"
+            );
+        }
+        // And the three must be distinguishable from each other — colour is
+        // the ONLY affordance, since the buttons carry no icons or labels.
+        let close = chrome_button_for_surface(crate::chrome::Hit::Close, false);
+        let mini = chrome_button_for_surface(crate::chrome::Hit::Minimize, false);
+        let maxi = chrome_button_for_surface(crate::chrome::Hit::Maximize, false);
+        assert!(close != mini && mini != maxi && close != maxi);
     }
 }
 

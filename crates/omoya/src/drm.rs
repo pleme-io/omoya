@@ -1173,10 +1173,19 @@ where
                     let Some(geo) = data.state.space.element_geometry(w) else {
                         continue;
                     };
-                    let mut rects = vec![(
-                        crate::chrome::bar_rect(geo),
-                        crate::theme::titlebar_for_surface(false),
-                    )];
+                    // ★ BUTTONS FIRST, BAR LAST — the order is what makes
+                    // them visible. Element index is FRONT-TO-BACK, so the
+                    // first pushed is drawn in front. Pushing the bar first
+                    // put it in front of its own buttons and hid all three
+                    // behind it: the operator saw "a black bar… clicking it
+                    // does nothing", which was three invisible buttons under
+                    // an opaque rectangle.
+                    //
+                    // The same relationship `chrome::hit` encodes for clicks
+                    // (buttons beat the bar they sit inside), expressed in
+                    // the one place that decides what is on top. Both are
+                    // pinned by tests, in their own files.
+                    let mut rects = Vec::new();
                     if crate::chrome::fits(geo) {
                         for (r, role) in crate::chrome::buttons(geo).into_iter().zip([
                             crate::chrome::Hit::Close,
@@ -1186,6 +1195,10 @@ where
                             rects.push((r, crate::theme::chrome_button_for_surface(role, false)));
                         }
                     }
+                    rects.push((
+                        crate::chrome::bar_rect(geo),
+                        crate::theme::titlebar_for_surface(false),
+                    ));
                     for (i, (r, colour)) in rects.into_iter().enumerate() {
                         if r.size.w <= 0 || r.size.h <= 0 {
                             continue;
