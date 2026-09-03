@@ -1,0 +1,47 @@
+[package]
+name = "kasane"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+# ★ NOT PUBLISHED YET — same reason as `nuri`, and the same decision shape.
+# Minting a crates.io name is PERMANENT and outward-facing, so it is the
+# operator's call rather than a side effect of turning CI green. The
+# "redistribute" half of this primitive is a named milestone, not an oversight.
+# `pending-kasane-publish: needs a crates.io name we own`
+publish = false
+description = "kasane (重ね) — the pleme-io GPU pipe. Import a client dmabuf as a Vulkan image, in pure Rust over the thinnest possible C boundary."
+
+[dependencies]
+thiserror.workspace = true
+
+# ★ THE ONLY DEPENDENCY, AND THE REASON IT IS ALLOWED (docs/KASANE.md §4).
+#
+# `ash` is pure Rust: pre-generated bindings, no `build.rs` compiling C, no
+# `bindgen` against system headers, no `-sys` crate. It reaches Vulkan by
+# `dlopen("libvulkan.so.1")` at RUNTIME, so nothing is linked at build time and
+# a machine without a loader still runs the binary — it takes the typed
+# `NoLoader` arm instead.
+#
+# This is the same discipline omoya already applies twice: `zbus` speaks logind
+# over D-Bus rather than linking `libseat`, and `evdev` reads input rather than
+# linking `libevdev`. `backend_session_libseat` and `renderer_pixman` were both
+# REMOVED for exactly this reason.
+#
+# ★ THE FEATURE CHOICE IS THE WHOLE POINT, so it is spelled out rather than
+# defaulted. ash offers `linked` and `loaded`:
+#
+#   linked  — links libvulkan at BUILD time. Forbidden here: it is exactly the
+#             C linkage this crate exists to avoid, and it makes the binary
+#             refuse to start on a machine with no Vulkan.
+#   loaded  — `dlopen`s the loader at RUNTIME through `libloading`. Absence
+#             becomes a `Result` we can turn into `Unavailable::NoLoader`.
+#
+# `default-features = false` so `linked` can never arrive by default on some
+# future version bump, then `loaded` named explicitly.
+[target.'cfg(target_os = "linux")'.dependencies]
+ash = { version = "0.38", default-features = false, features = ["loaded", "std"] }
+
+[lints.clippy]
+pedantic = "warn"

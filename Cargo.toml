@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/omoya-spec", "crates/nuri", "crates/hairetsu",
+members = ["crates/omoya-spec", "crates/nuri", "crates/kasane", "crates/hairetsu",
     "crates/xkbcommon-hairetsu",
     "crates/omoya"]
 
