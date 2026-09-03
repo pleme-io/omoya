@@ -594,9 +594,37 @@ impl crate::state::Omoya {
                 // arrangement, and cascading it would move it every time.
                 crate::placement::centred(usable, width, height)
             };
+            // ── ★ A FIXED-SIZE CLIENT KEEPS ITS SIZE; WE ONLY POSITION IT ──
+            //
+            // `min_size == max_size` is how "not resizable" is spelled on the
+            // wire, so configuring a different size for such a window is the
+            // compositor overruling the protocol. The seat still owns WHERE it
+            // goes — position is the compositor's job and size is not always.
+            //
+            // Re-centred (or re-cascaded) at the client's OWN dimensions, so a
+            // small launcher lands where a small launcher should rather than
+            // in the top-left of the box the seat would have given it.
+            let rect = match client_fixed_size(w) {
+                Some(fixed) if floating_mode => crate::placement::snap_to_edges(
+                    Rectangle::new(
+                        crate::placement::centred_loc(usable, fixed),
+                        fixed,
+                    ),
+                    usable,
+                    self.config.layout.snap_threshold,
+                ),
+                Some(fixed) => {
+                    Rectangle::new(crate::placement::centred_loc(usable, fixed), fixed)
+                }
+                None => rect,
+            };
             if let Some(t) = w.toplevel() {
+                // A fixed-size client is sent NO size: `None` means "you
+                // choose", which for a window whose min and max agree is the
+                // only answer that is not a contradiction.
+                let send = client_fixed_size(w).is_none().then_some(rect.size);
                 t.with_pending_state(|state| {
-                    state.size = Some(rect.size);
+                    state.size = send;
                 });
                 t.send_pending_configure();
             }
@@ -862,6 +890,45 @@ fn app_id_of(w: &smithay::desktop::Window) -> Option<String> {
 /// Used only to compare "what floated last pass" against "what should float
 /// now"; never to look a window up, so a stale id is harmless rather than a
 /// dangling reference.
+/// The size a client has declared it cannot be resized away from.
+///
+/// ── ★ WHY min == max IS THE SIGNAL ────────────────────────────────────────
+/// `xdg_toplevel.set_min_size` and `set_max_size` pinned to the same value is
+/// how "not resizable" is spelled ON THE WIRE — it is what winit emits for
+/// `WindowAttributes::with_resizable(false)`, and it is the only statement of
+/// intent a client can make about its own size that the compositor is
+/// obliged to respect. A configure that names a different size for such a
+/// window is the compositor overruling the protocol.
+///
+/// This is not a heuristic about window kind. It deliberately does NOT guess
+/// from `app_id`, from the absence of a title, or from smallness — the
+/// placement module's own header records why every such guess is wrong for
+/// something.
+///
+/// ★ MEASURED, 2026-09-03: tobira sizes itself to its content and grows
+/// downward from an anchor (`content_window_size` → `request_inner_size`),
+/// and the seat configured it to 0.46 x 0.52 of the output — 883x547 on a
+/// 1920x1080 panel. The operator's report was "the launcher takes up this
+/// huge square of space", and the launcher had asked for a small panel.
+///
+/// `None` when either axis is unconstrained (0) or the two disagree: that is
+/// a resizable window, and the seat's size is then the right answer.
+fn client_fixed_size(w: &smithay::desktop::Window) -> Option<smithay::utils::Size<i32, Logical>> {
+    use smithay::wayland::compositor::with_states;
+    use smithay::wayland::shell::xdg::SurfaceCachedState;
+    let surface = w.toplevel()?.wl_surface().clone();
+    with_states(&surface, |states| {
+        let mut guard = states.cached_state.get::<SurfaceCachedState>();
+        let cur = guard.current();
+        let (min, max) = (cur.min_size, cur.max_size);
+        if min == max && min.w > 0 && min.h > 0 {
+            Some(min)
+        } else {
+            None
+        }
+    })
+}
+
 pub fn surface_id_of(w: &smithay::desktop::Window) -> Option<u32> {
     use smithay::reexports::wayland_server::Resource as _;
     Some(w.toplevel()?.wl_surface().id().protocol_id())

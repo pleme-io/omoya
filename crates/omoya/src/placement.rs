@@ -111,6 +111,34 @@ pub fn for_app_id(app_id: Option<&str>) -> Placement {
     }
 }
 
+/// The origin that centres an ALREADY-KNOWN size inside `usable`.
+///
+/// ★ SIBLING OF [`centred`], NOT A REPLACEMENT. `centred` takes FRACTIONS
+/// because the seat is choosing the size; this takes a `Size` because the
+/// CLIENT chose it and the seat is only deciding where it lands — a
+/// fixed-size window (`min_size == max_size` on its xdg_toplevel) whose size
+/// the compositor must not overrule. Two callers, two different questions;
+/// collapsing them would mean converting a known pixel size back into a
+/// fraction of the output and multiplying it out again, which is a rounding
+/// error introduced for no reason.
+///
+/// Clamped so a client larger than the usable zone is pinned to the zone's
+/// origin rather than placed at a negative offset, where its titleless top
+/// edge would be unreachable.
+#[must_use]
+pub fn centred_loc(
+    usable: smithay::utils::Rectangle<i32, smithay::utils::Logical>,
+    size: smithay::utils::Size<i32, smithay::utils::Logical>,
+) -> smithay::utils::Point<i32, smithay::utils::Logical> {
+    // Same "subtract, then halve" order as `centred`, for the same reason: an
+    // odd leftover pixel goes right/bottom instead of shifting the window.
+    (
+        usable.loc.x + ((usable.size.w - size.w) / 2).max(0),
+        usable.loc.y + ((usable.size.h - size.h) / 2).max(0),
+    )
+        .into()
+}
+
 /// Centre a floating window inside `usable`.
 ///
 /// Returned in the same absolute coordinates the tiler uses, so the caller can
@@ -140,6 +168,49 @@ pub fn centred(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    fn zone(x: i32, y: i32, w: i32, h: i32) -> smithay::utils::Rectangle<i32, smithay::utils::Logical> {
+        smithay::utils::Rectangle::new((x, y).into(), (w, h).into())
+    }
+
+    /// A client-chosen size is centred at exactly that size.
+    ///
+    /// ★ THE POINT OF THE WHOLE CHANGE: tobira asked for a small panel and
+    /// the seat gave it 0.46 x 0.52 of the output — 883x547 on a 1920x1080
+    /// panel, reported as "the launcher takes up this huge square of space".
+    /// The size in must be the size out.
+    #[test]
+    fn a_client_chosen_size_is_centred_at_that_size() {
+        let usable = zone(0, 28, 1920, 1052);
+        let loc = centred_loc(usable, (600, 400).into());
+        assert_eq!(loc.x, (1920 - 600) / 2, "not horizontally centred");
+        assert_eq!(loc.y, 28 + (1052 - 400) / 2, "the bar offset was dropped");
+    }
+
+    /// The zone's origin is respected, not assumed to be (0, 0).
+    #[test]
+    fn centring_is_relative_to_the_zone_not_the_output() {
+        let loc = centred_loc(zone(100, 200, 800, 600), (400, 300).into());
+        assert_eq!((loc.x, loc.y), (100 + 200, 200 + 150));
+    }
+
+    /// A client larger than the zone is pinned to the origin, never negative.
+    ///
+    /// A negative offset puts the window's top edge off-screen — and these
+    /// windows have no title bar to drag, so it would be unreachable.
+    #[test]
+    fn an_oversized_client_is_pinned_rather_than_placed_offscreen() {
+        let loc = centred_loc(zone(0, 28, 800, 600), (1600, 1200).into());
+        assert_eq!((loc.x, loc.y), (0, 28), "got {loc:?}");
+    }
+
+    /// An odd leftover pixel goes right/bottom, matching `centred`.
+    #[test]
+    fn an_odd_remainder_does_not_shift_the_window() {
+        let loc = centred_loc(zone(0, 0, 101, 101), (10, 10).into());
+        assert_eq!((loc.x, loc.y), (45, 45), "91/2 must truncate, not round");
+    }
     use super::*;
     use smithay::utils::Rectangle;
 
