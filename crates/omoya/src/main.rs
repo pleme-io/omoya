@@ -49,6 +49,7 @@ mod uevent;
 mod ukeire;
 mod wash;
 mod windowmode;
+mod winid;
 /// The nested development backend. Off by default — it drags in winit, which
 /// `dlopen`s libxkbcommon behind `ldd`'s back. See `Cargo.toml`'s `[features]`.
 #[cfg(feature = "nested")]

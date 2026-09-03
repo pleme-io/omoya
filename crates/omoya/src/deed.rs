@@ -580,7 +580,7 @@ impl crate::state::Omoya {
         use smithay::reexports::wayland_server::Resource as _;
         let kb = self.seat.get_keyboard()?;
         let surface = kb.current_focus()?;
-        Some(surface.id().protocol_id())
+        Some(crate::winid::of(&surface))
     }
 
     /// The window focused before the current one, for `tab-join`.
@@ -597,7 +597,7 @@ impl crate::state::Omoya {
             .elements()
             .find(|w| {
                 w.toplevel()
-                    .is_some_and(|t| t.wl_surface().id().protocol_id() == id)
+                    .is_some_and(|t| crate::winid::of(t.wl_surface()) == id)
             })
             .cloned();
         if let Some(w) = target {
@@ -616,7 +616,7 @@ impl crate::state::Omoya {
             .elements()
             .filter(|w| {
                 w.toplevel().is_some_and(|t| {
-                    self.windows.placement_of(t.wl_surface().id().protocol_id())
+                    self.windows.placement_of(crate::winid::of(t.wl_surface()))
                         != crate::windowmode::Placement::Hidden
                 })
             })
@@ -630,7 +630,7 @@ impl crate::state::Omoya {
     /// Give a window keyboard focus, and tell it so.
     fn focused_surface_id_of(&self, window: &smithay::desktop::Window) -> Option<u32> {
         use smithay::reexports::wayland_server::Resource as _;
-        window.toplevel().map(|t| t.wl_surface().id().protocol_id())
+        window.toplevel().map(|t| crate::winid::of(t.wl_surface()))
     }
 
     ///
@@ -703,7 +703,7 @@ impl crate::state::Omoya {
             .elements()
             .find(|w| {
                 w.toplevel()
-                    .is_some_and(|t| t.wl_surface().id().protocol_id() == id)
+                    .is_some_and(|t| crate::winid::of(t.wl_surface()) == id)
             })
             .cloned();
         if let Some(t) = target.as_ref().and_then(smithay::desktop::Window::toplevel) {

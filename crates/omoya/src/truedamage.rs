@@ -907,7 +907,7 @@ pub fn refine_commit(surface: &WlSurface, shadows: &mut Shadows, mode: Mode) -> 
     use smithay::wayland::compositor::{BufferAssignment, Damage, SurfaceAttributes, with_states};
     use smithay::wayland::shm;
 
-    let key = surface.id().protocol_id();
+    let key = crate::winid::of(surface);
 
     with_states(surface, |states| {
         let mut guard = states.cached_state.get::<SurfaceAttributes>();

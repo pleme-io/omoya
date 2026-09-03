@@ -1029,7 +1029,7 @@ fn client_fixed_size(w: &smithay::desktop::Window) -> Option<smithay::utils::Siz
 
 pub fn surface_id_of(w: &smithay::desktop::Window) -> Option<u32> {
     use smithay::reexports::wayland_server::Resource as _;
-    Some(w.toplevel()?.wl_surface().id().protocol_id())
+    Some(crate::winid::of(w.toplevel()?.wl_surface()))
 }
 
 /// Should this window float, and does that DISAGREE with the last layout pass?

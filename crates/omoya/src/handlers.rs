@@ -159,7 +159,7 @@ impl CompositorHandler for Omoya {
     /// leak would be observable, but not leaking is better than observing it.
     fn destroyed(&mut self, surface: &WlSurface) {
         use smithay::reexports::wayland_server::Resource as _;
-        self.shadows.forget(surface.id().protocol_id());
+        self.shadows.forget(crate::winid::of(surface));
         self.introspect.td_shadows.store(
             self.shadows.len() as u64,
             std::sync::atomic::Ordering::Relaxed,
@@ -351,7 +351,7 @@ impl XdgShellHandler for Omoya {
         // `windowmode::Windows::forget`, whose test pins exactly that.
         {
             use smithay::reexports::wayland_server::Resource as _;
-            let id = surface.wl_surface().id().protocol_id();
+            let id = crate::winid::of(surface.wl_surface());
             self.windows.forget(id);
             if self.previous_focus == Some(id) {
                 self.previous_focus = None;
