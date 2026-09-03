@@ -96,6 +96,22 @@ pub struct Omoya {
     pub owed_vt_switches: u64,
 
     pub space: Space<Window>,
+    /// Every live toplevel, in the order it appeared.
+    ///
+    /// ── ★ THE LAYOUT'S INPUT. THE SPACE IS ITS OUTPUT. ──────────────────
+    /// `apply_layout` used to build its window list from `space.elements()`
+    /// — the very thing it then writes to. That made `Placement::Hidden` a
+    /// ONE-WAY DOOR: the hidden arm calls `space.unmap_elem`, so the next
+    /// pass could not see the window, could not re-map it, and
+    /// `Deed::RestoreLast` had nothing to restore. Measured on plo: minimize
+    /// left `geometry` as cursor+bar only with `minimized_count: 1`;
+    /// restore-last then reported `minimized_count: 0`, `toplevels: 0`, an
+    /// empty screen, and both clients still alive in `Sl`.
+    ///
+    /// A roster the compositor owns separates the two roles: this is what
+    /// EXISTS, the Space is where it currently SITS. Hidden can then unmap
+    /// freely, because unmapping no longer means forgetting.
+    pub roster: Vec<Window>,
     /// The keymap. `awase::BindingMap`, not a bespoke table — the fleet rule
     /// is that awase owns keys and a hand-rolled `Keymap` is the violation.
     /// The introspection sidecar, so the compositor can PUBLISH what it did.
@@ -385,6 +401,7 @@ impl Omoya {
             reserved,
             owed_vt_switches: 0,
             space,
+            roster: Vec::new(),
 
             introspect,
             owed,

@@ -392,9 +392,19 @@ impl crate::state::Omoya {
         // Walk once, publish what we saw, then filter on it — so
         // `window_app_ids` is BY CONSTRUCTION the value the rule matched on
         // rather than a second lookup that could disagree.
+        // ★ FROM THE ROSTER, NOT THE SPACE — the layout must not read back
+        // the thing it writes. Building this from `space.elements()` made
+        // `Placement::Hidden` a one-way door: the hidden arm unmaps, so the
+        // next pass could not see the window and never re-mapped it, and
+        // `RestoreLast` had nothing to restore.
+        //
+        // It also stabilises the cascade. `idx` below is this list's order:
+        // from the Space that was Z-ORDER, so raising or closing a window
+        // renumbered the ones above it and physically moved them. Roster
+        // order is the order windows APPEARED, which nothing reorders.
         let seen: Vec<(smithay::desktop::Window, Option<String>)> = self
-            .space
-            .elements()
+            .roster
+            .iter()
             .map(|w| (w.clone(), app_id_of(w)))
             .collect();
         *self
@@ -520,6 +530,18 @@ impl crate::state::Omoya {
         // there is otherwise no way to tell a broken split from a broken
         // placement from an early return above.
         for (window, rect) in &arranged {
+            // ★ HIDDEN IS HONOURED HERE TOO. This check existed only in the
+            // floating loop below, so in `LayoutMode::Tiling` — the DEFAULT —
+            // minimise was a silent no-op: `windowmode` recorded the window as
+            // Hidden, `minimized_count` went up, and the window stayed on
+            // screen because nothing in this loop ever asked.
+            if surface_id_of(window)
+                .map(|id| self.windows.placement_of(id))
+                .is_some_and(|p| p == crate::windowmode::Placement::Hidden)
+            {
+                self.space.unmap_elem(window);
+                continue;
+            }
             if let Some(t) = window.toplevel() {
                 t.with_pending_state(|state| {
                     state.size = Some(rect.size);
@@ -1049,4 +1071,65 @@ pub fn placement_changed(
     let should_float =
         crate::placement::for_app_id_in(app_id_of(w).as_deref(), placement).is_floating();
     should_float != floating_ids.contains(&id)
+}
+
+#[cfg(test)]
+mod roster_input_tests {
+    /// ★ THE LAYOUT MUST NOT READ BACK THE THING IT WRITES.
+    ///
+    /// `apply_layout` built its window list from `space.elements()` and then
+    /// wrote positions into that same Space. That made `Placement::Hidden` a
+    /// ONE-WAY DOOR — the hidden arm unmaps, so the next pass could not see
+    /// the window, could not re-map it, and `RestoreLast` had nothing to
+    /// restore. Measured on plo: minimize left the seat empty with
+    /// `minimized_count: 1`; restore-last reported `minimized_count: 0`,
+    /// `toplevels: 0`, an empty screen, and both clients still alive.
+    ///
+    /// It is a source test for the same reason the chrome one is: the defect
+    /// was WHERE the data came from, and no test of the placement arithmetic
+    /// could see it. Restoring a minimised window needs a live client, a seat
+    /// and a compositor loop; this needs none and fails the moment the input
+    /// is wired back to the output.
+    #[test]
+    fn apply_layout_takes_its_windows_from_the_roster() {
+        let src = include_str!("layout.rs");
+        let code: String = src
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap_or("")
+            .lines()
+            .map(|l| l.split("//").next().unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // The `seen` binding is the layout's input. Find it and check what it
+        // is built from — the two candidates are one line apart in the source.
+        let at = code
+            .find("let seen:")
+            .expect("apply_layout must still build a `seen` list");
+        // Exactly the `seen` STATEMENT — up to its terminating `;`. A fixed
+        // character window ran past it into following code that legitimately
+        // mentions the Space, which failed this test for the wrong reason on
+        // its first run.
+        let rest = &code[at..];
+        let end = rest.find(';').map_or(rest.len(), |i| i + 1);
+        let window = &rest[..end];
+
+        assert!(
+            // `.roster`, not `self.roster`: the method chain is line-broken,
+            // so `self` and `.roster` are never adjacent in the source. The
+            // first version of this test looked for the contiguous string and
+            // failed for that reason rather than for a real regression.
+            window.contains(".roster"),
+            "`seen` is no longer built from the roster. If it is back on \
+             `space.elements()`, the layout is reading the Space it writes and \
+             a hidden window becomes invisible to the next pass — minimise \
+             turns back into a one-way door."
+        );
+        assert!(
+            !window.contains(".space") && !window.contains("space.elements"),
+            "`seen` mentions the Space. The layout's input must be the roster \
+             (what EXISTS); the Space is its output (where things SIT)."
+        );
+    }
 }

@@ -197,6 +197,11 @@ impl XdgShellHandler for Omoya {
         // `Tiling::map` splits whatever holds focus; `apply_layout` is what
         // turns the resulting tree into positions and configures.
         self.tiling.map(window.clone());
+        // ★ THE ROSTER IS WHAT EXISTS; the Space is only where things sit.
+        // Recorded here so a window that is later HIDDEN (minimised, or a tab
+        // behind its sibling) can still be found — `space.elements()` cannot
+        // see an unmapped window, which is what made minimise a one-way door.
+        self.roster.push(window.clone());
         self.space.map_element(window.clone(), (0, 0), true);
         self.apply_layout();
 
@@ -336,14 +341,22 @@ impl XdgShellHandler for Omoya {
     /// keyboard focus if it had it. The visible symptom is a dead rectangle
     /// that swallows every keystroke, which reads as the compositor hanging.
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
+        // ★ FROM THE ROSTER, NOT THE SPACE. A minimised window is unmapped,
+        // so `space.elements()` cannot see it — closing one used to hit this
+        // early return and leave its display state, its shadow and its
+        // restore-queue entry behind forever.
         let Some(window) = self
-            .space
-            .elements()
+            .roster
+            .iter()
             .find(|w| w.toplevel().is_some_and(|t| t == &surface))
             .cloned()
         else {
             return;
         };
+        // Off the roster first: everything below is teardown, and a window
+        // that is being destroyed must not be handed to the next layout pass.
+        self.roster
+            .retain(|w| !w.toplevel().is_some_and(|t| t == &surface));
         // ★ FORGET THE DISPLAY STATE BEFORE THE WINDOW GOES. The key is a
         // surface protocol id and the server REUSES ids, so a closed
         // minimised window left in the restore queue would be brought back as
