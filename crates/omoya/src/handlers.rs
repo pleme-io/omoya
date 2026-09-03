@@ -344,6 +344,19 @@ impl XdgShellHandler for Omoya {
         else {
             return;
         };
+        // ★ FORGET THE DISPLAY STATE BEFORE THE WINDOW GOES. The key is a
+        // surface protocol id and the server REUSES ids, so a closed
+        // minimised window left in the restore queue would be brought back as
+        // whatever later window inherited its id — see
+        // `windowmode::Windows::forget`, whose test pins exactly that.
+        {
+            use smithay::reexports::wayland_server::Resource as _;
+            let id = surface.wl_surface().id().protocol_id();
+            self.windows.forget(id);
+            if self.previous_focus == Some(id) {
+                self.previous_focus = None;
+            }
+        }
         self.space.unmap_elem(&window);
         self.tiling.unmap(&window);
         self.apply_layout();

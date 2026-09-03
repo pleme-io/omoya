@@ -481,6 +481,24 @@ impl crate::state::Omoya {
             self.tiling.unmap(w);
         }
 
+        // Published from the layout pass, which is the one place that has
+        // just consulted `windows` for every window — so the leaf reports the
+        // state the placement actually used rather than a second read.
+        self.introspect.minimized_count.store(
+            self.windows.minimized_count() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        *self
+            .introspect
+            .tab_groups
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = self
+            .windows
+            .groups()
+            .iter()
+            .map(|g| g.members.clone())
+            .collect();
+
         let arranged = self.tiling.arrange(usable);
         // Publish what the TREE asked for, before anything is applied. See
         // `OmoyaIntrospect::layout` — a screenshot says where windows ended
@@ -508,6 +526,34 @@ impl crate::state::Omoya {
         // an overlay behind the windows it overlays is worse than no overlay:
         // it takes the keyboard while showing nothing.
         for (idx, w) in floats.iter().enumerate() {
+            // ── ★ THE ONE PLACE THE FOUR CONTROLS TAKE EFFECT ─────────────
+            //
+            // minimise, maximise and tabs are all "where does this window go,
+            // or is it hidden", so they resolve here rather than in three
+            // places that could disagree. `windowmode` owns the decision and
+            // is tested without a seat; this loop only obeys it.
+            let wm_id = surface_id_of(w);
+            let placement = wm_id
+                .map(|id| self.windows.placement_of(id))
+                .unwrap_or(crate::windowmode::Placement::AsLaidOut);
+            match placement {
+                // Mapped to nothing: minimised, or a tab behind its sibling.
+                // The client keeps running and keeps its buffer, so restoring
+                // costs a placement and not a relaunch.
+                crate::windowmode::Placement::Hidden => {
+                    self.space.unmap_elem(w);
+                    continue;
+                }
+                crate::windowmode::Placement::Maximized => {
+                    if let Some(t) = w.toplevel() {
+                        t.with_pending_state(|st| st.size = Some(usable.size));
+                        t.send_pending_configure();
+                    }
+                    self.space.map_element(w.clone(), usable.loc, true);
+                    continue;
+                }
+                crate::windowmode::Placement::AsLaidOut => {}
+            }
             // ★ IN FLOATING MODE THE SIZE COMES FROM CONFIG, NOT FROM THE
             // PER-APP RULE. `for_app_id_in` returns `Tiled` for an unlisted
             // app, and this loop used to `continue` on that — correct when

@@ -69,6 +69,31 @@ pub enum Deed {
     /// into `Spawn(String)` would turn the kanshou verb surface into a remote
     /// shell, which is exactly what `parse`'s doc refuses.
     SpawnLauncher,
+    /// Fill the usable zone, or go back. A TOGGLE, not two verbs: the
+    /// operator's gesture is one key, and two verbs would let a caller
+    /// un-maximise something that was never maximised — a no-op that reads as
+    /// a broken binding.
+    ToggleMaximize,
+    /// Hide the focused window without closing it. See `windowmode::Mode`.
+    Minimize,
+    /// Bring back the most recently minimised window and focus it.
+    ///
+    /// LIFO, and focus follows — a window that reappears without the keyboard
+    /// is a window that ignores you.
+    RestoreLast,
+    /// Show the next member of the focused window's tab group.
+    TabNext,
+    /// Show the previous member.
+    TabPrev,
+    /// Put the focused window into the previously-focused window's tab group.
+    ///
+    /// ★ THE HOST IS THE *PREVIOUS* FOCUS, not a parameter. A verb that took
+    /// a target id would put a window handle on the kanshou surface, which is
+    /// the same objection `SpawnLauncher`'s doc records: the remote-safe verb
+    /// vocabulary carries no operands.
+    TabJoin,
+    /// Take the focused window out of its group.
+    TabLeave,
 }
 
 impl Deed {
@@ -99,6 +124,13 @@ impl Deed {
             "close" => Self::Close,
             "spawn-terminal" => Self::SpawnTerminal,
             "spawn-launcher" => Self::SpawnLauncher,
+            "toggle-maximize" => Self::ToggleMaximize,
+            "minimize" => Self::Minimize,
+            "restore-last" => Self::RestoreLast,
+            "tab-next" => Self::TabNext,
+            "tab-prev" => Self::TabPrev,
+            "tab-join" => Self::TabJoin,
+            "tab-leave" => Self::TabLeave,
             _ => return None,
         })
     }
@@ -118,6 +150,13 @@ impl Deed {
         "close",
         "spawn-terminal",
         "spawn-launcher",
+        "toggle-maximize",
+        "minimize",
+        "restore-last",
+        "tab-next",
+        "tab-prev",
+        "tab-join",
+        "tab-leave",
     ];
 }
 
@@ -176,6 +215,41 @@ pub fn default_bindings() -> (BindingMap<Deed>, Vec<Hotkey>) {
 
     if let Err(prev) = mode.try_bind(Binding::new(Hotkey::new(logo, Key::Q), Deed::Close)) {
         clashes.push(prev.hotkey);
+    }
+
+    // ── ★ THE macOS-SHAPED WINDOW CONTROLS ────────────────────────────────
+    //
+    // Function, not chrome: the operator asked for close/minimise/maximise
+    // and tabs "not looks wise just as a guide for function", so these are
+    // chords over `windowmode` state and nothing draws a title bar.
+    //
+    // ★ ALL ON `logo`, DELIBERATELY. The macOS originals are Cmd-shaped
+    // (Cmd+W, Cmd+M, Cmd+Ctrl+F), and Logo IS this seat's Cmd — the header's
+    // rule is that Ctrl belongs to the applications, so binding Ctrl+M here
+    // would take it from every readline on the machine. Ctrl+Space is the one
+    // stated exception and stays the only one.
+    //
+    // ★ `Tab` RATHER THAN A LETTER for cycling, because Logo+Tab is the
+    // motion every desktop already teaches. It does NOT collide with the
+    // application's own Tab: awase requires the Logo modifier, so a bare Tab
+    // still reaches the client.
+    for (key, deed, shifted) in [
+        (Key::F, Deed::ToggleMaximize, Deed::ToggleMaximize),
+        (Key::M, Deed::Minimize, Deed::RestoreLast),
+        (Key::Tab, Deed::TabNext, Deed::TabPrev),
+        (Key::T, Deed::TabJoin, Deed::TabLeave),
+    ] {
+        if let Err(prev) = mode.try_bind(Binding::new(Hotkey::new(logo, key), deed)) {
+            clashes.push(prev.hotkey);
+        }
+        // Logo+Shift+<key> is the INVERSE of Logo+<key> for every pair above,
+        // which is why the table carries both rather than a second loop:
+        // minimise/restore, next/prev, join/leave. Maximise is already a
+        // toggle, so its two entries are the same verb — stated rather than
+        // special-cased, so the table stays one shape.
+        if let Err(prev) = mode.try_bind(Binding::new(Hotkey::new(logo_shift, key), shifted)) {
+            clashes.push(prev.hotkey);
+        }
     }
     // `Return`, not `Enter` — awase names the main key `Return` and reserves
     // `NumpadEnter` for the other one.
@@ -364,6 +438,81 @@ impl crate::state::Omoya {
                 self.spawn_launcher();
                 DeedOutcome::Performed
             }
+            // ── ★ THE FOUR CONTROLS, AND WHY EACH REFUSES BY NAME ──────────
+            //
+            // Every arm needs a focused window and says so when there is
+            // none, rather than returning `Performed` for work it did not do.
+            // `resize` above records why that matters: an operator reporting
+            // "I cannot resize" was right twice over and no leaf could say
+            // so, because the verb reported success.
+            Deed::ToggleMaximize => match self.focused_surface_id() {
+                Some(id) => {
+                    let now = self.windows.toggle_maximize(id);
+                    self.apply_layout();
+                    tracing::debug!(?now, id, "maximize toggled");
+                    DeedOutcome::Performed
+                }
+                None => DeedOutcome::Refused("no focused window to maximize"),
+            },
+            Deed::Minimize => match self.focused_surface_id() {
+                Some(id) => {
+                    self.windows.minimize(id);
+                    // Focus would otherwise stay on a window nobody can see.
+                    self.focus_any_visible();
+                    self.apply_layout();
+                    DeedOutcome::Performed
+                }
+                None => DeedOutcome::Refused("no focused window to minimize"),
+            },
+            Deed::RestoreLast => match self.windows.restore_last() {
+                Some(id) => {
+                    self.focus_surface_id(id);
+                    self.apply_layout();
+                    DeedOutcome::Performed
+                }
+                None => DeedOutcome::Refused("nothing is minimized"),
+            },
+            Deed::TabNext | Deed::TabPrev => {
+                let forward = matches!(deed, Deed::TabNext);
+                match self.focused_surface_id() {
+                    Some(id) => match self.windows.cycle(id, forward) {
+                        Some(now) => {
+                            self.focus_surface_id(now);
+                            self.apply_layout();
+                            DeedOutcome::Performed
+                        }
+                        // A refusal rather than a silent no-op: "nothing
+                        // happened when I pressed Logo+Tab" is otherwise
+                        // indistinguishable from an unbound chord.
+                        None => DeedOutcome::Refused("the focused window is not in a tab group"),
+                    },
+                    None => DeedOutcome::Refused("no focused window to cycle from"),
+                }
+            }
+            Deed::TabJoin => match (self.focused_surface_id(), self.previous_focus_id()) {
+                (Some(id), Some(host)) if id != host => {
+                    self.windows.join(id, host);
+                    self.apply_layout();
+                    DeedOutcome::Performed
+                }
+                (Some(_), Some(_)) => DeedOutcome::Refused("a window cannot join itself"),
+                // Naming which half is missing, because "join failed" sends
+                // the reader to look at the wrong window.
+                (Some(_), None) => DeedOutcome::Refused("no previously-focused window to join"),
+                (None, _) => DeedOutcome::Refused("no focused window to join with"),
+            },
+            Deed::TabLeave => match self.focused_surface_id() {
+                Some(id) => {
+                    if self.windows.group_of(id).is_none() {
+                        DeedOutcome::Refused("the focused window is not in a tab group")
+                    } else {
+                        self.windows.leave(id);
+                        self.apply_layout();
+                        DeedOutcome::Performed
+                    }
+                }
+                None => DeedOutcome::Refused("no focused window to un-tab"),
+            },
         }
     }
 
@@ -395,7 +544,79 @@ impl crate::state::Omoya {
         self.focus_window(&window);
     }
 
+    /// The focused window's surface id — FROM THE SEAT, not from the tree.
+    ///
+    /// ★ THIS IS ALSO A BUG FIX, AND THE BUG WAS INVISIBLE. `close_focused`
+    /// asks `self.tiling.focused()`, and in `LayoutMode::Floating`
+    /// `apply_layout` unmaps EVERY window from the tiling tree — the resize
+    /// arm above already says so in its refusal text, "floating mode unmaps
+    /// all". So on a floating seat the tree is empty, `tiling.focused()` is
+    /// `None`, and close / focus / resize all did nothing while
+    /// `deeds_performed` still counted them. Measured on plo 2026-09-03:
+    /// three verbs incremented the counter and moved no window.
+    ///
+    /// The seat's keyboard focus is true in BOTH modes, which is why it is the
+    /// source here. A tree lookup is only correct for windows the tree holds.
+    #[must_use]
+    pub fn focused_surface_id(&self) -> Option<u32> {
+        use smithay::reexports::wayland_server::Resource as _;
+        let kb = self.seat.get_keyboard()?;
+        let surface = kb.current_focus()?;
+        Some(surface.id().protocol_id())
+    }
+
+    /// The window focused before the current one, for `tab-join`.
+    #[must_use]
+    pub fn previous_focus_id(&self) -> Option<u32> {
+        self.previous_focus
+    }
+
+    /// Focus the window owning `id`, if it is still mapped.
+    pub fn focus_surface_id(&mut self, id: u32) {
+        use smithay::reexports::wayland_server::Resource as _;
+        let target = self
+            .space
+            .elements()
+            .find(|w| {
+                w.toplevel()
+                    .is_some_and(|t| t.wl_surface().id().protocol_id() == id)
+            })
+            .cloned();
+        if let Some(w) = target {
+            self.focus_window(&w);
+        }
+    }
+
+    /// Move focus to any window that is still visible.
+    ///
+    /// Called after minimising: focus would otherwise sit on a window nobody
+    /// can see, and every subsequent verb would act on it.
+    pub fn focus_any_visible(&mut self) {
+        use smithay::reexports::wayland_server::Resource as _;
+        let next = self
+            .space
+            .elements()
+            .filter(|w| {
+                w.toplevel().is_some_and(|t| {
+                    self.windows.placement_of(t.wl_surface().id().protocol_id())
+                        != crate::windowmode::Placement::Hidden
+                })
+            })
+            .last()
+            .cloned();
+        if let Some(w) = next {
+            self.focus_window(&w);
+        }
+    }
+
     /// Give a window keyboard focus, and tell it so.
+    fn focused_surface_id_of(&self, window: &smithay::desktop::Window) -> Option<u32> {
+        use smithay::reexports::wayland_server::Resource as _;
+        window
+            .toplevel()
+            .map(|t| t.wl_surface().id().protocol_id())
+    }
+
     ///
     /// Both halves are required and only the first is obvious. `set_focus`
     /// routes keystrokes; the `Activated` state is what makes the client draw
@@ -403,6 +624,14 @@ impl crate::state::Omoya {
     /// while every window still looks inactive — which reads as the keyboard
     /// going to the wrong place.
     pub fn focus_window(&mut self, window: &smithay::desktop::Window) {
+        // ★ RECORDED BEFORE THE MOVE, so `tab-join` has a host. Taken from the
+        // SEAT rather than remembered at the call sites: every path into focus
+        // funnels through here, which is the one place a fifth caller cannot
+        // forget.
+        let outgoing = self.focused_surface_id();
+        if outgoing != self.focused_surface_id_of(window) {
+            self.previous_focus = outgoing;
+        }
         self.tiling.focus_window(window);
         self.space.raise_element(window, true);
 
@@ -445,10 +674,24 @@ impl crate::state::Omoya {
         // put up a "save your work?" dialog. Killing it here would be the
         // compositor overriding a decision that belongs to the application,
         // and the unmap happens through `toplevel_destroyed` either way.
-        if let Some(w) = self.tiling.focused() {
-            if let Some(t) = w.toplevel() {
-                t.send_close();
-            }
+        // ★ THE SEAT, NOT THE TREE. `tiling.focused()` is None on a floating
+        // seat because `apply_layout` unmaps every window from the tree, so
+        // close was inert in exactly the mode plo runs. See
+        // `focused_surface_id`.
+        let Some(id) = self.focused_surface_id() else {
+            return;
+        };
+        use smithay::reexports::wayland_server::Resource as _;
+        let target = self
+            .space
+            .elements()
+            .find(|w| {
+                w.toplevel()
+                    .is_some_and(|t| t.wl_surface().id().protocol_id() == id)
+            })
+            .cloned();
+        if let Some(t) = target.as_ref().and_then(smithay::desktop::Window::toplevel) {
+            t.send_close();
         }
     }
 

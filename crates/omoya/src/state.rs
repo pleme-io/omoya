@@ -163,6 +163,13 @@ pub struct Omoya {
     /// `kukaku`'s, and only "a leaf is a Window" and "a rect is pixels" are
     /// omoya's.
     pub tiling: crate::layout::Tiling,
+    /// Close / minimise / maximise / tabs — the per-window display state.
+    /// See `crate::windowmode`, which owns the whole state machine and is
+    /// tested without a seat.
+    pub windows: crate::windowmode::Windows,
+    /// The surface focused before the current one, so `tab-join` has a host
+    /// without putting a window id on the verb surface.
+    pub previous_focus: Option<u32>,
     pub loop_signal: LoopSignal,
 
     /// Whether a frame is owed, and why. See [`crate::owed::Owed`].
@@ -375,6 +382,8 @@ impl Omoya {
             introspect,
             owed,
             tiling: crate::layout::Tiling::default(),
+            windows: crate::windowmode::Windows::default(),
+            previous_focus: None,
             bindings: {
                 let (map, clashes) = crate::deed::default_bindings();
                 // Reported, never fatal. A keymap typo must not take down the

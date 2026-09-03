@@ -43,6 +43,7 @@ mod theme;
 mod truedamage;
 mod uevent;
 mod wash;
+mod windowmode;
 /// The nested development backend. Off by default — it drags in winit, which
 /// `dlopen`s libxkbcommon behind `ldd`'s back. See `Cargo.toml`'s `[features]`.
 #[cfg(feature = "nested")]

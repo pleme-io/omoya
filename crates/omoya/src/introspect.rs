@@ -362,6 +362,17 @@ pub struct OmoyaIntrospect {
     /// seat that is definitely painting means `mark_presented` is being reached
     /// on a path that never flipped.
     pub td_presented_marks: AtomicU64,
+    /// How many windows are minimised, and the live tab groups.
+    ///
+    /// ★ WITHOUT THESE THE CONTROLS ARE UNFALSIFIABLE. A minimised window is
+    /// by definition invisible, so "did minimise work" and "did the window
+    /// close" look identical on a screenshot — and an inactive tab is
+    /// invisible for a second, different reason. `deeds_performed` counts that
+    /// a verb RAN, never that it had an effect; this seat has already been
+    /// bitten by exactly that gap (see `chord_deeds`, which exists because a
+    /// dead keymap moved every published number not at all).
+    pub minimized_count: AtomicU64,
+    pub tab_groups: std::sync::Mutex<Vec<Vec<u32>>>,
     pub import_full: AtomicU64,
     pub import_partial: AtomicU64,
     /// Each render element's geometry, as the RENDERER sees it.
@@ -1035,6 +1046,13 @@ impl Introspect for OmoyaIntrospect {
             "td_rows_examined" => Ok(n(&self.td_rows_examined)),
             "td_shadows" => Ok(n(&self.td_shadows)),
             "td_presented_marks" => Ok(n(&self.td_presented_marks)),
+            "minimized_count" => Ok(n(&self.minimized_count)),
+            "tab_groups" => Ok(serde_json::json!(
+                *self
+                    .tab_groups
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+            )),
             // The one number an operator actually wants: what fraction of the
             // surface a commit really changes. Derived here rather than left
             // to the caller so the denominator cannot be dropped on the way.
@@ -1346,6 +1364,8 @@ impl Introspect for OmoyaIntrospect {
             "td_rows_examined",
             "td_shadows",
             "td_presented_marks",
+            "minimized_count",
+            "tab_groups",
             "td_dirty_pct",
             "import_full",
             "import_partial",

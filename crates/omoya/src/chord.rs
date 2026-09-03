@@ -117,6 +117,25 @@ pub fn key_from(sym: Keysym) -> Option<Key> {
         keysyms::KEY_k | keysyms::KEY_K => Key::K,
         keysyms::KEY_l | keysyms::KEY_L => Key::L,
         keysyms::KEY_q | keysyms::KEY_Q => Key::Q,
+        // ── ★ THE WINDOW-CONTROL KEYS ─────────────────────────────────────
+        //
+        // Both cases for each, for the reason the comment above gives: xkb
+        // hands us the SHIFTED keysym when Shift is held, so mapping only
+        // lowercase would leave Logo+M working and Logo+Shift+M silently
+        // dead — and every one of these has a Shift inverse (minimise/restore,
+        // next/prev, join/leave). That is the half-broken variant of the bug.
+        //
+        // `every_bound_key_is_reachable` is why these are here at all: it
+        // caught all four as bound-but-unreachable the moment the chords
+        // landed, which is a chord that can never fire and looks exactly like
+        // a compositor ignoring the operator.
+        keysyms::KEY_f | keysyms::KEY_F => Key::F,
+        keysyms::KEY_m | keysyms::KEY_M => Key::M,
+        keysyms::KEY_t | keysyms::KEY_T => Key::T,
+        // Tab has no case pair, but it DOES have a shifted keysym of its own:
+        // xkb sends `ISO_Left_Tab` for Shift+Tab, so omitting it would leave
+        // Logo+Shift+Tab (tab-prev) unreachable while Logo+Tab worked.
+        keysyms::KEY_Tab | keysyms::KEY_ISO_Left_Tab => Key::Tab,
 
         keysyms::KEY_Left => Key::Left,
         keysyms::KEY_Right => Key::Right,
@@ -173,6 +192,20 @@ mod tests {
         keysyms::KEY_BackSpace,
         // The seat's own chords. Both cases per letter, because xkb applies
         // Shift before we see the keysym.
+        // The window controls, both cases each — and `ISO_Left_Tab`, which is
+        // what xkb actually sends for Shift+Tab. Listed here as well as in
+        // `key_from` because this const is the DENOMINATOR the reachability
+        // gate walks: a key translated but not listed here reads as
+        // unreachable, and a key listed but not translated reads as a bound
+        // chord that can never fire. Both halves or neither.
+        keysyms::KEY_f,
+        keysyms::KEY_F,
+        keysyms::KEY_m,
+        keysyms::KEY_M,
+        keysyms::KEY_t,
+        keysyms::KEY_T,
+        keysyms::KEY_Tab,
+        keysyms::KEY_ISO_Left_Tab,
         keysyms::KEY_h,
         keysyms::KEY_H,
         keysyms::KEY_j,
@@ -302,16 +335,40 @@ mod tests {
         // mapped here is one the seat can consume, so mapping letters nobody
         // binds would put a chord's worth of risk on the client's keys for no
         // benefit.
-        for raw in [
-            keysyms::KEY_a,
-            keysyms::KEY_z,
-            keysyms::KEY_Escape,
-            keysyms::KEY_Tab,
-        ] {
+        // ★ `KEY_Tab` USED TO BE IN THIS LIST and was removed when Logo+Tab
+        // became tab-next. That is the fixture going stale, not the rule
+        // changing: the rule is "mapped iff bound", and Tab is now bound.
+        for raw in [keysyms::KEY_a, keysyms::KEY_z, keysyms::KEY_Escape] {
             assert_eq!(
                 key_from(Keysym::from(raw)),
                 None,
                 "an unbound key must stay the client's"
+            );
+        }
+    }
+
+    /// A MAPPED key with no modifier still reaches the client.
+    ///
+    /// ★ THE PROPERTY THAT ACTUALLY PROTECTS A TERMINAL, and it was verified
+    /// by hand before this test existed. `key_from` mapping `Tab` is what made
+    /// Logo+Tab reachable, and the obvious worry is that it also steals bare
+    /// Tab from every shell and editor on the seat — which would be a far
+    /// worse regression than the missing feature.
+    ///
+    /// It does not, because `input.rs` intercepts only on
+    /// `MatchResult::Matched` and every seat binding carries `Logo`. This
+    /// asserts that rather than trusting it: a future bare-key binding fails
+    /// here instead of on the operator's keyboard, mid-sentence.
+    #[test]
+    fn a_mapped_key_without_its_modifier_is_not_a_chord() {
+        let (mut map, _clashes) = crate::deed::default_bindings();
+        let bare = Modifiers::NONE;
+        for key in [Key::Tab, Key::F, Key::M, Key::T, Key::Q, Key::H, Key::Return] {
+            let hk = Hotkey::new(bare, key);
+            let m = map.match_key(hk, &awase::MatchContext::default());
+            assert!(
+                !matches!(m, awase::mode::MatchResult::Matched { .. }),
+                "bare {key:?} matched a seat binding — it would be stolen from                  every client that needs it"
             );
         }
     }
