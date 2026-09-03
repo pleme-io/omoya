@@ -6,34 +6,61 @@
 
 ---
 
-## 0. The problem, measured
+## 0. The problem, measured — ★ CORRECTED 2026-09-03
 
-Every GPU client on plo renders on the **CPU**. From plo's journal:
+> **This section was WRONG in its central claim, and the milestones rested on
+> it.** It said *"NVIDIA does not present linear"*, and made M1 "tiled
+> modifiers". Both are refuted by omoya's own source, which I did not read
+> before writing them. The original text is kept below the correction because
+> the error is instructive: it is a plausible story that explains the symptom
+> and is not what is happening.
 
-```
-WARN garasu::ctx: no hardware GPU adapter on this machine — rendering on the CPU
-     adapter="llvmpipe (LLVM 21.1.7, 256 bits)" ... backend=Vulkan device_type=Cpu
-```
+Every GPU client on plo renders on the **CPU**, on `llvmpipe`. That much is
+true and unchanged.
 
-That message was false and is fixed (`garasu@e3dad74`) — plo holds a GeForce RTX
-3070 with driver 580.142 loaded. The adapter is **refused**, not absent, and the
-refusal comes from us:
+**The real chain, measured against the running compositor:**
 
-1. omoya composites on the CPU (`nuri`), deliberately — no GPU driver
-   dependency, no `unsafe`, no dmabuf import path.
-2. It therefore advertises **linear-modifier dmabuf only**. A tiled modifier
-   describes a layout only a GPU can decode, and a CPU blitter reading one
-   paints structured noise. **Linear-only is correct for nuri.**
-3. NVIDIA does not present linear.
-4. So no hardware adapter can present to an omoya surface, and every GPU client
-   — `mado` included, a GPU terminal — falls back to `llvmpipe`.
+1. omoya does **not advertise `zwp_linux_dmabuf_v1` at all**. `wayland-info`
+   against the live seat lists 11 globals and it is not among them; the
+   journal says `zwp_linux_dmabuf_v1 WITHHELD`. The gate is an environment
+   variable — `drm.rs:786`, `if std::env::var_os("OMOYA_ADVERTISE_DMABUF")` —
+   and it is unset in `/proc/<pid>/environ`.
+2. NVIDIA's Wayland WSI needs `wl_drm` or `zwp_linux_dmabuf_v1`. omoya offers
+   neither, so `vulkaninfo` run as a client of that seat enumerates both
+   physical devices but lists **only llvmpipe under Presentable Surfaces**.
+   lavapipe's WSI works over `wl_shm`, which omoya does offer.
+3. **Modifiers never enter the picture.** Clients get `wl_shm` (AR24/XR24).
 
-This is the likeliest single explanation for "the look and feel is absolutely
-just bad" and the slow, wrong-looking startup. It is architectural, not
-cosmetic: polishing rounding and bar modules on top of it is polishing a
-software-rendered desktop.
+**And linear presents fine.** `DRM_FORMAT_MOD_LINEAR` is in `IN_FORMATS` on
+all 12 of plo's KMS planes for ARGB8888/XRGB8888 — every primary, every
+overlay, and it is the *only* modifier the four cursor planes accept.
+`drm.rs:747` already recorded this: *"measured on plo, the RTX 3070 exposes
+DRM_FORMAT_MOD_LINEAR for B8G8R8A8 as a single-plane, exportable, importable
+COLOR_ATTACHMENT image, and the exported fd mmaps read/write."* omoya also
+scans out through `DumbAllocator`, whose buffers are linear by construction —
+if linear could not present, the seat would be blank.
 
----
+**Why the global is off is legitimate, and is the actual constraint.**
+`nuri_renderer.rs`'s `import_dmabuf` maps the client buffer and `to_vec`s it:
+a CPU readback of VRAM across PCIe. Measured at `drm.rs:764`: `gather_us
+693 952` against `frame_us 3 825`. Advertising a capability served that badly
+is worse than not advertising it, and withholding it was the right call.
+
+★ **So the target is not modifiers. It is a zero-copy import — an
+`ImportDma` that hands smithay a `TextureId` the GPU samples in place —
+after which the global can be advertised honestly.**
+
+### The original text, kept because the error is the lesson
+
+> *"omoya composites on the CPU, so it advertises linear-modifier dmabuf only
+> … NVIDIA does not present linear. So no hardware adapter can present to an
+> omoya surface."*
+
+Step 2 is false (there is no advertisement at all, so it was never
+exercised) and step 3 is false (linear presents on every plane). The story
+was coherent, matched the symptom, and sent the roadmap at the wrong problem
+— which is why a claim about how two existing components relate gets read
+from source on both sides before it lands in a doc.
 
 ## 1. The destination
 
@@ -173,24 +200,35 @@ already carries the honest unit to decide on: `Cost { cpu_bytes_per_frame }`.
 
 ---
 
-## 6. Milestones
+## 6. Milestones — ★ REORDERED 2026-09-03
 
-Each has a done-predicate that is a **measurement**, not a feeling.
+The original order (M0 read a pixel back, M1 tiled modifiers) was built on the
+refuted premise in §0 and aimed at the wrong problem.
 
-| | milestone | done-predicate |
+★ **The risk that reordering removes, stated plainly: M0's and old-M1's
+done-predicates were READBACK MACHINERY, and readback is the defect.** Both
+build exactly the CPU-copy path that took the global off the wire. kasane
+could have been built through M5 with every done-predicate green and the
+desktop still on llvmpipe, because nothing before the zero-copy import causes
+the protocol global to be published. The global is env-gated, not
+renderer-gated — so "select a GPU renderer and NVIDIA can present" was false.
+
+| | milestone | done-predicate (a MEASUREMENT) |
 |---|---|---|
-| **M0** | Import one linear dmabuf as a `VkImage` via `ash` and read a pixel back | a test asserts the pixel, RUN ON llvmpipe so CI covers it |
-| **M1** | Import a **tiled** dmabuf (`VK_EXT_image_drm_format_modifier`), NVIDIA | same test green on plo against a real client buffer |
-| **M2** | `impl Renderer + Frame + ImportDma + ImportMem + Bind<Dmabuf> + ExportMem + ArmFlush` for `Kasane` | omoya's existing generic loop accepts it with **no change to `drm.rs`** — if `drm.rs` needs editing, the seam was wrong |
-| **M3** | Selection + typed fallback | loader absent / no presentable adapter ⇒ nuri, with a red-run proving the fallback path |
-| **M4** | `rouka::choose` wired as the router; `(defkasane …)` authors the policy | `route_label` reports `gpu-composited` for a client surface and `cpu-readback` for the bar, **in the same frame** |
-| **M5** | Scanout | page-flip from a GPU-composited buffer; `Cost::is_zero_copy()` true for a client surface |
+| **M0** ✅ | dmabuf round-trips through Vulkan in pure Rust | shipped — but see the note below on what it does and does not prove |
+| **M1** | Import a real client dmabuf — tiled, device-local — as a **sampled** `VkImage`, composite from it, never touch it with the CPU | With a GPU client on plo: `gather_us < 5 000` (baseline **693 952**) **and** `Cost::cpu_bytes_per_frame == 0`. Not a pixel. |
+| **M2** | `impl Renderer + Frame + ImportDma + ImportMem + Bind<Dmabuf> + ExportMem + ArmFlush` for `Kasane` | `git show --stat <commit> -- crates/omoya/src/drm.rs` is **empty**. If drm.rs needs editing the seam was wrong. |
+| **M3** | The dmabuf global becomes a typed capability on the renderer bound, not a shell variable | `wayland-info` lists `zwp_linux_dmabuf_v1` under kasane and does **not** under nuri, with `OMOYA_ADVERTISE_DMABUF` unset in both runs. `vulkaninfo` then names the RTX 3070 under Presentable Surfaces. |
+| **M4** | Device selection by DRM node + typed fallback | kasane binds the physical device whose `VkPhysicalDeviceDrmPropertiesEXT` major:minor matches the `DrmDeviceFd`'s `st_rdev` (226:1 / 226:128 on plo). Red run: hide the loader → nuri, fallback proven rather than inferred. |
+| **M5** | Scanout | page-flip from a GPU-composited buffer; `Cost::is_zero_copy()` true for a client surface. |
 
-**M2's done-predicate is the load-bearing one.** If adding kasane requires
-editing `drm.rs`, the renderer abstraction was not actually the seam it appears
-to be, and that is worth discovering at M2 rather than M5.
-
----
+★ **What M0 actually proves, restated honestly.** It proves the external-memory
+machinery works end to end in pure Rust: a real kernel dmabuf fd, a real
+`vkBindImageMemory` of imported memory, on both NVIDIA and llvmpipe. That is
+worth having and it is the foundation M1 builds on. It does **not** prove
+anything about compositing, and its `export_linear` half is test scaffolding
+— two references, one of them inside `#[cfg(test)]`. Do not let it drive the
+design of M1.
 
 ## 7. Tier-honest ledger
 
