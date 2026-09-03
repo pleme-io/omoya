@@ -251,6 +251,21 @@ pub struct PlacementConfig {
     /// A floating window's size, as a fraction of the usable area.
     pub float_width: f64,
     pub float_height: f64,
+    /// An OVERLAY's size, as a fraction of the usable area.
+    ///
+    /// ── ★ SEPARATE FROM `float_*`, BECAUSE ONE NUMBER WAS SERVING TWO
+    /// OPPOSITE PURPOSES ──────────────────────────────────────────────────
+    /// The launcher and a working terminal were both given `float_*`, and
+    /// they want opposite things: a terminal wants room to work in, an
+    /// overlay wants to be small enough that the work behind it stays
+    /// visible. At 0.46x0.52 the launcher was a 883x523 panel showing three
+    /// results — the operator's "it takes up this huge square of space" and
+    /// later "still the default size of the window stack, which is wrong".
+    ///
+    /// Spotlight-shaped: wide enough to read a result row, short enough that
+    /// it reads as a prompt rather than a window.
+    pub overlay_width: f64,
+    pub overlay_height: f64,
 }
 
 impl Default for BarConfig {
@@ -271,6 +286,8 @@ impl Default for PlacementConfig {
                 .collect(),
             float_width: 0.46,
             float_height: 0.52,
+            overlay_width: 0.34,
+            overlay_height: 0.30,
         }
     }
 }

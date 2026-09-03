@@ -78,6 +78,13 @@ pub const FLOATING_APP_IDS: &[&str] = &[
 const FLOAT_W: f64 = 0.46;
 const FLOAT_H: f64 = 0.52;
 
+/// An overlay's size, for the config-free `for_app_id` path.
+///
+/// Deliberately much smaller than `FLOAT_*` — see `PlacementConfig`'s
+/// `overlay_width` for why one number could not serve both.
+const OVERLAY_W: f64 = 0.34;
+const OVERLAY_H: f64 = 0.30;
+
 /// Decide where a window with this `app_id` belongs.
 /// Decide placement against a CONFIGURED rule set.
 ///
@@ -89,8 +96,10 @@ const FLOAT_H: f64 = 0.52;
 pub fn for_app_id_in(app_id: Option<&str>, cfg: &crate::config::PlacementConfig) -> Placement {
     match app_id {
         Some(id) if cfg.floating_app_ids.iter().any(|f| f == id) => Placement::Floating {
-            width: cfg.float_width,
-            height: cfg.float_height,
+            // ★ An overlay reads its OWN size. `float_*` is what a window
+            // gets; an overlay is not a window you work in.
+            width: cfg.overlay_width,
+            height: cfg.overlay_height,
         },
         _ => Placement::Tiled,
     }
@@ -100,8 +109,8 @@ pub fn for_app_id_in(app_id: Option<&str>, cfg: &crate::config::PlacementConfig)
 pub fn for_app_id(app_id: Option<&str>) -> Placement {
     match app_id {
         Some(id) if FLOATING_APP_IDS.contains(&id) => Placement::Floating {
-            width: FLOAT_W,
-            height: FLOAT_H,
+            width: OVERLAY_W,
+            height: OVERLAY_H,
         },
         // ★ `None` IS TILED, and that is the safe direction. An unknown window
         // that tiles is merely arranged oddly; an unknown window that floats
@@ -229,6 +238,8 @@ mod tests {
             floating_app_ids: vec![],
             float_width: 0.5,
             float_height: 0.5,
+            overlay_width: 0.34,
+            overlay_height: 0.30,
         };
         assert_eq!(for_app_id_in(Some("tobira"), &empty), Placement::Tiled);
 
@@ -237,12 +248,26 @@ mod tests {
             floating_app_ids: vec!["my-dialog".into()],
             float_width: 0.3,
             float_height: 0.4,
+            overlay_width: 0.2,
+            overlay_height: 0.25,
         };
+        // ★ `overlay_*`, NOT `float_*` — a deliberate behaviour change
+        // (2026-09-03). `floating_app_ids` names apps that are summoned OVER
+        // the work rather than worked in, so they take the overlay size. The
+        // two were one number and it was serving opposite purposes: the
+        // launcher came up as a 883x523 panel showing three results, which
+        // the operator reported twice ("it takes up this huge square of
+        // space", then "still the default size of the window stack, which is
+        // wrong").
+        //
+        // An ordinary window that floats because the MODE floats everything
+        // still takes `float_*`; that path is in `layout.rs` and is
+        // unaffected.
         assert_eq!(
             for_app_id_in(Some("my-dialog"), &custom),
             Placement::Floating {
-                width: 0.3,
-                height: 0.4
+                width: 0.2,
+                height: 0.25
             }
         );
         assert_eq!(for_app_id_in(Some("tobira"), &custom), Placement::Tiled);

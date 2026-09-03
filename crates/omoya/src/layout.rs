@@ -48,8 +48,22 @@ use smithay::utils::{Logical, Rectangle};
 ///
 /// Part of `shitsurai` (設え), the seat's visual design — see
 /// `docs/SHITSURAI.md`. Distances there come from a 4 px grid; a 7 or a 13
+/// ── ★ 12, RAISED FROM 4 (2026-09-03) ────────────────────────────────────
+/// Four pixels is a hairline: it reads as a rendering artefact rather than
+/// as space, and with a client whose background matches the desktop it gives
+/// a window no visible edge at all. The operator's verdict on the result was
+/// "the look and feel is absolutely just bad".
+///
+/// Twelve is three units of the seat's 4px grid and sits inside the 8-16
+/// range riced Wayland desktops converge on. It is what separation we can
+/// honestly get: the ricing convention is that a component sits 10-15%
+/// LIGHTER than the ground, and we cannot apply that here because the
+/// component is the CLIENT's surface — mado paints nord0, which is exactly
+/// the desktop's own colour. Space, a border and a titlebar are the
+/// separation available to a compositor that does not own the pixels inside
+/// the frame.
 /// in a layout expression is a defect.
-pub const GAP: i32 = 4;
+pub const GAP: i32 = 12;
 
 /// How thick the focused window's border is.
 ///
