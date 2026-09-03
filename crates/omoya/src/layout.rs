@@ -48,22 +48,23 @@ use smithay::utils::{Logical, Rectangle};
 ///
 /// Part of `shitsurai` (設え), the seat's visual design — see
 /// `docs/SHITSURAI.md`. Distances there come from a 4 px grid; a 7 or a 13
-/// ── ★ 12, RAISED FROM 4 (2026-09-03) ────────────────────────────────────
-/// Four pixels is a hairline: it reads as a rendering artefact rather than
-/// as space, and with a client whose background matches the desktop it gives
-/// a window no visible edge at all. The operator's verdict on the result was
-/// "the look and feel is absolutely just bad".
+/// ── ★ 4 IS A DECISION, NOT A DEFAULT — AND I BROKE IT ONCE ─────────────
+/// `docs/SHITSURAI.md` §3.2 argues this value: gap-between-windows is `GAP*2`
+/// = 8, and it records 16 as "the loudest maximalist tell at 1080p". The whole
+/// document is a minimalist position in the shitsurai tradition — arrange a
+/// room by choosing few things, placing them exactly, leaving the rest empty.
 ///
-/// Twelve is three units of the seat's 4px grid and sits inside the 8-16
-/// range riced Wayland desktops converge on. It is what separation we can
-/// honestly get: the ricing convention is that a component sits 10-15%
-/// LIGHTER than the ground, and we cannot apply that here because the
-/// component is the CLIENT's surface — mado paints nord0, which is exactly
-/// the desktop's own colour. Space, a border and a titlebar are the
-/// separation available to a compositor that does not own the pixels inside
-/// the frame.
-/// in a layout expression is a defect.
-pub const GAP: i32 = 12;
+/// On 2026-09-03 I raised this to 12 (a 24 px seam) to answer an operator's
+/// "the look and feel is absolutely just bad", citing an external ricing
+/// guide — without having read the doc that had already considered and
+/// rejected exactly that direction. Reverted here.
+///
+/// The operator's complaint is real and the doctrine may genuinely need to
+/// move; plo runs FLOATING mode now, and several of shitsurai's rejections
+/// are explicitly conditioned on omoya being a tiler (see §5.5 on corner
+/// radius). But that is a doctrine decision to argue in the document, not a
+/// constant to quietly edit.
+pub const GAP: i32 = 4;
 
 /// How thick the focused window's border is.
 ///
