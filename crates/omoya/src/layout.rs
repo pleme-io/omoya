@@ -925,6 +925,34 @@ fn app_id_of(w: &smithay::desktop::Window) -> Option<String> {
     })
 }
 
+/// A window's TITLE, as the client set it.
+///
+/// ── ★ WHY THE TITLEBAR WAS INFORMATION-FREE WITHOUT THIS ─────────────────
+/// omoya drew a 24px bar on every floating window and never read
+/// `xdg_toplevel.set_title` — zero matches for `.title` across the crate
+/// before 2026-09-03. N windows therefore carried N byte-identical bars, so
+/// the chrome answered "this is a window" (which you could already see) and
+/// never "which window". A row of identical bars is the operator's problem
+/// on this seat: mado windows are visually interchangeable.
+///
+/// Same shape and same reasoning as [`app_id_of`] one function up, including
+/// its `None`-vs-empty distinction: a client that has not sent a title yet
+/// will send one, and a client that sent `""` has said it has no title. The
+/// chrome renders nothing in both cases, but they are different facts and a
+/// future rule may care.
+pub fn title_of(w: &smithay::desktop::Window) -> Option<String> {
+    use smithay::wayland::compositor::with_states;
+    use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
+    let t = w.toplevel()?;
+    with_states(t.wl_surface(), |states| {
+        states
+            .data_map
+            .get::<XdgToplevelSurfaceData>()
+            .and_then(|d| d.lock().ok())
+            .and_then(|d| d.title.clone())
+    })
+}
+
 /// A window's wl_surface protocol id — a stable per-window key.
 ///
 /// Used only to compare "what floated last pass" against "what should float

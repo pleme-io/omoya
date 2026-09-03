@@ -204,6 +204,30 @@ fn encode(c: irodori::Color, format_is_srgb: bool) -> [f32; 4] {
     }
 }
 
+/// The titlebar's ground as a raw palette colour.
+///
+/// The `*_for_surface` pair below answers "what floats do I write into a
+/// framebuffer of this encoding". This answers "what colour is it" — which is
+/// what a RASTERIZER wants, because it writes bytes into a buffer that is
+/// later blitted, not floats into a scanout. Two questions, two functions;
+/// collapsing them is how the sRGB-vs-linear confusion got in the first time.
+#[must_use]
+pub fn titlebar_colour() -> irodori::Color {
+    NORD.polar_night[2]
+}
+
+/// A titlebar button's colour as a raw palette colour. See
+/// [`titlebar_colour`] for why this is separate from the `*_for_surface` form.
+#[must_use]
+pub fn chrome_button_colour(which: crate::chrome::Hit) -> irodori::Color {
+    match which {
+        crate::chrome::Hit::Close => NORD.aurora[0],
+        crate::chrome::Hit::Minimize => NORD.aurora[2],
+        crate::chrome::Hit::Maximize => NORD.aurora[3],
+        crate::chrome::Hit::Drag => NORD.polar_night[2],
+    }
+}
+
 /// The titlebar's ground, in whichever encoding the framebuffer needs.
 ///
 /// `polar_night[2]` — one step lighter than the desktop and the window body,

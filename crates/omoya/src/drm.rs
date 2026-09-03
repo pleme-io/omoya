@@ -657,6 +657,28 @@ where
     // new commit each time — the same trap the bar's text comparison avoids.
     let mut cursor_buffer: Option<smithay::backend::renderer::element::memory::MemoryRenderBuffer> =
         None;
+    // ── ★ CHROME BUFFERS, CACHED ON THEIR OWN INPUTS ────────────────────
+    //
+    // One buffer per window holding its whole titlebar — ground, buttons and
+    // title. Keyed on `(title, width, focused)`, which are `chrome::rasterize`'s
+    // only inputs, so a frame that changes none of them rebuilds nothing.
+    //
+    // Rebuilding per frame would hand the damage tracker a fresh commit every
+    // frame and turn partial repaint back into full repaint — the same trap
+    // the bar's text comparison and the cursor's build-once both avoid, now
+    // for the third time in this file. Three occurrences is the point at which
+    // this should become one primitive; noted rather than done, because the
+    // shapes still differ (one keyed on text, one on nothing, this on a
+    // triple). `pending-omoya-cached-raster`.
+    #[allow(clippy::type_complexity)]
+    let mut chrome_cache: Vec<(
+        u32,
+        String,
+        i32,
+        bool,
+        smithay::backend::renderer::element::memory::MemoryRenderBuffer,
+    )> = Vec::new();
+
     let mut bar_text = crate::bar::BarState::default();
     let mut bar_buffer: Option<smithay::backend::renderer::element::memory::MemoryRenderBuffer> =
         None;
@@ -1167,60 +1189,71 @@ where
             // if either moves, the other has to.
             if data.state.config.layout.mode == crate::config::LayoutMode::Floating {
                 use smithay::backend::renderer::element::Kind;
-                use smithay::backend::renderer::element::solid::SolidColorRenderElement;
-                use smithay::backend::renderer::utils::CommitCounter;
-                for (n, w) in data.state.space.elements().take(CHROME_WINDOWS).enumerate() {
-                    let Some(geo) = data.state.space.element_geometry(w) else {
+                use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
+                let focused = *introspect
+                    .focus_rect
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                let windows: Vec<_> = data
+                    .state
+                    .space
+                    .elements()
+                    .take(CHROME_WINDOWS)
+                    .cloned()
+                    .collect();
+                for w in windows {
+                    let Some(geo) = data.state.space.element_geometry(&w) else {
                         continue;
                     };
-                    // ★ BUTTONS FIRST, BAR LAST — the order is what makes
-                    // them visible. Element index is FRONT-TO-BACK, so the
-                    // first pushed is drawn in front. Pushing the bar first
-                    // put it in front of its own buttons and hid all three
-                    // behind it: the operator saw "a black bar… clicking it
-                    // does nothing", which was three invisible buttons under
-                    // an opaque rectangle.
-                    //
-                    // The same relationship `chrome::hit` encodes for clicks
-                    // (buttons beat the bar they sit inside), expressed in
-                    // the one place that decides what is on top. Both are
-                    // pinned by tests, in their own files.
-                    let mut rects = Vec::new();
-                    if crate::chrome::fits(geo) {
-                        for (r, role) in crate::chrome::buttons(geo).into_iter().zip([
-                            crate::chrome::Hit::Close,
-                            crate::chrome::Hit::Minimize,
-                            crate::chrome::Hit::Maximize,
-                        ]) {
-                            rects.push((r, crate::theme::chrome_button_for_surface(role, false)));
+                    let Some(id) = crate::layout::surface_id_of(&w) else {
+                        continue;
+                    };
+                    let title = crate::layout::title_of(&w).unwrap_or_default();
+                    let is_focused = focused
+                        .is_some_and(|(fx, fy, _, _)| fx == geo.loc.x && fy == geo.loc.y);
+                    let bar = crate::chrome::bar_rect(geo);
+
+                    let hit = chrome_cache.iter().any(|(cid, ct, cw, cf, _)| {
+                        *cid == id && ct == &title && *cw == bar.size.w && *cf == is_focused
+                    });
+                    if !hit {
+                        chrome_cache.retain(|(cid, ..)| *cid != id);
+                        if let Some(px) =
+                            crate::chrome::rasterize(&title, bar.size.w, is_focused)
+                        {
+                            let mb = smithay::backend::renderer::element::memory::MemoryRenderBuffer::from_slice(
+                                &px,
+                                smithay::backend::allocator::Fourcc::Argb8888,
+                                (bar.size.w, bar.size.h),
+                                1,
+                                smithay::utils::Transform::Normal,
+                                None,
+                            );
+                            chrome_cache.push((id, title.clone(), bar.size.w, is_focused, mb));
                         }
                     }
-                    rects.push((
-                        crate::chrome::bar_rect(geo),
-                        crate::theme::titlebar_for_surface(false),
-                    ));
-                    for (i, (r, colour)) in rects.into_iter().enumerate() {
-                        if r.size.w <= 0 || r.size.h <= 0 {
-                            continue;
-                        }
-                        elements.push(SeatElements::Solid(SolidColorRenderElement::new(
-                            chrome_ids[n * 4 + i].clone(),
-                            // ★ EXPLICIT Logical -> Physical. `chrome`'s rects
-                            // are typed `Logical` because that is the space the
-                            // layout and the hit-test share; the render element
-                            // wants `Physical`. The border block above passes
-                            // bare integers and lets inference call them
-                            // physical, which happens to be right only because
-                            // this seat runs at scale 1 — saying so out loud
-                            // here is the difference between a fact and a
-                            // coincidence.
-                            r.to_physical(1),
-                            CommitCounter::default(),
-                            smithay::backend::renderer::Color32F::from(colour),
+                    if let Some((.., b)) = chrome_cache.iter().find(|(cid, ..)| *cid == id)
+                        && let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
+                            &mut renderer,
+                            (f64::from(bar.loc.x), f64::from(bar.loc.y)),
+                            b,
+                            None,
+                            None,
+                            None,
                             Kind::Unspecified,
-                        )));
+                        )
+                    {
+                        elements.push(SeatElements::Texture(el));
                     }
                 }
+                // A window that closed must not keep its buffer alive.
+                let live: Vec<u32> = data
+                    .state
+                    .space
+                    .elements()
+                    .filter_map(crate::layout::surface_id_of)
+                    .collect();
+                chrome_cache.retain(|(cid, ..)| live.contains(cid));
             }
 
             if let Some((fx, fy, fw, fh)) = *introspect

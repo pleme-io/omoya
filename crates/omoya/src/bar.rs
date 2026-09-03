@@ -38,7 +38,7 @@ pub const HEIGHT: i32 = 28;
 /// yambar 26/12 — all 0.43–0.50). At 14 the ratio is 0.50, right at the top
 /// of the band, which is what made the strip read as cramped rather than as
 /// typeset.
-const FONT_PX: f32 = 13.0;
+pub(crate) const FONT_PX: f32 = 13.0;
 
 /// The horizontal inset from either screen edge.
 ///
@@ -105,12 +105,12 @@ fn role_surface() -> irodori::Color {
 }
 
 /// Body text. Everything the operator reads by default.
-fn role_text_muted() -> irodori::Color {
+pub(crate) fn role_text_muted() -> irodori::Color {
     role(|r| r.text_muted)
 }
 
 /// Emphasis. The one item in a group that has focus.
-fn role_text() -> irodori::Color {
+pub(crate) fn role_text() -> irodori::Color {
     role(|r| r.text)
 }
 
@@ -319,14 +319,14 @@ impl Clock {
 /// Because both endpoints are compile-time role constants, correctness here
 /// is also strictly FASTER than what it replaces: the whole per-pixel blend
 /// collapses to three array lookups, no float math at all.
-struct Blend {
+pub(crate) struct Blend {
     b: [u8; 256],
     g: [u8; 256],
     r: [u8; 256],
 }
 
 impl Blend {
-    fn new(bg: irodori::Color, fg: irodori::Color) -> Self {
+    pub(crate) fn new(bg: irodori::Color, fg: irodori::Color) -> Self {
         let chan = |from: u8, to: u8| -> [u8; 256] {
             let mut t = [0u8; 256];
             let (lo, hi) = (srgb_to_linear(from), srgb_to_linear(to));
@@ -512,7 +512,7 @@ pub fn rasterize_h(state: &BarState, width: i32, height: i32) -> Option<Vec<u8>>
 /// ★ Hoisted out of `rasterize`. `Font::from_bytes` re-parsed the whole file
 /// on every call — which is once a minute now, and was once a frame before
 /// the damage gate landed.
-fn font() -> Option<&'static fontdue::Font> {
+pub(crate) fn font() -> Option<&'static fontdue::Font> {
     static PARSED: OnceLock<Option<fontdue::Font>> = OnceLock::new();
     PARSED
         .get_or_init(|| {
@@ -529,7 +529,7 @@ fn font() -> Option<&'static fontdue::Font> {
 /// off-centre. `horizontal_line_metrics` gives the real ascent and descent,
 /// so the ink box is centred by construction and the value survives a font
 /// change.
-fn baseline(font: &fontdue::Font, h: usize) -> f32 {
+pub(crate) fn baseline(font: &fontdue::Font, h: usize) -> f32 {
     #[allow(clippy::cast_precision_loss)]
     let h = h as f32;
     font.horizontal_line_metrics(FONT_PX)
@@ -540,7 +540,7 @@ fn baseline(font: &fontdue::Font, h: usize) -> f32 {
         })
 }
 
-fn measure(font: &fontdue::Font, s: &str) -> f32 {
+pub(crate) fn measure(font: &fontdue::Font, s: &str) -> f32 {
     s.chars()
         .map(|c| font.metrics(c, FONT_PX).advance_width)
         .sum()
@@ -561,7 +561,7 @@ fn underline(buf: &mut [u8], w: usize, h: usize, x: f32, width: f32, c: irodori:
     }
 }
 
-fn draw_text(
+pub(crate) fn draw_text(
     buf: &mut [u8],
     w: usize,
     h: usize,

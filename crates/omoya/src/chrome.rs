@@ -165,6 +165,133 @@ fn contains(r: Rectangle<i32, Logical>, p: Point<i32, Logical>) -> bool {
     p.x >= r.loc.x && p.x < r.loc.x + r.size.w && p.y >= r.loc.y && p.y < r.loc.y + r.size.h
 }
 
+// ── Rendering: one cached buffer per window, not four rects ──────────────
+
+/// Rasterize a window's whole chrome — bar ground, three buttons, and the
+/// title — into premultiplied ARGB8888 of size `width x HEIGHT`.
+///
+/// ── ★ ONE BUFFER, NOT FOUR SOLID RECTS ───────────────────────────────────
+/// The chrome began as four `SolidColorRenderElement`s per window, which is
+/// the right shape while it carries no text: solid rects need no raster and
+/// no cache. A title changes that — text has to be rasterized somewhere — and
+/// once one buffer exists the buttons may as well be drawn into it. Four
+/// elements per window become one, and the z-order question (buttons in front
+/// of their own bar) stops being expressible at all rather than being a
+/// correctly-ordered push.
+///
+/// ── ★ THE CALLER MUST CACHE THIS ─────────────────────────────────────────
+/// Rebuilding per frame hands the damage tracker a new commit every frame and
+/// quietly turns partial repaint back into full repaint — the exact trap
+/// `bar.rs` documents for the clock and `drm.rs` for the cursor. Key the cache
+/// on `(title, width, focused)`: those are its only inputs.
+#[must_use]
+pub fn rasterize(title: &str, width: i32, focused: bool) -> Option<Vec<u8>> {
+    let font = crate::bar::font()?;
+    let (w, h) = (usize::try_from(width).ok()?, usize::try_from(HEIGHT).ok()?);
+    if w == 0 || h == 0 {
+        return None;
+    }
+    let ground = crate::theme::titlebar_colour();
+    let mut buf = vec![0u8; w * h * 4];
+    // Ground first — premultiplied ARGB, opaque.
+    for px in buf.chunks_exact_mut(4) {
+        px[0] = ground.b;
+        px[1] = ground.g;
+        px[2] = ground.r;
+        px[3] = 0xFF;
+    }
+
+    // Buttons, from the SAME geometry the hit-test uses. Drawn relative to the
+    // buffer, so the bar's own origin is subtracted out.
+    let content = Rectangle::new((0, HEIGHT).into(), (width, 1).into());
+    if fits(content) {
+        for (r, role) in
+            buttons(content)
+                .into_iter()
+                .zip([Hit::Close, Hit::Minimize, Hit::Maximize])
+        {
+            let c = crate::theme::chrome_button_colour(role);
+            fill(&mut buf, w, h, r.loc.x, r.loc.y, r.size.w, r.size.h, c);
+        }
+    }
+
+    // The title, left of centre after the buttons, vertically centred.
+    //
+    // ★ TRUNCATED WITH AN ELLIPSIS RATHER THAN CLIPPED. A clipped glyph reads
+    // as a rendering fault; an ellipsis reads as "there is more", which is the
+    // true statement.
+    let title = title.trim();
+    if !title.is_empty() {
+        let left = if fits(content) { min_width() } else { PAD } + PAD;
+        let avail = (width - left - PAD).max(0);
+        let text = truncate_to(font, title, avail as f32);
+        if !text.is_empty() {
+            let fg = if focused {
+                crate::bar::role_text()
+            } else {
+                crate::bar::role_text_muted()
+            };
+            let blend = crate::bar::Blend::new(ground, fg);
+            let base = crate::bar::baseline(font, h);
+            draw_text_at(&mut buf, w, h, font, &text, left as f32, base, &blend);
+        }
+    }
+    Some(buf)
+}
+
+/// Longest prefix of `s` that fits in `avail` px, with `…` when shortened.
+fn truncate_to(font: &fontdue::Font, s: &str, avail: f32) -> String {
+    if crate::bar::measure(font, s) <= avail {
+        return s.to_string();
+    }
+    let ell = "…";
+    let ell_w = crate::bar::measure(font, ell);
+    if ell_w > avail {
+        return String::new();
+    }
+    let mut out = String::new();
+    let mut used = ell_w;
+    for ch in s.chars() {
+        let adv = font.metrics(ch, crate::bar::FONT_PX).advance_width;
+        if used + adv > avail {
+            break;
+        }
+        used += adv;
+        out.push(ch);
+    }
+    out.push_str(ell);
+    out
+}
+
+/// Fill an axis-aligned rect in the buffer with an opaque colour.
+#[allow(clippy::too_many_arguments)]
+fn fill(buf: &mut [u8], w: usize, h: usize, x: i32, y: i32, rw: i32, rh: i32, c: irodori::Color) {
+    for row in y.max(0)..(y + rh).min(h as i32) {
+        for col in x.max(0)..(x + rw).min(w as i32) {
+            let i = (row as usize * w + col as usize) * 4;
+            buf[i] = c.b;
+            buf[i + 1] = c.g;
+            buf[i + 2] = c.r;
+            buf[i + 3] = 0xFF;
+        }
+    }
+}
+
+/// `bar::draw_text`, but with an explicit baseline so the chrome can centre
+/// text in its own height rather than the bar's.
+fn draw_text_at(
+    buf: &mut [u8],
+    w: usize,
+    h: usize,
+    font: &fontdue::Font,
+    s: &str,
+    start_x: f32,
+    _baseline: f32,
+    blend: &crate::bar::Blend,
+) {
+    crate::bar::draw_text(buf, w, h, font, s, start_x, blend);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -308,5 +435,135 @@ mod tests {
                 "button {i} runs below the bar"
             );
         }
+    }
+
+    // ── The rasterizer ──────────────────────────────────────────────────
+
+    /// ★ ANTI-VACUITY FOR EVERY RASTER TEST BELOW.
+    ///
+    /// They all begin `let Some(font) = crate::bar::font() else { return }`,
+    /// which is correct — a host with no JetBrains Mono on disk cannot
+    /// exercise a rasterizer — and is also exactly how eight tests quietly
+    /// become zero. If the font resolves anywhere, it must resolve HERE, so
+    /// this fails on a host where the others would silently pass empty.
+    ///
+    /// Deliberately NOT `assert!(font().is_some())`: on a genuinely
+    /// font-less host that would be a false failure. It asserts the pair
+    /// instead — either the font is absent AND the raster is too, or both
+    /// are present. A rasterizer that returns pixels without a font, or a
+    /// font that yields no pixels, is the state that cannot be.
+    #[test]
+    fn the_raster_tests_are_not_silently_skipping() {
+        let font = crate::bar::font();
+        let raster = rasterize("probe", 400, true);
+        assert_eq!(
+            font.is_some(),
+            raster.is_some(),
+            "font present = {} but raster present = {} — the skip guard on \
+             every test below is now lying about which case it is in",
+            font.is_some(),
+            raster.is_some()
+        );
+        if font.is_none() {
+            eprintln!(
+                "NOTE: no font on this host — the chrome raster tests are \
+                 skipping, and that is why they pass"
+            );
+        }
+    }
+
+    #[test]
+    fn a_title_that_fits_is_not_shortened() {
+        let Some(font) = crate::bar::font() else {
+            return; // no font on this host — the raster path is untestable
+        };
+        let s = "mado";
+        let w = crate::bar::measure(font, s) + 10.0;
+        assert_eq!(truncate_to(font, s, w), s);
+    }
+
+    #[test]
+    fn a_long_title_is_ellipsised_not_clipped() {
+        // ★ A clipped glyph reads as a rendering fault; an ellipsis reads as
+        // "there is more", which is the true statement. The distinction is
+        // invisible in code and obvious on screen.
+        let Some(font) = crate::bar::font() else {
+            return;
+        };
+        let s = "a very long window title that will not fit in a narrow bar";
+        let out = truncate_to(font, s, 60.0);
+        assert!(out.ends_with('…'), "got {out:?}");
+        assert!(out.len() < s.len());
+        assert!(
+            crate::bar::measure(font, &out) <= 60.0,
+            "the truncation must actually fit: {out:?}"
+        );
+    }
+
+    #[test]
+    fn a_bar_too_narrow_for_even_an_ellipsis_renders_no_text() {
+        // Rather than a single '…' floating alone, or a panic on a zero-width
+        // budget.
+        let Some(font) = crate::bar::font() else {
+            return;
+        };
+        assert_eq!(truncate_to(font, "anything", 1.0), "");
+    }
+
+    #[test]
+    fn the_raster_is_the_declared_size_and_opaque() {
+        // Size mismatch against `bar_rect` is what makes a buffer land skewed
+        // or get rejected; alpha != 255 on a chrome buffer would blend the
+        // desktop through the titlebar.
+        let Some(px) = rasterize("mado", 400, true) else {
+            return;
+        };
+        assert_eq!(px.len(), 400 * HEIGHT as usize * 4);
+        assert!(
+            px.chunks_exact(4).all(|p| p[3] == 0xFF),
+            "every chrome pixel must be opaque"
+        );
+    }
+
+    #[test]
+    fn focus_changes_the_raster() {
+        // ★ THE CACHE-KEY GATE. `drm.rs` keys its buffer on
+        // (title, width, focused). If focus did not change the pixels, that
+        // third key would be dead weight; if it changes them and were dropped
+        // from the key, a window would keep its focused title after losing
+        // focus. Assert the dependency the key claims.
+        let (Some(a), Some(b)) = (rasterize("mado", 400, true), rasterize("mado", 400, false))
+        else {
+            return;
+        };
+        assert_ne!(a, b, "focused and unfocused chrome must differ");
+    }
+
+    #[test]
+    fn a_title_changes_the_raster() {
+        // The other half of the same key.
+        let (Some(a), Some(b)) = (rasterize("mado", 400, true), rasterize("tear", 400, true))
+        else {
+            return;
+        };
+        assert_ne!(a, b, "the title must reach the pixels");
+    }
+
+    #[test]
+    fn an_empty_title_still_renders_chrome() {
+        // A window that has not sent a title yet must still get its bar and
+        // buttons — degrading to no chrome would make the window undraggable.
+        let Some(px) = rasterize("", 400, true) else {
+            return;
+        };
+        assert_eq!(px.len(), 400 * HEIGHT as usize * 4);
+    }
+
+    #[test]
+    fn a_window_too_narrow_for_buttons_still_rasterizes() {
+        let Some(px) = rasterize("x", min_width() - 1, true) else {
+            return;
+        };
+        assert_eq!(px.len(), (min_width() - 1) as usize * HEIGHT as usize * 4);
     }
 }
