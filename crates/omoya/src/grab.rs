@@ -113,6 +113,11 @@ impl PointerGrab<Omoya> for MoveGrab {
         let p: Point<i32, Logical> = (event.location.x as i32, event.location.y as i32).into();
         let new_loc = p + self.offset;
         data.space.map_element(self.window.clone(), new_loc, true);
+        // ★ RECORD IT. Writing only into the Space is what made dragging look
+        // broken: the next `apply_layout` re-derived the position from the
+        // window's index and put it straight back. The Space is the layout's
+        // OUTPUT; this is where the operator's intent is kept.
+        crate::floatpos::remember(&self.window, new_loc);
         data.introspect.mark(crate::owed::Owed::Windows);
     }
 

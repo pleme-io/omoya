@@ -24,6 +24,7 @@ mod denpa;
 #[cfg(target_os = "linux")]
 mod drm;
 mod evdev_backend;
+mod floatpos;
 mod grab;
 mod handlers;
 mod input;

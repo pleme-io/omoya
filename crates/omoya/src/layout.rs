@@ -606,7 +606,27 @@ impl crate::state::Omoya {
             // and the snap only tidies that answer, whereas snapping first
             // would be immediately overwritten by the offset.
             let rect = if floating_mode && !is_overlay {
-                crate::placement::snap_to_edges(
+                // ── ★ PLACED ONCE, THEN REMEMBERED ───────────────────────
+                //
+                // This used to derive the position from `idx` on EVERY pass,
+                // which meant three things at once. A drag was overwritten by
+                // the next `apply_layout` (twelve call sites), so the operator
+                // could move a window and watch it snap back on the next
+                // click. `idx` is Z-ORDER, so raising or closing a window
+                // renumbered the ones above it and physically moved them. And
+                // the cascade was the only thing separating windows that all
+                // share `float_width`/`float_height` — 24 px against 883x523
+                // on plo, a 93% overlap that reads as a stack.
+                //
+                // Now the cascade decides only where a window STARTS. See
+                // `crate::floatpos`; the position lives on the window itself
+                // rather than in a map, because `surface_id_of` returns a
+                // per-client `protocol_id` and every mado on the seat is id 16.
+                // The cascade is computed either way — it is a few
+                // multiplications, and it is what supplies the SIZE even when
+                // the position is recalled. `width`/`height` are fractions of
+                // the zone, so the rect is the only place they become pixels.
+                let first = crate::placement::snap_to_edges(
                     crate::placement::cascaded(
                         usable,
                         width,
@@ -616,7 +636,17 @@ impl crate::state::Omoya {
                     ),
                     usable,
                     self.config.layout.snap_threshold,
-                )
+                );
+                match crate::floatpos::recall(w) {
+                    Some(remembered) => smithay::utils::Rectangle::new(
+                        crate::floatpos::clamped(remembered, first.size, usable),
+                        first.size,
+                    ),
+                    None => {
+                        crate::floatpos::remember(w, first.loc);
+                        first
+                    }
+                }
             } else {
                 // A launcher is centred whatever the mode: it is a transient
                 // overlay, not a member of an arrangement, and cascading it
