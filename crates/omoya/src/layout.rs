@@ -613,6 +613,22 @@ impl crate::state::Omoya {
                 Some(fixed) => Rectangle::new(crate::placement::centred_loc(usable, fixed), fixed),
                 None => rect,
             };
+            // ── ★ ROOM FOR THE TITLEBAR ──────────────────────────────────
+            //
+            // The chrome sits ABOVE the content, so the content rect is the
+            // laid-out frame minus the bar. Computed by `chrome::content_for`
+            // rather than here, because the renderer expands it back with
+            // `chrome::bar_rect` and two independent copies of that
+            // arithmetic drift by a few pixels every configure.
+            //
+            // Floating only: a tiled window's chrome is a later question, and
+            // shrinking tiled windows here would move every one of them for a
+            // feature the tiled path does not yet draw.
+            let rect = if floating_mode && !crate::chrome::content_for(rect).size.is_empty() {
+                crate::chrome::content_for(rect)
+            } else {
+                rect
+            };
             if let Some(t) = w.toplevel() {
                 // A fixed-size client is sent NO size: `None` means "you
                 // choose", which for a window whose min and max agree is the

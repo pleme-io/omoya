@@ -136,6 +136,63 @@ pub fn cursor_for_surface(format_is_srgb: bool) -> [f32; 4] {
     }
 }
 
+/// One colour, in whichever encoding the framebuffer needs.
+///
+/// ★ Written once rather than expanded inline like its older siblings above:
+/// the sRGB-vs-linear choice is the trap this whole module exists to get
+/// right (see `background_for_surface`), and a third and fourth hand-expanded
+/// copy of it is a third and fourth chance to get it backwards.
+fn encode(c: irodori::Color, format_is_srgb: bool) -> [f32; 4] {
+    if format_is_srgb {
+        [
+            f32::from(c.r) / 255.0,
+            f32::from(c.g) / 255.0,
+            f32::from(c.b) / 255.0,
+            1.0,
+        ]
+    } else {
+        [
+            srgb_to_linear(c.r),
+            srgb_to_linear(c.g),
+            srgb_to_linear(c.b),
+            1.0,
+        ]
+    }
+}
+
+/// The titlebar's ground, in whichever encoding the framebuffer needs.
+///
+/// `polar_night[2]` — one step lighter than the desktop and the window body,
+/// so the bar reads as a distinct surface without becoming a bright band. The
+/// operator asked for "a guide for function", and a titlebar that competes
+/// with content for attention is decoration, not a guide.
+#[must_use]
+pub fn titlebar_for_surface(format_is_srgb: bool) -> [f32; 4] {
+    encode(NORD.polar_night[2], format_is_srgb)
+}
+
+/// A titlebar button's fill, by role.
+///
+/// ★ THE THREE COLOURS ARE THE AFFORDANCE. With no icons and no labels — the
+/// operator asked for function over looks — colour is the ONLY thing telling
+/// close from minimize, so they are taken from the three families Nord
+/// reserves for exactly this: `aurora[0]` red for destructive,
+/// `aurora[2]` yellow for "set aside", `aurora[3]` green for "grow". Anyone
+/// who has used a Mac reads them without being told, which is what makes them
+/// a guide rather than three identical squares.
+#[must_use]
+pub fn chrome_button_for_surface(which: crate::chrome::Hit, format_is_srgb: bool) -> [f32; 4] {
+    let c = match which {
+        crate::chrome::Hit::Close => NORD.aurora[0],
+        crate::chrome::Hit::Minimize => NORD.aurora[2],
+        crate::chrome::Hit::Maximize => NORD.aurora[3],
+        // The bar is not a button; it renders as the bar's own ground so a
+        // caller that asks cannot accidentally paint a fourth colour.
+        crate::chrome::Hit::Drag => NORD.polar_night[2],
+    };
+    encode(c, format_is_srgb)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

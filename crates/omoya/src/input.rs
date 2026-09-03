@@ -325,6 +325,85 @@ impl Omoya {
                 // cooperation, so it works for every toplevel including ones
                 // with server-side decorations and ones that implement no move
                 // protocol at all.
+                // ── ★ THE TITLEBAR: WHERE THE MOUSE CAN NOW GO ───────────────
+                //
+                // Hit-tested BEFORE the Super+drag path and before focus,
+                // because a click on the chrome is never a click on the
+                // client — the bar is the compositor's own surface and the
+                // window beneath must not also see it.
+                //
+                // Geometry comes from `chrome`, the same module the renderer
+                // draws from, so a button responds exactly where it is drawn.
+                //
+                // ★ `element_under` finds a window by its CONTENT rect, and
+                // the bar is ABOVE that — outside it. So the chrome is
+                // hit-tested over every window in the space rather than only
+                // the one under the pointer, or the bar would be unclickable
+                // for the very reason it is visible.
+                // The same floating-only guard the renderer and the layout
+                // carry. A click that hit chrome nobody drew would be a
+                // window closing because the operator clicked empty desktop.
+                if button == 0x110 && self.config.layout.mode == crate::config::LayoutMode::Floating
+                {
+                    let p = pointer.current_location();
+                    let chrome_hit = self.space.elements().find_map(|w| {
+                        let geo = self.space.element_geometry(w)?;
+                        crate::chrome::hit(geo, p).map(|h| (w.clone(), geo, h))
+                    });
+                    if let Some((w, geo, what)) = chrome_hit {
+                        self.space.raise_element(&w, true);
+                        // ★ FOCUS FIRST, THEN DELEGATE TO THE DEED. The three
+                        // buttons are the SAME verbs as Logo+Q / Logo+M /
+                        // Logo+F, and every one of those acts on the focused
+                        // window. Re-implementing them here would be two
+                        // implementations of one verb, free to diverge — the
+                        // shape where "the button does something subtly
+                        // different from the shortcut" comes from. Focusing
+                        // the clicked window first makes "act on focus" and
+                        // "act on what I clicked" the same statement.
+                        keyboard.set_focus(
+                            self,
+                            w.toplevel().map(|t| t.wl_surface().clone()),
+                            serial,
+                        );
+                        match what {
+                            crate::chrome::Hit::Close => {
+                                self.perform(crate::deed::Deed::Close);
+                            }
+                            crate::chrome::Hit::Minimize => {
+                                self.perform(crate::deed::Deed::Minimize);
+                            }
+                            crate::chrome::Hit::Maximize => {
+                                self.perform(crate::deed::Deed::ToggleMaximize);
+                            }
+                            crate::chrome::Hit::Drag => {
+                                #[allow(clippy::cast_possible_truncation)]
+                                let offset =
+                                    smithay::utils::Point::<i32, smithay::utils::Logical>::from((
+                                        geo.loc.x - p.x as i32,
+                                        geo.loc.y - p.y as i32,
+                                    ));
+                                let start_data = smithay::input::pointer::GrabStartData {
+                                    focus: None,
+                                    button,
+                                    location: p,
+                                };
+                                pointer.set_grab(
+                                    self,
+                                    crate::grab::MoveGrab {
+                                        start_data,
+                                        window: w.clone(),
+                                        offset,
+                                    },
+                                    serial,
+                                    smithay::input::pointer::Focus::Clear,
+                                );
+                            }
+                        }
+                        return;
+                    }
+                }
+
                 let logo_held = keyboard.modifier_state().logo;
                 if logo_held && button == 0x110 {
                     if let Some(geo) = self.space.element_geometry(&window) {

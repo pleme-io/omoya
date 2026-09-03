@@ -661,6 +661,20 @@ where
     let mut bar_buffer: Option<smithay::backend::renderer::element::memory::MemoryRenderBuffer> =
         None;
 
+    // ── ★ CHROME IDS: STABLE, AND ENOUGH FOR SEVERAL WINDOWS ────────────
+    //
+    // Same reason the border edges have stable ids — a fresh `Id` each frame
+    // reads to the damage tracker as "the old element vanished and a new one
+    // appeared", which re-damages every rectangle every frame and quietly
+    // turns partial repaint back into full repaint. Four rects per window
+    // (bar + three buttons) for up to `CHROME_WINDOWS` windows; beyond that
+    // the extra windows render WITHOUT chrome rather than sharing ids, since
+    // two elements holding one id is the exact confusion these ids prevent.
+    const CHROME_WINDOWS: usize = 8;
+    let chrome_ids: Vec<smithay::backend::renderer::element::Id> = (0..CHROME_WINDOWS * 4)
+        .map(|_| smithay::backend::renderer::element::Id::new())
+        .collect();
+
     let border_ids: [smithay::backend::renderer::element::Id; 4] = [
         smithay::backend::renderer::element::Id::new(),
         smithay::backend::renderer::element::Id::new(),
@@ -1130,6 +1144,72 @@ where
             // cover content) and over the background (it is visible in the
             // gap). Getting this order wrong does not error — it just draws a
             // border nobody can see.
+            // ── ★ THE TITLEBAR — "no place for the mouse to go" ──────────
+            //
+            // The operator's report, 2026-09-03: two floating windows and
+            // nowhere to grab, minimise or close them. Every one of those
+            // verbs already existed as a chord; none of them was VISIBLE, and
+            // a verb you cannot see is a verb most people never learn they
+            // have.
+            //
+            // Drawn from `chrome::bar_rect`/`chrome::buttons` — the same
+            // functions `input.rs` hit-tests against, so where a button is
+            // drawn and where it responds cannot drift apart.
+            //
+            // Pushed BEFORE the windows for the same front-to-back reason the
+            // border is: the chrome must sit under nothing it decorates.
+            //
+            // ★ FLOATING ONLY, and this guard must agree with `layout.rs`'s.
+            // The layout shrinks a window's content by the bar's height only
+            // in floating mode, so drawing chrome in tiling mode would paint a
+            // bar over the top of a client's own content — the one thing
+            // `bar_rect`'s doc promises never happens. Two guards, one fact:
+            // if either moves, the other has to.
+            if data.state.config.layout.mode == crate::config::LayoutMode::Floating {
+                use smithay::backend::renderer::element::Kind;
+                use smithay::backend::renderer::element::solid::SolidColorRenderElement;
+                use smithay::backend::renderer::utils::CommitCounter;
+                for (n, w) in data.state.space.elements().take(CHROME_WINDOWS).enumerate() {
+                    let Some(geo) = data.state.space.element_geometry(w) else {
+                        continue;
+                    };
+                    let mut rects = vec![(
+                        crate::chrome::bar_rect(geo),
+                        crate::theme::titlebar_for_surface(false),
+                    )];
+                    if crate::chrome::fits(geo) {
+                        for (r, role) in crate::chrome::buttons(geo).into_iter().zip([
+                            crate::chrome::Hit::Close,
+                            crate::chrome::Hit::Minimize,
+                            crate::chrome::Hit::Maximize,
+                        ]) {
+                            rects.push((r, crate::theme::chrome_button_for_surface(role, false)));
+                        }
+                    }
+                    for (i, (r, colour)) in rects.into_iter().enumerate() {
+                        if r.size.w <= 0 || r.size.h <= 0 {
+                            continue;
+                        }
+                        elements.push(SeatElements::Solid(SolidColorRenderElement::new(
+                            chrome_ids[n * 4 + i].clone(),
+                            // ★ EXPLICIT Logical -> Physical. `chrome`'s rects
+                            // are typed `Logical` because that is the space the
+                            // layout and the hit-test share; the render element
+                            // wants `Physical`. The border block above passes
+                            // bare integers and lets inference call them
+                            // physical, which happens to be right only because
+                            // this seat runs at scale 1 — saying so out loud
+                            // here is the difference between a fact and a
+                            // coincidence.
+                            r.to_physical(1),
+                            CommitCounter::default(),
+                            smithay::backend::renderer::Color32F::from(colour),
+                            Kind::Unspecified,
+                        )));
+                    }
+                }
+            }
+
             if let Some((fx, fy, fw, fh)) = *introspect
                 .focus_rect
                 .lock()

@@ -15,6 +15,7 @@
 
 mod bar;
 mod chord;
+mod chrome;
 mod config;
 mod cursor;
 mod deed;
