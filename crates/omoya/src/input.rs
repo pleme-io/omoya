@@ -481,12 +481,27 @@ impl Omoya {
                 );
             }
             InputEvent::PointerAxis { event, .. } => {
-                let horizontal = event.amount(Axis::Horizontal).unwrap_or_else(|| {
-                    event.amount_v120(Axis::Horizontal).unwrap_or(0.0) * 3.0 / 120.
-                });
-                let vertical = event.amount(Axis::Vertical).unwrap_or_else(|| {
-                    event.amount_v120(Axis::Vertical).unwrap_or(0.0) * 3.0 / 120.
-                });
+                // ── ukeire: the seat's scroll intake ─────────────────────
+                //
+                // ★ THE TWO PATHS TAKE DIFFERENT PARTS OF THE POLICY, AND
+                // THAT ASYMMETRY IS DELIBERATE. `amount()` is already in
+                // the device's own continuous units — scaling it by a
+                // lines-per-detent factor would be applying a discrete-wheel
+                // conversion to a trackpad, so it takes the DIRECTION only.
+                // `amount_v120` is 120 units per detent and takes the whole
+                // multiplier, including the `/120` wire conversion that
+                // `v120_multiplier` owns and does not expose.
+                let scroll = self.config.ukeire.scroll;
+                let mul = scroll.v120_multiplier();
+                let sign = scroll.direction.sign();
+                let horizontal = event.amount(Axis::Horizontal).map_or_else(
+                    || event.amount_v120(Axis::Horizontal).unwrap_or(0.0) * mul,
+                    |a| a * sign,
+                );
+                let vertical = event.amount(Axis::Vertical).map_or_else(
+                    || event.amount_v120(Axis::Vertical).unwrap_or(0.0) * mul,
+                    |a| a * sign,
+                );
 
                 let mut frame = AxisFrame::new(event.time_msec()).source(event.source());
                 if horizontal != 0.0 {

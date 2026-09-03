@@ -42,6 +42,7 @@ mod synth;
 mod theme;
 mod truedamage;
 mod uevent;
+mod ukeire;
 mod wash;
 mod windowmode;
 /// The nested development backend. Off by default — it drags in winit, which
@@ -933,18 +934,97 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     data.state.config = cfg;
 
-    // The operator's repeat pair, applied now that the config exists.
+    // ── ukeire: apply the operator's intake policy ───────────────────────
     //
-    // ★ `change_repeat_info` is the ONLY way to move this after the seat is
-    // built: `add_keyboard`'s pair is baked into the `KeyboardHandle` and
-    // re-adding a keyboard would replace the handle every client already
-    // holds. Clients learn the new pair through `wl_keyboard.repeat_info`,
-    // which smithay re-sends to each bound keyboard — so this is live for
-    // already-running clients, not only for ones spawned afterwards.
+    // ★ AFTER the config exists, and via the two RUNTIME setters, because
+    // `State::new` built the seat before `config::load()` ran. That is not
+    // an accident of ordering to be tidied away — the bare tier must produce
+    // a working keyboard even when the config cannot be parsed, so the seat
+    // is built from `bare()` and then moved.
+    //
+    // Both setters reach clients that are ALREADY bound: smithay re-sends
+    // `wl_keyboard.repeat_info` and the keymap fd to every bound keyboard.
+    // Re-adding a keyboard instead would replace the handle every client
+    // holds.
+    {
+        let reserved = awase::Reserved::fleet_linux();
+        let refusals = data
+            .state
+            .config
+            .ukeire
+            .refusals(&data.state.config.remap_pairs(), &reserved);
+        // ★ REPORTED, NEVER FATAL, and the remaps are DROPPED rather than
+        // partially applied. A refused intake policy means the operator's
+        // yaml would have cost them their way back in; the seat's job is to
+        // come up anyway and say so.
+        for r in &refusals {
+            tracing::error!(refusal = %r, "ukeire: refused, remaps NOT applied");
+        }
+        if !refusals.is_empty() {
+            data.state.config.remaps.clear();
+        }
+    }
+
+    // The chord vocabulary, re-hung on the operator's modifier.
+    //
+    // ★ REBUILT, not patched. `BindingMap` is keyed on the whole chord, so
+    // changing the modifier means every entry moves — walking the map to
+    // rewrite keys would be re-implementing `default_bindings_on` badly. The
+    // bare-tier map built in `State::new` is simply replaced, and the clash
+    // report is re-run because a modifier change can create a collision the
+    // default never had.
+    {
+        let modifier = data.state.config.ukeire.modifier;
+        if modifier != crate::ukeire::SeatModifier::default() {
+            let (map, clashes) = crate::deed::default_bindings_on(modifier.modifiers());
+            if !clashes.is_empty() {
+                tracing::error!(?clashes, "duplicate key bindings — later ones were refused");
+            }
+            data.state.bindings = map;
+            tracing::info!(?modifier, "ukeire: seat modifier");
+        }
+    }
+
     if let Some(kb) = data.state.seat.get_keyboard() {
-        let (delay, rate) = data.state.config.keyboard.smithay_repeat_info();
+        let (delay, rate) = data.state.config.ukeire.repeat.smithay_repeat_info();
         kb.change_repeat_info(rate, delay);
-        tracing::info!(delay_ms = delay, rate_hz = rate, "key repeat");
+        tracing::info!(delay_ms = delay, rate_hz = rate, "ukeire: key repeat");
+
+        // The keymap. `set_xkb_config` compiles the names through
+        // libxkbcommon and returns `Err` WITHOUT disturbing the live keymap,
+        // so an uncompilable layout leaves the operator on the bare-tier
+        // keymap they can log in with — the fallback is structural, not a
+        // branch we wrote.
+        // ★ CLONED FIRST, deliberately. `set_xkb_config` takes `&mut State`
+        // while the names live inside `state.config`, so borrowing them
+        // through the same value is a borrowck conflict. Five short owned
+        // strings once at startup is the honest fix; reaching for a
+        // `mem::replace` placeholder to satisfy the borrow checker would be
+        // trading a real invariant for a compile-time convenience.
+        let km = data.state.config.ukeire.keymap.clone();
+        if !km.is_default() {
+            let layout = km.layout.clone().unwrap_or_default();
+            let xkb = smithay::input::keyboard::XkbConfig {
+                rules: km.rules.as_deref().unwrap_or(""),
+                model: km.model.as_deref().unwrap_or(""),
+                layout: &layout,
+                variant: km.variant.as_deref().unwrap_or(""),
+                options: km.options.clone(),
+            };
+            let shown = if layout.is_empty() {
+                "<xkb default>"
+            } else {
+                layout.as_str()
+            };
+            match kb.set_xkb_config(&mut data.state, xkb) {
+                Ok(()) => tracing::info!(layout = shown, "ukeire: keymap"),
+                Err(e) => tracing::error!(
+                    layout = shown,
+                    error = ?e,
+                    "ukeire: keymap did not compile — keeping the bare-tier keymap"
+                ),
+            }
+        }
     }
 
     if let Some(cmd) = args.spawn

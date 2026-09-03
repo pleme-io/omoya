@@ -76,8 +76,10 @@ pub struct OmoyaConfig {
     pub layout: LayoutConfig,
     /// How the seat decides what changed on screen.
     pub damage: DamageConfig,
-    /// Held-key repeat.
-    pub keyboard: KeyboardConfig,
+    /// ukeire (受け入れ) — the seat's intake of physical input: what an event
+    /// means, and how fast it is taken. See `ukeire.rs`; every knob under
+    /// here was a literal in five different files until 2026-09-03.
+    pub ukeire: crate::ukeire::Ukeire,
 }
 
 /// How the seat decides what changed on screen.
@@ -258,122 +260,6 @@ pub struct PlacementConfig {
     pub float_height: f64,
 }
 
-/// Held-key repeat: how long before a held key starts repeating, and how
-/// fast it repeats once it does.
-///
-/// ── ★ WHY THE FIELDS ARE `Refined` AND NOT BARE `i32` ────────────────────
-/// These two numbers go straight to `wl_keyboard.repeat_info`, and both ends
-/// of both ranges are hazards rather than merely odd. A 1 ms delay makes
-/// every keystroke a burst; a 5000 ms delay reads as "repeat is broken"; a
-/// 500 Hz rate outruns any client's ability to drain its event queue and is
-/// indistinguishable from the runaway class `awase::KeyRepeatGate` exists to
-/// stop. So the bound is carried by the FIELD TYPE: `Refined`'s `Deserialize`
-/// clamps at the parse boundary, which means no expression anywhere in this
-/// crate can hold an out-of-band value — there is no constructor that
-/// produces one. Per the fleet's input-resilience rule, this is
-/// `Refined<T, Bounds>` from `ishou-tokens` rather than a fresh `if v > MAX`.
-///
-/// Tier honesty: the illegal value is **unrepresentable in this struct**,
-/// reached by clamping the operator's yaml rather than refusing it. A
-/// compositor that refused to start over a typo'd repeat rate would strand
-/// the operator at a blank screen — the same reasoning `bare()` gives.
-///
-/// ── ★ `rate_hz = 0` IS "OFF", AND THAT IS WAYLAND'S SPELLING, NOT OURS ───
-/// `wl_keyboard.repeat_info` defines a rate of zero as "repeat disabled", so
-/// the lower bound is 0 and no separate `enable` bool exists. A bool would
-/// create the combination *disabled with a delay*, which has no meaning and
-/// would need a cross-field rule to reject.
-// No `Eq`: `Refined` derives `PartialEq` but not `Eq` — it is generic over a
-// `T` that may be a float, so a total equality would be a promise the type
-// cannot keep for every instantiation. `PartialEq` is what the tests need and
-// is the honest bound, exactly as for `PlacementConfig` above.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct KeyboardConfig {
-    /// Milliseconds a key must be held before the first repeat.
-    pub repeat_delay_ms: BoundedRepeatDelay,
-    /// Repeats per second once repeating. `0` disables repeat entirely.
-    pub repeat_rate_hz: BoundedRepeatRate,
-}
-
-/// 50..=2000 ms. Below 50 ms every keypress becomes a burst; above 2 s the
-/// operator concludes repeat does not work.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RepeatDelayBounds;
-
-impl ishou_tokens::Bounds<i32> for RepeatDelayBounds {
-    fn min() -> i32 {
-        50
-    }
-    fn max() -> i32 {
-        2000
-    }
-    fn default() -> i32 {
-        DEFAULT_REPEAT_DELAY_MS
-    }
-}
-
-/// 0..=100 Hz. `0` is Wayland's "off"; 100 is already twice a fast desktop
-/// default and past it the client, not the seat, becomes the bottleneck.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RepeatRateBounds;
-
-impl ishou_tokens::Bounds<i32> for RepeatRateBounds {
-    fn min() -> i32 {
-        0
-    }
-    fn max() -> i32 {
-        100
-    }
-    fn default() -> i32 {
-        DEFAULT_REPEAT_RATE_HZ
-    }
-}
-
-pub type BoundedRepeatDelay = ishou_tokens::Refined<i32, RepeatDelayBounds>;
-pub type BoundedRepeatRate = ishou_tokens::Refined<i32, RepeatRateBounds>;
-
-/// 200 ms — a deliberate choice, and a change from the 600 ms this seat
-/// shipped with.
-///
-/// 600/25 was chosen when omoya's only face was the greeter, where a held key
-/// repeating into a password field is a hazard. That reasoning was sound for
-/// that face and wrong for this one: plo now runs a full session, the operator
-/// reported the seat "a tad slow", and a session's cursor-key and backspace
-/// repeat is a comfort knob, not a security one. The greeter hazard is still
-/// real and still unaddressed here — its answer is `awase::KeyRepeatGate` on
-/// the entrance face, which bounds repeat at the CONSUMER, so it does not
-/// depend on the seat staying slow for everyone.
-pub const DEFAULT_REPEAT_DELAY_MS: i32 = 200;
-
-/// 45 Hz — near the fast end of what desktops ship (GNOME tops out ~30,
-/// a tuned `xset r rate` is commonly 40-50) without reaching the range where
-/// a client cannot drain its queue.
-pub const DEFAULT_REPEAT_RATE_HZ: i32 = 45;
-
-impl Default for KeyboardConfig {
-    fn default() -> Self {
-        Self {
-            repeat_delay_ms: BoundedRepeatDelay::new(DEFAULT_REPEAT_DELAY_MS),
-            repeat_rate_hz: BoundedRepeatRate::new(DEFAULT_REPEAT_RATE_HZ),
-        }
-    }
-}
-
-impl KeyboardConfig {
-    /// The pair `smithay`'s `add_keyboard` / `change_repeat_info` wants, in
-    /// its argument order: `(delay_ms, rate_hz)`.
-    ///
-    /// ★ The order is the trap. smithay takes **delay first**, while
-    /// `wl_keyboard.repeat_info` sends **rate first** — swapping them yields
-    /// a seat that waits 45 ms and then repeats 200 times a second, which
-    /// reads as "the keyboard is possessed" rather than as a config error.
-    #[must_use]
-    pub fn smithay_repeat_info(self) -> (i32, i32) {
-        (self.repeat_delay_ms.get(), self.repeat_rate_hz.get())
-    }
-}
-
 impl Default for BarConfig {
     fn default() -> Self {
         Self {
@@ -435,7 +321,7 @@ impl OmoyaConfig {
             // pre-config behaviour agree by construction rather than by two
             // constants that could drift.
             damage: DamageConfig::default(),
-            keyboard: KeyboardConfig::default(),
+            ukeire: crate::ukeire::Ukeire::default(),
         }
     }
 
@@ -693,81 +579,45 @@ mod tests {
         );
     }
 
-    // ── Key repeat ──────────────────────────────────────────────────────
+    // ── ukeire (the intake vocabulary lives in `ukeire.rs`) ─────────────
+    //
+    // The leaf behaviour — bounds, clamping, scroll sign, the closed
+    // modifier enum — is tested there, beside the types. What belongs HERE
+    // is only the tier question: does every shikumi tier hand the seat a
+    // usable intake policy?
 
     #[test]
-    fn the_default_repeat_is_fast_enough_to_be_worth_having() {
-        // The operator's own report is the spec here: 600/25 was "a tad
-        // slow". This pins the direction so a future edit cannot quietly
-        // walk it back, and states the numbers it is pinning against.
-        let (delay, rate) = KeyboardConfig::default().smithay_repeat_info();
-        assert!(
-            delay <= 300,
-            "the first repeat must arrive within 300ms, got {delay}ms"
-        );
-        assert!(rate >= 40, "at least 40 repeats a second, got {rate}Hz");
-        assert!(
-            delay < 600 && rate > 25,
-            "both must be strictly faster than the 600/25 the seat shipped \
-             with, got {delay}/{rate}"
-        );
-    }
-
-    #[test]
-    fn smithay_wants_the_delay_first_and_wayland_wants_the_rate_first() {
-        // The whole reason `smithay_repeat_info` exists. Passing the pair the
-        // wrong way round is not a type error — both are `i32` — so the only
-        // available guard is a test that names which is which.
-        let cfg = KeyboardConfig {
-            repeat_delay_ms: BoundedRepeatDelay::new(199),
-            repeat_rate_hz: BoundedRepeatRate::new(44),
-        };
-        assert_eq!(cfg.smithay_repeat_info(), (199, 44));
-    }
-
-    #[test]
-    fn an_out_of_band_repeat_value_clamps_and_does_not_refuse_the_seat() {
-        // Both fields, both directions. A compositor that refused to start
-        // over a typo'd number would strand the operator with no seat to fix
-        // it from — `bare()`'s reasoning, applied to a leaf value.
-        let fast: KeyboardConfig =
-            serde_yaml::from_str("repeat_delay_ms: 1\nrepeat_rate_hz: 100000\n").unwrap();
-        assert_eq!(fast.smithay_repeat_info(), (50, 100));
-
-        let slow: KeyboardConfig =
-            serde_yaml::from_str("repeat_delay_ms: 999999\nrepeat_rate_hz: -7\n").unwrap();
-        assert_eq!(slow.smithay_repeat_info(), (2000, 0));
-    }
-
-    #[test]
-    fn a_rate_of_zero_is_off_and_stays_expressible() {
-        // Wayland's own spelling for "no repeat". If the lower bound were 1,
-        // an operator who wanted repeat off would have no way to say so, and
-        // would get 1Hz instead — the failure mode a bare `if v < 1` invites.
-        let off: KeyboardConfig = serde_yaml::from_str("repeat_rate_hz: 0\n").unwrap();
-        assert_eq!(off.repeat_rate_hz.get(), 0);
-    }
-
-    #[test]
-    fn keyboard_config_round_trips_through_yaml() {
-        let cfg = KeyboardConfig::default();
-        let text = serde_yaml::to_string(&cfg).unwrap();
-        let back: KeyboardConfig = serde_yaml::from_str(&text).unwrap();
-        assert_eq!(cfg, back, "rendered: {text}");
-    }
-
-    #[test]
-    fn every_tier_carries_a_keyboard_and_they_agree() {
-        // The bare tier must be a usable seat, so it carries a real pair
-        // rather than a zeroed struct.
+    fn every_tier_hands_the_seat_a_usable_intake_policy() {
+        // ★ The bare tier especially. If a config fails to parse, the
+        // operator needs a seat they can log in and fix it from — so a tier
+        // that shipped repeat disabled, or a keymap the seat cannot compile,
+        // would strand them at a screen that types nothing.
         for (name, cfg) in [
             ("bare", OmoyaConfig::bare()),
             ("discovered", OmoyaConfig::discovered()),
             ("prescribed", OmoyaConfig::prescribed()),
         ] {
-            let (delay, rate) = cfg.keyboard.smithay_repeat_info();
+            let u = &cfg.ukeire;
+            let (delay, rate) = u.repeat.smithay_repeat_info();
             assert!(delay >= 50, "{name} tier has an unusable delay: {delay}");
             assert!(rate > 0, "{name} tier ships with repeat disabled");
+            assert!(
+                u.scroll.v120_multiplier() > 0.0,
+                "{name} tier scrolls backwards or not at all"
+            );
+            // An unconfigured tier must mean xkb's defaults, i.e. exactly
+            // what `XkbConfig::default()` gave before this vocabulary — so
+            // adopting ukeire changes no running seat.
+            assert!(
+                u.keymap.is_default(),
+                "{name} tier prescribes a keymap; that is a fleet decision, \
+                 not a default"
+            );
+            assert_eq!(
+                u.refusals(&cfg.remap_pairs(), &awase::Reserved::fleet_linux()),
+                vec![],
+                "{name} tier's own remaps are refused by its own validator"
+            );
         }
     }
 }

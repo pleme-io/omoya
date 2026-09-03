@@ -177,7 +177,26 @@ impl Deed {
 /// Returns `awase`'s type rather than a wrapper so a future config surface
 /// can add to it without this module growing an API of its own.
 #[must_use]
+/// The fleet's bindings on the seat's default modifier.
+///
+/// Kept as the zero-argument name every test and `State::new` already call;
+/// `default_bindings_on` is the one that takes the operator's choice.
+#[must_use]
 pub fn default_bindings() -> (BindingMap<Deed>, Vec<Hotkey>) {
+    default_bindings_on(LOGO)
+}
+
+/// The fleet's bindings, hung off `logo`.
+///
+/// ★ THE MODIFIER IS A PARAMETER, NOT A CONST, because the const made the
+/// choice unavailable to the operator — and the naive alternative (read an
+/// arbitrary `Modifiers` from yaml) lets someone pick `CTRL`, at which point
+/// every fleet chord collides with `Ctrl+Alt+F1..F12` and the machine
+/// soft-bricks with no VT escape. `ukeire::SeatModifier` is a two-variant
+/// closed enum for exactly that reason: the dangerous choice has no
+/// representation, so this function can take a bare `Modifiers` without
+/// needing to police it.
+pub fn default_bindings_on(logo: Modifiers) -> (BindingMap<Deed>, Vec<Hotkey>) {
     let mut map = BindingMap::<Deed>::typed();
     let mut clashes = Vec::new();
     let Some(mode) = map.mode_mut("default") else {
@@ -187,8 +206,7 @@ pub fn default_bindings() -> (BindingMap<Deed>, Vec<Hotkey>) {
         return (map, clashes);
     };
 
-    let logo = LOGO;
-    let logo_shift = LOGO | Modifiers::SHIFT;
+    let logo_shift = logo | Modifiers::SHIFT;
 
     // Focus: hjkl and the arrows, same deed, because both muscle memories are
     // real and neither is worth punishing.

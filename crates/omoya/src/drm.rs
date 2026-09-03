@@ -981,11 +981,18 @@ where
                 // `cursor::rasterize` draws a real arrow with an outline, so
                 // it reads against a dark background AND a light one. Built
                 // once — the shape never changes, only its position.
+                // ukeire: the operator's cursor scale. Read once per frame
+                // but only USED on the frame that builds the buffer — the
+                // arrow is rasterized once because its shape never changes.
+                let cscale = data.state.config.ukeire.pointer.cursor_scale.get();
                 let cur = cursor_buffer.get_or_insert_with(|| {
                     smithay::backend::renderer::element::memory::MemoryRenderBuffer::from_slice(
-                        &crate::cursor::rasterize(),
+                        &crate::cursor::rasterize_at(cscale),
                         smithay::backend::allocator::Fourcc::Argb8888,
-                        (crate::cursor::width(), crate::cursor::height()),
+                        (
+                            crate::cursor::width_at(cscale),
+                            crate::cursor::height_at(cscale),
+                        ),
                         1,
                         smithay::utils::Transform::Normal,
                         None,
@@ -996,8 +1003,8 @@ where
                 // (0,0) of the bitmap, so the clamp is against the full
                 // extent — letting the body run off the edge would make the
                 // pointer appear to shrink as it approaches a border.
-                let x = (p.x.round() as i32).clamp(0, mode.size.w - crate::cursor::width());
-                let y = (p.y.round() as i32).clamp(0, mode.size.h - crate::cursor::height());
+                let x = (p.x.round() as i32).clamp(0, mode.size.w - crate::cursor::width_at(cscale));
+                let y = (p.y.round() as i32).clamp(0, mode.size.h - crate::cursor::height_at(cscale));
                 use smithay::backend::renderer::element::Kind;
                 use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
                 if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(

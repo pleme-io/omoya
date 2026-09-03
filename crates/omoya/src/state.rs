@@ -328,7 +328,7 @@ impl Omoya {
         // applied a few lines later via `change_repeat_info`. The bare value
         // is a working seat on purpose: an unparseable config must still leave
         // a keyboard someone can fix it with.
-        let (delay, rate) = crate::config::KeyboardConfig::default().smithay_repeat_info();
+        let (delay, rate) = crate::ukeire::Repeat::default().smithay_repeat_info();
         seat.add_keyboard(Default::default(), delay, rate)
             .expect("a seat without a keyboard cannot authenticate anyone");
         seat.add_pointer();
