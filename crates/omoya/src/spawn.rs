@@ -1,0 +1,410 @@
+//! Spawning a client into the seat, without ever owning a corpse.
+//!
+//! ── ★ THE INVARIANT: A ZOMBIE CANNOT FORM, RATHER THAN BEING CLEANED UP ──
+//! Measured on plo 2026-09-03: three `.tobira-wrapped` processes sitting in
+//! state `Z`. omoya spawned each launcher with `Command::spawn` and never
+//! called `wait`, so every Ctrl+Space left a corpse the compositor was
+//! obliged to reap and never did. A seat is a long-lived process — the
+//! operator's session had been up for hours — so this is an unbounded PID
+//! leak on the one process that must never run out of them.
+//!
+//! The obvious fix is a reaper: keep the `Child` handles, drain them each
+//! tick. That is *cleanup*, and cleanup can be forgotten, mis-ordered, or
+//! starved by a busy frame loop. The stronger property is that the bad state
+//! has no way to exist at all, and the kernel offers exactly that contract:
+//!
+//! > POSIX, `sigaction(2)`: if `SIGCHLD` is set to `SIG_IGN`, "the child
+//! > shall not be transformed into a zombie process when it terminates".
+//!
+//! So the invariant is not maintained by omoya's code — it is enforced by the
+//! kernel, once, at startup. There is no loop to starve and no handle to drop.
+//!
+//! ── ★ WHY THIS IS SAFE HERE, STATED RATHER THAN ASSUMED ──────────────────
+//! Disowning children costs the ability to `wait` for them: a subsequent
+//! `waitpid` returns `ECHILD`. That is a real trade and it is only free
+//! because omoya waits for nothing — verified by grep across the crate before
+//! this landed, and pinned by `no_call_site_waits_for_a_child` below so a
+//! future `.wait()` fails a test rather than silently returning ECHILD.
+//!
+//! Every client omoya starts is fire-and-forget by design: a terminal, a
+//! launcher. Their exit status is not information the seat acts on — the
+//! window simply closes, which the compositor learns from the Wayland
+//! protocol, not from a process exit code.
+//!
+//! ── ★ THE TRAP THIS NEARLY WALKED INTO: SIG_IGN SURVIVES `exec` ─────────
+//! A signal disposition set to a HANDLER is reset to default across `execve`.
+//! One set to `SIG_IGN` is **not** — POSIX keeps it, deliberately, so a parent
+//! can hand a child a pre-ignored signal. Which means the naive version of
+//! this module would have pushed "you may not wait for your children" into
+//! every client the seat starts.
+//!
+//! That is not hypothetical here. `mado` is a terminal: it forks a shell and
+//! learns of its exit. `tobira` launches the application you picked. A child
+//! whose `waitpid` returns `ECHILD` does not get an error it can report — it
+//! gets "the process vanished", which is a plausible answer and a wrong one.
+//! Fixing omoya's PID leak by silently breaking process management in every
+//! program it launches would have been a far worse bug than the one it cures,
+//! and it would have presented as flakiness in the CHILD, days later, with
+//! nothing pointing back here.
+//!
+//! So the disposition is restored to `SIG_DFL` **in the child, after fork,
+//! before exec** (`pre_exec`). omoya keeps the guarantee; nothing inherits it.
+//!
+//! ── ★ AND ONE PATH, SO THE INVARIANT CANNOT BE BYPASSED ──────────────────
+//! There were two `Command::new(...).spawn()` sites — `deed.rs` for the
+//! launcher chord and `main.rs` for the startup terminal — differing only in
+//! their log line. Two spawn paths mean the guarantee holds on whichever one
+//! somebody remembered, which is not a guarantee. This module is the only
+//! place in the crate that may construct a process.
+
+/// Make it impossible for this process to accumulate zombie children.
+///
+/// Call ONCE, before any spawn. Idempotent, but calling it late leaves a
+/// window in which a child could already have died and become a corpse — so
+/// it belongs at startup, beside the other one-time seat setup.
+///
+/// # Panics
+/// Never. A failure to install the disposition is reported and the seat
+/// continues: a compositor that refuses to start because of a signal
+/// disposition would be a worse outcome than one that leaks PIDs slowly.
+pub fn disown_children() {
+    // SAFETY: `signal` with SIG_IGN on SIGCHLD is async-signal-safe and has no
+    // memory effects. The only consequence is the documented one — this
+    // process can no longer `wait` for children, which is asserted elsewhere
+    // in this module to be true of every call site.
+    let prev = unsafe { libc::signal(libc::SIGCHLD, libc::SIG_IGN) };
+    if prev == libc::SIG_ERR {
+        tracing::error!(
+            "could not disown children — every client spawned from this seat \
+             will leave a zombie when it exits"
+        );
+    } else {
+        tracing::debug!("children disowned — SIGCHLD is SIG_IGN, no zombie can form");
+    }
+}
+
+/// Start a client into this seat.
+///
+/// The ONLY way this crate creates a process. `WAYLAND_DISPLAY` is set from
+/// `socket` so the child connects to us rather than to whatever seat happened
+/// to be in the environment — which on a nested seat is the difference
+/// between a client appearing in the seat under test and appearing in the
+/// operator's real one.
+pub fn into_seat(cmd: &[String], socket: &std::ffi::OsStr, what: &'static str) {
+    // ★ INSTALLED HERE, UNCONDITIONALLY, ON THE ONLY PATH THAT CAN SPAWN.
+    //
+    // The startup call covers the whole process lifetime including anything a
+    // LIBRARY might spawn before we do; this call covers our own path even if
+    // that startup call is ever removed. Neither is redundant — they close
+    // different holes, and the cost is one idempotent syscall against the many
+    // thousands of instructions a `fork` already costs.
+    //
+    // Because it sits on the line above the only `Command::new` in the crate,
+    // "a process created without the guarantee" is not a discipline anyone has
+    // to remember: it is not expressible without editing this function.
+    disown_children();
+
+    let Some((program, rest)) = cmd.split_first() else {
+        tracing::warn!(what, "nothing to spawn — the command is empty");
+        return;
+    };
+    let mut command = std::process::Command::new(program);
+    command.args(rest).env("WAYLAND_DISPLAY", socket);
+
+    // SAFETY: `pre_exec` runs in the forked child between `fork` and `exec`,
+    // where only async-signal-safe calls are legal. `signal(2)` is on that
+    // list, it allocates nothing, and it touches no memory shared with the
+    // parent. This is the narrowest possible closure for that reason.
+    unsafe {
+        use std::os::unix::process::CommandExt as _;
+        command.pre_exec(|| {
+            // ★ Hand the child a CLEAN disposition. Without this line the
+            // child inherits our SIG_IGN and its own `waitpid` returns ECHILD
+            // forever — see the header. `SIG_DFL` is what a process started
+            // from a shell would have.
+            libc::signal(libc::SIGCHLD, libc::SIG_DFL);
+            Ok(())
+        });
+    }
+
+    match command.spawn() {
+        // ★ The `Child` is DROPPED immediately and deliberately. Holding it
+        // would imply an intent to wait; with SIGCHLD ignored there is nothing
+        // to wait for, and a handle nobody waits on is exactly the shape that
+        // produced the leak this module exists to remove.
+        Ok(child) => tracing::info!(pid = child.id(), program, what, "spawned into the seat"),
+        // Not fatal, and that is a decision: a seat whose first client fails
+        // is still a working seat, and exiting here would make a typo in a
+        // command look like the compositor crashing.
+        Err(e) => tracing::error!(error = %e, program, what, "spawn failed"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Strip comments so a gate reads CODE, not prose.
+    ///
+    /// ★ Both scanners below caught this module's own doc comment on their
+    /// first run — the header explains the rule using the very tokens the
+    /// rule forbids ("a future `.wait()` fails a test"), and a naive
+    /// `contains` cannot tell an explanation from a violation. That is the
+    /// classic source-scanning defect, and the honest fix is to narrow what
+    /// is scanned rather than to special-case this file and leave every other
+    /// file's comments able to trip it.
+    ///
+    /// Cuts each line at `//`. A `//` inside a string literal (a URL) also
+    /// truncates that line — accepted, because none of the scanned patterns
+    /// can appear inside a URL, and the failure direction is a false NEGATIVE
+    /// on one line rather than a false accusation.
+    #[cfg(test)]
+    fn code_only(text: &str) -> String {
+        text.lines()
+            .map(|l| l.split("//").next().unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// ★ THE INVARIANT, EXERCISED AGAINST THE KERNEL RATHER THAN ASSERTED.
+    ///
+    /// Spawns a process that exits immediately, waits past its death, and
+    /// asserts that no zombie exists. Without `disown_children` this test
+    /// fails — which is what makes it a test of the mechanism rather than a
+    /// restatement of the intention.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn a_dead_child_does_not_become_a_zombie() {
+        disown_children();
+
+        let child = std::process::Command::new("/bin/sh")
+            .args(["-c", "exit 0"])
+            .spawn();
+        let Ok(child) = child else {
+            // No /bin/sh on this host — the mechanism is untestable here, and
+            // saying so beats passing silently.
+            eprintln!("NOTE: no /bin/sh — the zombie invariant is untested on this host");
+            return;
+        };
+        let pid = child.id();
+        drop(child);
+
+        // The kernel reaps asynchronously; give it a bounded window rather
+        // than racing it. 2s is ~1000x the observed reap latency and still
+        // bounded, so a genuine regression fails rather than hanging.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"));
+            match stat {
+                // Gone entirely — reaped, which is the pass condition.
+                Err(_) => return,
+                Ok(s) => {
+                    // Field 3 is the state character. A `Z` here is the exact
+                    // defect: the process is dead and still occupying a PID.
+                    let is_zombie = s
+                        .rsplit(')')
+                        .next()
+                        .and_then(|rest| rest.split_whitespace().next())
+                        .is_some_and(|state| state == "Z");
+                    assert!(
+                        !(is_zombie && std::time::Instant::now() > deadline),
+                        "pid {pid} is still a zombie after 2s — SIGCHLD is not \
+                         SIG_IGN, so every client this seat starts will leak a PID"
+                    );
+                    if std::time::Instant::now() > deadline {
+                        return; // alive but not a zombie: fine, and not our case
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+            }
+        }
+    }
+
+    /// ★ THE PRECONDITION THAT MAKES DISOWNING SAFE, PINNED AS A TEST.
+    ///
+    /// Ignoring SIGCHLD costs the ability to `wait`. That is only free because
+    /// nothing in this crate waits for a child. A future `.wait()` or
+    /// `waitpid` would silently receive `ECHILD` and be read as "the child
+    /// vanished" — a bug with no error message.
+    ///
+    /// Source-scanning is the only way to assert a whole-crate absence, so
+    /// this reads the crate's own files. It deliberately cuts at the first
+    /// `#[cfg(test)]` so it does not match ITSELF — the trap a source-scanning
+    /// test falls into by default.
+    #[test]
+    fn no_call_site_waits_for_a_child() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut offenders = Vec::new();
+        let mut scanned = 0usize;
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            panic!("cannot read {}", dir.display());
+        };
+        for e in entries.flatten() {
+            let path = e.path();
+            if path.extension().is_none_or(|x| x != "rs") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            scanned += 1;
+            // Only the non-test half of each file: a test may legitimately
+            // wait on a child it created for its own purposes.
+            let body = code_only(text.split("#[cfg(test)]").next().unwrap_or(""));
+            for pat in ["waitpid(", ".wait()", "wait_with_output("] {
+                if body.contains(pat) {
+                    offenders.push(format!("{}: {pat}", path.display()));
+                }
+            }
+        }
+        // Denominator inside the assertion: a scan that found no files would
+        // otherwise pass by finding no offenders.
+        assert!(
+            scanned >= 10,
+            "only scanned {scanned} files — the walk broke"
+        );
+        assert!(
+            offenders.is_empty(),
+            "this crate disowns its children (SIGCHLD = SIG_IGN), so these \
+             waits can only ever return ECHILD: {offenders:?}"
+        );
+    }
+
+    /// ★ THE INVARIANT'S OTHER HALF: THIS IS THE ONLY FILE THAT MAY SPAWN.
+    ///
+    /// `disown_children` protects every child of this process — but only
+    /// children of THIS process. The guarantee is therefore worth exactly as
+    /// much as the claim that no other file constructs one, and that claim was
+    /// FALSE before this module existed: `deed.rs` and `main.rs` each had their
+    /// own `Command::new(...).spawn()`, differing only in a log line.
+    ///
+    /// Two spawn paths mean the invariant holds on whichever one somebody
+    /// remembered. This test makes a third one fail the build instead.
+    ///
+    /// It scans the crate's own source, cutting each file at its first
+    /// `#[cfg(test)]` — a test may legitimately spawn a helper — and skipping
+    /// this file, which is the sanctioned home.
+    #[test]
+    fn only_this_module_constructs_a_process() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut offenders = Vec::new();
+        let mut scanned = 0usize;
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            panic!("cannot read {}", dir.display());
+        };
+        for e in entries.flatten() {
+            let path = e.path();
+            if path.extension().is_none_or(|x| x != "rs") {
+                continue;
+            }
+            // This module IS the sanctioned spawn path.
+            if path.file_name().is_some_and(|n| n == "spawn.rs") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            scanned += 1;
+            let body = code_only(text.split("#[cfg(test)]").next().unwrap_or(""));
+            if body.contains("Command::new") {
+                offenders.push(path.display().to_string());
+            }
+        }
+        // ★ The denominator lives INSIDE the assertion. Without it, a change
+        // that broke the directory walk would report zero offenders and go
+        // green while checking nothing — the vacuity this fleet keeps meeting.
+        assert!(
+            scanned >= 10,
+            "only scanned {scanned} files — the walk broke, so finding no \
+             offenders proves nothing"
+        );
+        assert!(
+            offenders.is_empty(),
+            "these files construct a process outside `spawn::into_seat`, so the \
+             kernel-level zombie guarantee does not cover what they start — \
+             route them through `spawn::into_seat`: {offenders:?}"
+        );
+    }
+
+    /// ★ THE CHILD MUST NOT INHERIT OUR SIG_IGN — the trap in the header,
+    /// exercised through the real `into_seat`, not a reconstruction of it.
+    ///
+    /// `/proc/<pid>/status` publishes `SigIgn` as a hex bitmask, bit `n-1` per
+    /// signal. SIGCHLD is 17, so the bit is `1 << 16`. Reading it from a child
+    /// is a direct measurement of what it inherited.
+    ///
+    /// The child writes to a FILE rather than a pipe, and the parent polls for
+    /// it, because the obvious `Command::output()` calls `waitpid` — which is
+    /// precisely what this module has made impossible in this process. A test
+    /// that waits would fail with ECHILD for the right reason and look like
+    /// the wrong one.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn a_child_does_not_inherit_the_ignored_sigchld() {
+        const SIGCHLD_BIT: u64 = 1 << 16; // signal 17, bit n-1
+
+        disown_children();
+
+        // ★ Non-vacuity, measured rather than assumed: the PARENT must have
+        // the bit set. If it does not, `disown_children` did nothing and a
+        // clean child would pass this test while proving nothing at all.
+        let parent = read_sig_ign("self").expect("cannot read our own SigIgn");
+        assert!(
+            parent & SIGCHLD_BIT != 0,
+            "parent SigIgn={parent:#x} lacks SIGCHLD — disown_children did not \
+             take effect, so this test cannot distinguish a clean child from a \
+             broken measurement"
+        );
+
+        let out = std::env::temp_dir().join(format!("omoya-sigign-{}", std::process::id()));
+        let _ = std::fs::remove_file(&out);
+        let cmd = vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            format!("grep ^SigIgn: /proc/self/status > {}", out.display()),
+        ];
+        into_seat(
+            &cmd,
+            std::ffi::OsStr::new("omoya-test"),
+            "sigchld inheritance probe",
+        );
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let child = loop {
+            if let Ok(text) = std::fs::read_to_string(&out)
+                && let Some(v) = parse_sig_ign(&text)
+            {
+                break v;
+            }
+            if std::time::Instant::now() > deadline {
+                // No /bin/sh, or a host where the probe cannot run. Say so
+                // rather than passing quietly on no evidence.
+                eprintln!("NOTE: the child probe never produced output — inheritance untested");
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        let _ = std::fs::remove_file(&out);
+
+        assert!(
+            child & SIGCHLD_BIT == 0,
+            "the child inherited our ignored SIGCHLD (SigIgn={child:#x}). Every \
+             program this seat launches would then get ECHILD from its own \
+             waitpid — mado could not reap its shell, tobira could not track \
+             what it launched — and it would present as flakiness in the CHILD \
+             with nothing pointing back here. The `pre_exec` SIG_DFL reset in \
+             `into_seat` is what prevents it."
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    fn read_sig_ign(who: &str) -> Option<u64> {
+        parse_sig_ign(&std::fs::read_to_string(format!("/proc/{who}/status")).ok()?)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn parse_sig_ign(text: &str) -> Option<u64> {
+        let line = text.lines().find(|l| l.starts_with("SigIgn:"))?;
+        u64::from_str_radix(line.split_whitespace().nth(1)?, 16).ok()
+    }
+}

@@ -114,6 +114,12 @@ zvariant = "5"
 # libinput.so.10 and libudev.so.1, neither of which computes anything the
 # kernel does not already provide through /dev/input and /sys.
 evdev = "0.13"
+
+# ★ The zombie invariant (see `src/spawn.rs`). Setting SIGCHLD to SIG_IGN is a
+# kernel-level guarantee that a dead child cannot become a corpse, and `libc`
+# is the only way to reach a signal disposition from Rust. Already in the
+# lockfile transitively, so this adds no closure — only a name to call it by.
+libc = "0.2"
 # The pleme-io software rasterizer — zero dependencies, replaces libpixman.
 nuri = { path = "../nuri", version = "0.1.0" }
 thiserror.workspace = true

@@ -37,6 +37,7 @@ mod placement;
 mod remap;
 mod rouka;
 mod scanout;
+mod spawn;
 mod stale;
 mod state;
 mod synth;
@@ -728,6 +729,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing_subscriber::fmt().init();
     }
 
+    // ★ INSTALLED BEFORE ANYTHING CAN BE SPAWNED, and that ordering is the
+    // whole point: this makes a zombie child impossible to FORM rather than
+    // something to clean up later. A seat is long-lived — the operator's
+    // session runs for days — so an unreaped child per launcher invocation is
+    // an unbounded PID leak on the one process that must never run out.
+    // Measured on plo 2026-09-03: three `.tobira-wrapped` corpses. See
+    // `crate::spawn` for the kernel contract and why waiting is not lost here.
+    //
+    // `spawn::into_seat` installs this too, so our OWN spawns are covered with
+    // or without this line. It is here for what this line alone covers: a
+    // child started by a LIBRARY before the seat spawns anything of its own.
+    spawn::disown_children();
+
     // ★ The introspection sidecar, spawned BEFORE either backend runs so an
     // agent can observe a seat that is failing to come up — which is exactly
     // when observation matters and exactly when a late-registered surface is
@@ -1083,20 +1097,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    if let Some(cmd) = args.spawn
-        && let Some((program, rest)) = cmd.split_first()
-    {
-        match std::process::Command::new(program)
-            .args(rest)
-            .env("WAYLAND_DISPLAY", &socket)
-            .spawn()
-        {
-            Ok(child) => tracing::info!(pid = child.id(), program, "spawned into the seat"),
-            // Deliberately NOT fatal: a compositor whose first client fails to
-            // start is still a working compositor, and exiting here would make
-            // a typo in the command look like omoya crashing.
-            Err(e) => tracing::error!(program, error = %e, "could not spawn"),
-        }
+    if let Some(cmd) = args.spawn {
+        // ★ ONE spawn path — `crate::spawn` owns process construction so the
+        // kernel-level zombie guarantee covers every client, not just the ones
+        // whose call site remembered. The not-fatal-on-failure decision moved
+        // there with it.
+        spawn::into_seat(&cmd, &socket, "startup client");
     }
 
     // ── ★ FLUSH AFTER EVERY DISPATCH. THIS IS WHERE TYPING WAS LOST. ────

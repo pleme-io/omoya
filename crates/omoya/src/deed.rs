@@ -749,17 +749,9 @@ impl crate::state::Omoya {
             tracing::warn!("{absent}");
             return;
         };
-        let Some((program, rest)) = cmd.split_first() else {
-            return;
-        };
-        match std::process::Command::new(program)
-            .args(rest)
-            .env("WAYLAND_DISPLAY", &self.socket_name)
-            .spawn()
-        {
-            Ok(child) => tracing::info!(pid = child.id(), program, what, "spawned into the seat"),
-            Err(e) => tracing::error!(error = %e, program, what, "spawn failed"),
-        }
+        // ★ ONE spawn path, so the "no zombie can form" guarantee installed at
+        // startup covers everything this seat starts. See `crate::spawn`.
+        crate::spawn::into_seat(&cmd, &self.socket_name, what);
     }
 }
 
