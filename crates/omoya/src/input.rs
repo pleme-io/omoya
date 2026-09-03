@@ -306,6 +306,106 @@ impl Omoya {
         // omoya's own, not smithay's — and it is the smallest possible
         // amount of it that makes the seat usable.
         if ButtonState::Pressed == button_state && !pointer.is_grabbed() {
+            // ── ★ HOISTED OUT OF THE `element_under` GUARD (2026-09-03) ──
+            //
+            // This block used to sit INSIDE `if let Some(..) = element_under(..)`,
+            // which it can never satisfy: the bar is drawn ABOVE the content
+            // (`chrome::bar_rect`), is a `MemoryRenderBufferRenderElement` rather
+            // than a `wl_surface`, and so is in no bbox and no input region.
+            // smithay's `element_under` filters on exactly those, so a click on a
+            // titlebar over bare desktop returned `None` and the whole handler was
+            // skipped — close, minimize, maximize AND drag, all of them, always.
+            //
+            // ★ IT APPEARED TO WORK ONLY BY ACCIDENT OF OVERLAP. plo's
+            // `cascade_step` is 24 and `chrome::HEIGHT` is 24, so window N's bar
+            // lands exactly on window N-1's first content row; `element_under`
+            // then returned N-1 and the scan below found N's bar. The BOTTOM
+            // window — the one the seat opens with — has empty desktop under its
+            // bar and was completely inert. That is precisely the operator's
+            // report: the launcher could be dragged, the startup mado could not.
+            //
+            // The comment below already stated the rule this violated. It was
+            // written correctly and then placed inside the guard it forbids.
+            // ── ★ THE TITLEBAR: WHERE THE MOUSE CAN NOW GO ───────────────
+            //
+            // Hit-tested BEFORE the Super+drag path and before focus,
+            // because a click on the chrome is never a click on the
+            // client — the bar is the compositor's own surface and the
+            // window beneath must not also see it.
+            //
+            // Geometry comes from `chrome`, the same module the renderer
+            // draws from, so a button responds exactly where it is drawn.
+            //
+            // ★ `element_under` finds a window by its CONTENT rect, and
+            // the bar is ABOVE that — outside it. So the chrome is
+            // hit-tested over every window in the space rather than only
+            // the one under the pointer, or the bar would be unclickable
+            // for the very reason it is visible.
+            // The same floating-only guard the renderer and the layout
+            // carry. A click that hit chrome nobody drew would be a
+            // window closing because the operator clicked empty desktop.
+            if button == 0x110 && self.config.layout.mode == crate::config::LayoutMode::Floating {
+                let p = pointer.current_location();
+                // ★ `.rev()` — FRONT TO BACK. `Space::elements()` yields
+                // back-to-front (smithay's own doc) and `find_map` takes the
+                // FIRST match, so without this the BOTTOM window wins wherever
+                // two bars overlap — and at `cascade_step == chrome::HEIGHT`
+                // they overlap constantly. Clicking the visible top window's
+                // close button would close the one behind it.
+                let chrome_hit = self.space.elements().rev().find_map(|w| {
+                    let geo = self.space.element_geometry(w)?;
+                    crate::chrome::hit(geo, p).map(|h| (w.clone(), geo, h))
+                });
+                if let Some((w, geo, what)) = chrome_hit {
+                    self.space.raise_element(&w, true);
+                    // ★ FOCUS FIRST, THEN DELEGATE TO THE DEED. The three
+                    // buttons are the SAME verbs as Logo+Q / Logo+M /
+                    // Logo+F, and every one of those acts on the focused
+                    // window. Re-implementing them here would be two
+                    // implementations of one verb, free to diverge — the
+                    // shape where "the button does something subtly
+                    // different from the shortcut" comes from. Focusing
+                    // the clicked window first makes "act on focus" and
+                    // "act on what I clicked" the same statement.
+                    keyboard.set_focus(self, w.toplevel().map(|t| t.wl_surface().clone()), serial);
+                    match what {
+                        crate::chrome::Hit::Close => {
+                            self.perform(crate::deed::Deed::Close);
+                        }
+                        crate::chrome::Hit::Minimize => {
+                            self.perform(crate::deed::Deed::Minimize);
+                        }
+                        crate::chrome::Hit::Maximize => {
+                            self.perform(crate::deed::Deed::ToggleMaximize);
+                        }
+                        crate::chrome::Hit::Drag => {
+                            #[allow(clippy::cast_possible_truncation)]
+                            let offset =
+                                smithay::utils::Point::<i32, smithay::utils::Logical>::from((
+                                    geo.loc.x - p.x as i32,
+                                    geo.loc.y - p.y as i32,
+                                ));
+                            let start_data = smithay::input::pointer::GrabStartData {
+                                focus: None,
+                                button,
+                                location: p,
+                            };
+                            pointer.set_grab(
+                                self,
+                                crate::grab::MoveGrab {
+                                    start_data,
+                                    window: w.clone(),
+                                    offset,
+                                },
+                                serial,
+                                smithay::input::pointer::Focus::Clear,
+                            );
+                        }
+                    }
+                    return;
+                }
+            }
+
             if let Some((window, _loc)) = self
                 .space
                 .element_under(pointer.current_location())
@@ -325,84 +425,6 @@ impl Omoya {
                 // cooperation, so it works for every toplevel including ones
                 // with server-side decorations and ones that implement no move
                 // protocol at all.
-                // ── ★ THE TITLEBAR: WHERE THE MOUSE CAN NOW GO ───────────────
-                //
-                // Hit-tested BEFORE the Super+drag path and before focus,
-                // because a click on the chrome is never a click on the
-                // client — the bar is the compositor's own surface and the
-                // window beneath must not also see it.
-                //
-                // Geometry comes from `chrome`, the same module the renderer
-                // draws from, so a button responds exactly where it is drawn.
-                //
-                // ★ `element_under` finds a window by its CONTENT rect, and
-                // the bar is ABOVE that — outside it. So the chrome is
-                // hit-tested over every window in the space rather than only
-                // the one under the pointer, or the bar would be unclickable
-                // for the very reason it is visible.
-                // The same floating-only guard the renderer and the layout
-                // carry. A click that hit chrome nobody drew would be a
-                // window closing because the operator clicked empty desktop.
-                if button == 0x110 && self.config.layout.mode == crate::config::LayoutMode::Floating
-                {
-                    let p = pointer.current_location();
-                    let chrome_hit = self.space.elements().find_map(|w| {
-                        let geo = self.space.element_geometry(w)?;
-                        crate::chrome::hit(geo, p).map(|h| (w.clone(), geo, h))
-                    });
-                    if let Some((w, geo, what)) = chrome_hit {
-                        self.space.raise_element(&w, true);
-                        // ★ FOCUS FIRST, THEN DELEGATE TO THE DEED. The three
-                        // buttons are the SAME verbs as Logo+Q / Logo+M /
-                        // Logo+F, and every one of those acts on the focused
-                        // window. Re-implementing them here would be two
-                        // implementations of one verb, free to diverge — the
-                        // shape where "the button does something subtly
-                        // different from the shortcut" comes from. Focusing
-                        // the clicked window first makes "act on focus" and
-                        // "act on what I clicked" the same statement.
-                        keyboard.set_focus(
-                            self,
-                            w.toplevel().map(|t| t.wl_surface().clone()),
-                            serial,
-                        );
-                        match what {
-                            crate::chrome::Hit::Close => {
-                                self.perform(crate::deed::Deed::Close);
-                            }
-                            crate::chrome::Hit::Minimize => {
-                                self.perform(crate::deed::Deed::Minimize);
-                            }
-                            crate::chrome::Hit::Maximize => {
-                                self.perform(crate::deed::Deed::ToggleMaximize);
-                            }
-                            crate::chrome::Hit::Drag => {
-                                #[allow(clippy::cast_possible_truncation)]
-                                let offset =
-                                    smithay::utils::Point::<i32, smithay::utils::Logical>::from((
-                                        geo.loc.x - p.x as i32,
-                                        geo.loc.y - p.y as i32,
-                                    ));
-                                let start_data = smithay::input::pointer::GrabStartData {
-                                    focus: None,
-                                    button,
-                                    location: p,
-                                };
-                                pointer.set_grab(
-                                    self,
-                                    crate::grab::MoveGrab {
-                                        start_data,
-                                        window: w.clone(),
-                                        offset,
-                                    },
-                                    serial,
-                                    smithay::input::pointer::Focus::Clear,
-                                );
-                            }
-                        }
-                        return;
-                    }
-                }
 
                 let logo_held = keyboard.modifier_state().logo;
                 if logo_held && button == 0x110 {
@@ -619,5 +641,61 @@ impl Omoya {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod chrome_reachability_tests {
+    /// ★ THE BUG THIS PINS: the chrome handler was UNREACHABLE, not wrong.
+    ///
+    /// Every piece of titlebar logic — `chrome::hit`, the Close/Minimize/
+    /// Maximize dispatch, and the `Hit::Drag` → `MoveGrab` — sat inside
+    /// `if let Some(..) = self.space.element_under(..)`. That guard can never
+    /// hold for a titlebar click: the bar is drawn ABOVE the content
+    /// (`chrome::bar_rect`), is a render element rather than a `wl_surface`,
+    /// and so is in no bbox and no input region — which is exactly what
+    /// smithay's `element_under` filters on.
+    ///
+    /// It LOOKED like it worked because plo's `cascade_step` (24) equals
+    /// `chrome::HEIGHT` (24), so window N's bar lands on window N-1's content
+    /// and the scan found it by accident. The bottom window — the one the
+    /// seat opens with — had bare desktop under its bar and was fully inert.
+    ///
+    /// ── ★ WHY THIS IS A SOURCE-ORDER TEST AND NOT A BEHAVIOURAL ONE ──────
+    /// `chrome::hit` was always correct in isolation and is unit-tested as
+    /// such; no test of it could have caught this, because the defect was
+    /// that nothing CALLED it. The invariant that was actually violated is an
+    /// ordering one — chrome must be hit-tested BEFORE, and outside, the
+    /// client-surface lookup — and that is what this asserts.
+    #[test]
+    fn chrome_is_hit_tested_before_the_client_surface_lookup() {
+        let src = include_str!("input.rs");
+        // Cut at the first `#[cfg(test)]` and strip comments, so this test
+        // does not match its own prose. Three separate gates fell into that
+        // trap in this repo on one day; it is the default behaviour of the
+        // technique, not bad luck.
+        let code: String = src
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap_or("")
+            .lines()
+            .map(|l| l.split("//").next().unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let chrome = code
+            .find("chrome_hit")
+            .expect("the chrome hit-test must exist in this file");
+        let under = code
+            .find("element_under")
+            .expect("the client-surface lookup must exist in this file");
+
+        assert!(
+            chrome < under,
+            "the chrome hit-test appears AFTER `element_under` (byte {chrome} \
+             vs {under}), which means it is once again nested inside a guard a \
+             titlebar click can never satisfy. The bar is not a wl_surface; \
+             `element_under` cannot see it. Hoist the block back out."
+        );
     }
 }
