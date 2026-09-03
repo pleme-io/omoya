@@ -48,22 +48,21 @@ use smithay::utils::{Logical, Rectangle};
 ///
 /// Part of `shitsurai` (設え), the seat's visual design — see
 /// `docs/SHITSURAI.md`. Distances there come from a 4 px grid; a 7 or a 13
-/// ── ★ 4 IS A DECISION, NOT A DEFAULT — AND I BROKE IT ONCE ─────────────
-/// `docs/SHITSURAI.md` §3.2 argues this value: gap-between-windows is `GAP*2`
-/// = 8, and it records 16 as "the loudest maximalist tell at 1080p". The whole
-/// document is a minimalist position in the shitsurai tradition — arrange a
-/// room by choosing few things, placing them exactly, leaving the rest empty.
+/// ── ★ RAISED TO 12 ON 2026-09-03 AND REVERTED THE SAME DAY ─────────────
+/// An agent (me) raised this to 12 to answer "the look and feel is absolutely
+/// just bad", citing an external ricing guide, without having read the
+/// paragraph directly above — which had already considered and rejected
+/// exactly that direction, with the reason.
 ///
-/// On 2026-09-03 I raised this to 12 (a 24 px seam) to answer an operator's
-/// "the look and feel is absolutely just bad", citing an external ricing
-/// guide — without having read the doc that had already considered and
-/// rejected exactly that direction. Reverted here.
+/// The complaint was real; the diagnosis was wrong. Measured afterwards: the
+/// desktop ground, every mado window and tobira all paint the byte-identical
+/// #2E3440, a 1.00:1 contrast collision. Nothing on screen has an edge, and
+/// no amount of empty space between two surfaces of the same colour creates
+/// one. SwayFX and niri both ship with every effect OFF and read well on a
+/// gap plus a coloured focus ring — the gap was never the variable.
 ///
-/// The operator's complaint is real and the doctrine may genuinely need to
-/// move; plo runs FLOATING mode now, and several of shitsurai's rejections
-/// are explicitly conditioned on omoya being a tiler (see §5.5 on corner
-/// radius). But that is a doctrine decision to argue in the document, not a
-/// constant to quietly edit.
+/// See docs/LOOK-AND-FEEL-PLAN.md. If this value ever moves it moves as a
+/// `(defface)`-backed token with a consumer, not as a constant someone edits.
 pub const GAP: i32 = 4;
 
 /// How thick the focused window's border is.
