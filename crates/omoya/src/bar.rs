@@ -272,6 +272,16 @@ pub struct BarState {
     /// and with no indicator the group cannot be discovered at all, which
     /// makes `Logo+Tab` indistinguishable from an unbound chord.
     pub tab: Option<(usize, usize)>,
+    /// Machine state the seat cannot show: battery and physical connectivity.
+    ///
+    /// ★ A SNAPSHOT, taken from a background reader — never read here. A
+    /// sysfs battery query can block on a slow ACPI driver, and doing that on
+    /// the compositor tick puts it between the operator's keystroke and the
+    /// screen (QUADRO: an inline poll wedges the thing it decorates).
+    ///
+    /// `Default` is all-absent, which renders nothing — so a seat whose
+    /// reader has not published yet shows no indicator rather than a zero.
+    pub readings: crate::bar_modules::Readings,
 }
 
 /// The clock, and whether it is telling the truth about its zone.
@@ -483,15 +493,19 @@ pub fn rasterize_h(state: &BarState, width: i32, height: i32) -> Option<Vec<u8>>
     // different bitmaps and defeat the "re-rasterize only when text changed"
     // rule that `wanted != bar_text` implements.
     {
-        let mut parts: Vec<String> = Vec::new();
-        // Tabs first, then hidden — focused-window state before seat-wide
-        // state, which is the same left-to-right specificity the parcels use.
-        if let Some((idx, total)) = state.tab {
-            parts.push(format!("{idx}/{total}"));
-        }
-        if state.hidden > 0 {
-            parts.push(format!("{} hidden", state.hidden));
-        }
+        // ★ A FOLD OVER A CLOSED CATALOG, NOT A RUN OF `if let`s.
+        //
+        // This was two straight-line branches. Waybar ships ~30 modules and
+        // the plan forbids hand-drawing the fourth, so ordering, specificity
+        // and "what earns this space" all live in `bar_modules`, gated by a
+        // matrix that fails the build when a variant lands without a row.
+        // Adding battery and network here is now a variant, not an edit to
+        // this function.
+        let parts: Vec<String> =
+            crate::bar_modules::render_all(state.readings, state.tab, state.hidden)
+                .into_iter()
+                .map(|(_, text)| text)
+                .collect();
         if !parts.is_empty() {
             let text = parts.join("   ");
             let tw = measure(font, &text);
@@ -628,6 +642,9 @@ mod tests {
             tab: None,
             parcels: (0..n).map(|i| Some(i) == focused).collect(),
             clock: Clock::Local("14:22".into()),
+            // A healthy machine: nothing for the right zone to say. Tests that
+            // want a module to speak set this explicitly.
+            readings: crate::bar_modules::Readings::default(),
         }
     }
 

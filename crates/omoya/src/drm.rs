@@ -679,6 +679,11 @@ where
         smithay::backend::renderer::element::memory::MemoryRenderBuffer,
     )> = Vec::new();
 
+    // ★ Started ONCE, here, beside the bar's own state — not per frame and
+    // not per tick. It publishes a snapshot every 10 s from a background
+    // thread; the render path only ever reads it. See `bar_modules`.
+    let bar_readings = crate::bar_modules::start_reader(std::path::PathBuf::from("/sys"));
+
     let mut bar_text = crate::bar::BarState::default();
     let mut bar_buffer: Option<smithay::backend::renderer::element::memory::MemoryRenderBuffer> =
         None;
@@ -1109,11 +1114,17 @@ where
                     .focused_surface_id()
                     .and_then(|id| data.state.windows.position_in_group(id))
                     .map(|(idx, total)| (idx + 1, total));
+                // A poisoned lock means the reader thread panicked. That is
+                // a reason to lose battery and network, never a reason to
+                // stop drawing the bar — so it degrades to absent readings,
+                // which render as nothing.
+                let readings = bar_readings.lock().map(|g| *g).unwrap_or_default();
                 let wanted = crate::bar::BarState {
                     parcels,
                     clock,
                     hidden,
                     tab,
+                    readings,
                 };
                 if wanted != bar_text || bar_buffer.is_none() {
                     let bar_h = data.state.config.bar.height;

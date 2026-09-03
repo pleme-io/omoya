@@ -14,6 +14,7 @@
 //! question worth answering first — *can omoya composite at all?*
 
 mod bar;
+mod bar_modules;
 mod chord;
 mod chrome;
 mod config;
