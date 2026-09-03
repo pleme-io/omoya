@@ -27,6 +27,36 @@ fn srgb_to_linear(byte: u8) -> f32 {
         ((c + 0.055) / 1.055).powf(2.4)
     }
 }
+/// The compositor's GROUND, resolved through the fleet's `desktop` role.
+///
+/// ── ★ WHY THIS IS NOT `polar_night[0]` ANY MORE ──────────────────────────
+/// It was, and that was the single measured cause of the seat looking bad.
+/// `polar_night[0]` is what an APPLICATION paints as its background — mado
+/// paints it, tobira paints it — so the compositor painting the same value
+/// gave the desktop and every window on it a **1.00:1** contrast ratio. No
+/// window had an edge. Measured live on plo 2026-09-03; the operator's words
+/// were "the look and feel is absolutely just bad", and this was why.
+///
+/// Nord names no compositor/desktop-root role at all — its whole model is one
+/// application — so `ishou_tokens::SemanticRoles` grew a `desktop` role for
+/// the question Nord does not answer. Under `pleme` it resolves to
+/// `shadow_tone` #141822, which sits 1.421:1 below `polar_night_0` against
+/// the 1.448:1 that `polar_night_0` sits below `polar_night_2`: ground →
+/// window → chrome is an even elevation ladder.
+///
+/// ★ No hex here, and none in nix. The value is the palette's, reached
+/// through the role — so re-theming the fleet moves the seat with it, and a
+/// second table has nowhere to live.
+fn ground() -> irodori::Color {
+    let roles = ishou_tokens::SemanticRoles::pleme_dark();
+    let palette = ishou_tokens::ColorPalette::pleme();
+    // A role that cannot resolve is a fleet defect caught by ishou-tokens'
+    // own gate, not something to panic a compositor over mid-frame. Falling
+    // back to the old ground keeps the seat drawable and merely un-improved.
+    palette
+        .get(roles.desktop)
+        .map_or(NORD.polar_night[0], |c| irodori::Color::new(c.r, c.g, c.b))
+}
 
 /// The seat's background as LINEAR RGBA — for a framebuffer whose format is
 /// itself sRGB-encoded, where the GPU performs the linear→sRGB conversion on
@@ -36,7 +66,7 @@ fn srgb_to_linear(byte: u8) -> f32 {
 /// [`background_for_surface`] — read it before using this.
 #[must_use]
 pub fn background_linear() -> [f32; 4] {
-    let c = NORD.polar_night[0];
+    let c = ground();
     [
         srgb_to_linear(c.r),
         srgb_to_linear(c.g),
@@ -49,7 +79,7 @@ pub fn background_linear() -> [f32; 4] {
 /// NOT sRGB-encoded, where whatever we write lands in the pixel unconverted.
 #[must_use]
 pub fn background_srgb() -> [f32; 4] {
-    let c = NORD.polar_night[0];
+    let c = ground();
     [
         f32::from(c.r) / 255.0,
         f32::from(c.g) / 255.0,
@@ -238,16 +268,28 @@ mod tests {
         // Rendering Nord0 correctly on that surface means writing 46/52/64
         // straight through — so this test asserts the bytes that come back out
         // of a screenshot, which is the only place the bug was ever visible.
+        // ★ (20,24,34) since 2026-09-03, not Nord0's (46,52,64): the ground
+        // resolves through the fleet `desktop` role now, so the compositor no
+        // longer paints the same plane its clients do. The encoding question
+        // this test guards is unchanged — only which colour is being encoded.
         let [r, g, b, a] = background_for_surface(false);
         let byte = |f: f32| (f * 255.0).round() as u8;
-        assert_eq!((byte(r), byte(g), byte(b)), (46, 52, 64));
+        assert_eq!((byte(r), byte(g), byte(b)), (20, 24, 34));
         assert!((a - 1.0).abs() < f32::EPSILON);
 
         // And the wrong answer is genuinely the observed one — this asserts the
         // BUG reproduces from the code, so a future refactor that reintroduces
         // it fails here rather than in a screenshot nobody takes.
+        //
+        // ★ MEASURED 2026-09-03, AND THE STAKES ROSE. Nord0 mis-encoded gave
+        // (7,9,13), which was reported as "a blank black screen". The new
+        // ground mis-encoded gives (2,2,4) — that is not merely darker, it is
+        // indistinguishable from black on any panel. Deepening the ground made
+        // this encoding bug strictly more dangerous, and the value below is
+        // the receipt for that, not a number someone refreshed to make a test
+        // pass.
         let [lr, lg, lb, _] = background_for_surface(true);
-        assert_eq!((byte(lr), byte(lg), byte(lb)), (7, 9, 13));
+        assert_eq!((byte(lr), byte(lg), byte(lb)), (2, 2, 4));
     }
 
     #[test]

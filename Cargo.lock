@@ -1079,9 +1079,9 @@ dependencies = [
 
 [[package]]
 name = "ishou-tokens"
-version = "0.1.15"
+version = "0.1.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d1b0a9df497f745e442e996cb7c5444f587335cce4d2a4c9c44616ae08e64824"
+checksum = "e6c1825fa9cb726fc72478c6d2b1eab2e072d3563a09acd478ec4d4bdeb7a6be"
 dependencies = [
  "irodori 0.1.1",
  "serde",

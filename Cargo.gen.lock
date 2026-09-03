@@ -1,12 +1,12 @@
 {
   "schema_version": 2,
-  "cargo_lock_sha256": "f2cb5807491f3f6eb780f3f14745ad3b7e779b9928545275be013a69d6a56918",
+  "cargo_lock_sha256": "c7d8e4b23987c29d2dbd1dc3fe10e455eddd70d882267acf04ee4fe22e224493",
   "manifest_sha256": {
     "Cargo.toml": "a7f136d8c1d091e0b5325a6339c6874497b5c2373db6a22930049d603023ad12",
     "crates/hairetsu/Cargo.toml": "67a784b3f0dc716e74f9257bed09bef7c637618269586ecf20b1ff223114b0da",
     "crates/nuri/Cargo.toml": "3116435ecbd4619097d2879f5a26924834f5550aa4c732e667c3617e28d2865d",
     "crates/omoya-spec/Cargo.toml": "75cd6d31f2ef617df89556610445abab8cf9cddb49d7bbf04c28ac5b7fc89031",
-    "crates/omoya/Cargo.toml": "79aaa9f5f11878fd92af40dfc76bd10fa0727b7e75e25986430f041ab8814b4f",
+    "crates/omoya/Cargo.toml": "26f6c7bdd6c61c5f6dbbc59340b5475cc6f561ecff4d3247825fa268021f971d",
     "crates/xkbcommon-hairetsu/Cargo.toml": "47e976fa1c8c185b17a5c2ced9fcec14a3fa5521a7bc9c046f3d23cf94af19b2"
   },
   "target_resolves": {
@@ -2277,7 +2277,7 @@
         "build_dependencies": [],
         "features": []
       },
-      "ishou-tokens-0.1.15": {
+      "ishou-tokens-0.1.17": {
         "runtime_dependencies": [
           {
             "name": "irodori",
@@ -2733,7 +2733,7 @@
           },
           {
             "name": "ishou_tokens",
-            "package_key": "ishou-tokens-0.1.15",
+            "package_key": "ishou-tokens-0.1.17",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -10101,7 +10101,7 @@
     "irodori-0.2.0": {
       "edition": "2024"
     },
-    "ishou-tokens-0.1.15": {
+    "ishou-tokens-0.1.17": {
       "edition": "2024"
     },
     "itoa-1.0.18": {

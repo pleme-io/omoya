@@ -66,7 +66,7 @@ irodori = "0.2"
 # key-repeat knobs cannot carry an out-of-band value. Adopted rather than
 # hand-clamped: the input-resilience rule names this crate explicitly, and a
 # fresh `if v > MAX` here is the thing it forbids.
-ishou-tokens = "0.1.15"
+ishou-tokens = "0.1.17"
 # The chord catalog. `Reserved::fleet_linux()` is what stops omoya swallowing
 # Ctrl+Alt+F1..F12 and soft-bricking the machine — see awase@ce7a52b.
 awase = "0.1.10"

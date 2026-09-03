@@ -66,35 +66,69 @@ const CELL: f32 = 20.0;
 // muted → emphasis, never emphasis → dim.
 
 /// The bar's own plane. One rung above the desktop ground.
+// ── ★ THE SIX ROLE FUNCTIONS ARE GONE — THEY WERE A SECOND SOURCE ────────
+//
+// This file used to hand-roll `role_surface`, `role_text_muted`, `role_text`,
+// `role_text_dim`, `role_primary` and `role_warning`, each returning a
+// `NORD.*` band directly. That re-derived `ishou_tokens::SemanticRoles`
+// band-for-band — and five of the six matched while **`warning` diverged**
+// (this file said `aurora[2]`, the fleet says `aurora_orange` = `aurora[1]`).
+//
+// A silent one-band drift is exactly what the comment a few lines up says
+// already cost this repo months on the accent. The fix is not to correct the
+// sixth constant; it is to stop having a second table. Every colour below now
+// resolves through the fleet's role binding, so a change there reaches this
+// bar by construction and a divergence has nowhere to live.
+//
+// PENTE §X: a phase's done-predicate is a DELETION. This is that deletion.
+
+/// Resolve a fleet semantic role to a colour.
+///
+/// One indirection, in one place: role name -> palette key -> tone. The role
+/// table and the palette are both the fleet's, so this function holds no
+/// colour knowledge of its own — which is the entire point of it existing.
+fn role(pick: fn(&ishou_tokens::SemanticRoles) -> &'static str) -> irodori::Color {
+    let roles = ishou_tokens::SemanticRoles::pleme_dark();
+    let palette = ishou_tokens::ColorPalette::pleme();
+    // A role that does not resolve is a fleet-level defect, not a per-frame
+    // one. Falling back to the palette's own background keeps the seat
+    // drawable rather than panicking a compositor mid-frame; the gate that
+    // catches the real case lives in ishou-tokens, where it can fail a build.
+    palette
+        .get(pick(&roles))
+        .map_or(NORD.polar_night[1], |c| irodori::Color::new(c.r, c.g, c.b))
+}
+
+/// The bar's ground.
 fn role_surface() -> irodori::Color {
-    NORD.polar_night[1] // nord1
+    role(|r| r.surface)
 }
 
 /// Body text. Everything the operator reads by default.
 fn role_text_muted() -> irodori::Color {
-    NORD.snow_storm[0] // nord4 — 7.45:1 on surface
+    role(|r| r.text_muted)
 }
 
 /// Emphasis. The one item in a group that has focus.
 fn role_text() -> irodori::Color {
-    NORD.snow_storm[2] // nord6 — 8.73:1 on surface
+    role(|r| r.text)
 }
 
 /// Structural hairlines and empty marks. **Never a label that must be read**
 /// — 1.36:1 on the bar's ground is legible in a screenshot and gone in
 /// daylight.
 fn role_text_dim() -> irodori::Color {
-    NORD.polar_night[3] // nord3
+    role(|r| r.text_dim)
 }
 
 /// The accent. Means "here", and nothing else, and appears at most twice.
 fn role_primary() -> irodori::Color {
-    NORD.frost[1] // nord8
+    role(|r| r.primary)
 }
 
 /// An honest degraded state — used when the seat cannot resolve a timezone.
 fn role_warning() -> irodori::Color {
-    NORD.aurora[2] // nord13
+    role(|r| r.warning)
 }
 
 /// The fleet's monospace face, found on disk rather than embedded.

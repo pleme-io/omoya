@@ -2143,14 +2143,26 @@ mod tests {
         // expectation, in writing, where a reader takes it for a measurement.
         //
         // DRM_FORMAT_ARGB8888 applies no conversion, so the bytes written must
-        // ALREADY be sRGB. Nord0 = #2E3440 = (46, 52, 64).
+        // ALREADY be sRGB.
+        //
+        // ★ THE EXPECTED VALUE CHANGED ON 2026-09-03 and the hazard got
+        // SHARPER, not milder. The ground is no longer Nord0 (46,52,64): it
+        // resolves through the fleet's `desktop` role to `shadow_tone`
+        // #141822 = (20,24,34), because a compositor painting the same value
+        // its clients paint gave every window a 1.00:1 edge.
+        //
+        // That makes the linear-vs-sRGB mistake WORSE. Nord0 mis-encoded gave
+        // (7,9,13) and was reported as "a blank black screen"; this ground
+        // mis-encoded is darker still. The assertion below is the only thing
+        // standing between that mistake and a seat nobody can see.
         let [r, g, b, _] = background();
         let byte = |f: f32| (f * 255.0).round() as u8;
         assert_eq!(
             (byte(r), byte(g), byte(b)),
-            (46, 52, 64),
-            "(7, 9, 13) is the linear encoding — the exact shade that got \
-             reported as a blank black screen"
+            (20, 24, 34),
+            "the linear encoding of this ground is darker than the (7,9,13) \
+             that was once reported as a blank black screen — if this fails \
+             with a near-zero triple, the encoding is inverted again"
         );
     }
 
