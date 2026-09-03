@@ -933,6 +933,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     data.state.config = cfg;
 
+    // The operator's repeat pair, applied now that the config exists.
+    //
+    // ★ `change_repeat_info` is the ONLY way to move this after the seat is
+    // built: `add_keyboard`'s pair is baked into the `KeyboardHandle` and
+    // re-adding a keyboard would replace the handle every client already
+    // holds. Clients learn the new pair through `wl_keyboard.repeat_info`,
+    // which smithay re-sends to each bound keyboard — so this is live for
+    // already-running clients, not only for ones spawned afterwards.
+    if let Some(kb) = data.state.seat.get_keyboard() {
+        let (delay, rate) = data.state.config.keyboard.smithay_repeat_info();
+        kb.change_repeat_info(rate, delay);
+        tracing::info!(delay_ms = delay, rate_hz = rate, "key repeat");
+    }
+
     if let Some(cmd) = args.spawn
         && let Some((program, rest)) = cmd.split_first()
     {

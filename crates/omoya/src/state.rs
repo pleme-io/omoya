@@ -318,11 +318,18 @@ impl Omoya {
         let popups = PopupManager::default();
 
         let mut seat: Seat<Self> = seat_state.new_wl_seat(&dh, "omoya");
-        // Repeat rate/delay: the fleet's, not the toolkit default. 25/600 is
-        // deliberately slower to repeat than a gaming default — a greeter
-        // repeating a held key into a password field is a hazard, and the
-        // typed answer (awase's `KeyRepeatGate`) lands with the entrance face.
-        seat.add_keyboard(Default::default(), 600, 25)
+        // Repeat rate/delay: the fleet's, not the toolkit default — and read
+        // from `KeyboardConfig` rather than written here, so the seat's
+        // startup value and `omoya config-show` cannot disagree.
+        //
+        // ★ This is the BARE tier's value, not the operator's. `config::load()`
+        // has not run yet at this point (see `main.rs`, which sets
+        // `state.config` after building the state), so a configured pair is
+        // applied a few lines later via `change_repeat_info`. The bare value
+        // is a working seat on purpose: an unparseable config must still leave
+        // a keyboard someone can fix it with.
+        let (delay, rate) = crate::config::KeyboardConfig::default().smithay_repeat_info();
+        seat.add_keyboard(Default::default(), delay, rate)
             .expect("a seat without a keyboard cannot authenticate anyone");
         seat.add_pointer();
 

@@ -720,7 +720,10 @@ mod tests {
         };
         assert_ne!(q, h, "3 hidden windows put no pixels on the strip");
         assert_ne!(q, t, "a tab position put no pixels on the strip");
-        assert_ne!(h, t, "hidden and tab render identically — one is unreadable");
+        assert_ne!(
+            h, t,
+            "hidden and tab render identically — one is unreadable"
+        );
     }
 
     /// The re-rasterize gate sees the new fields.
@@ -737,11 +740,29 @@ mod tests {
             clock: Clock::Local("14:22".into()),
             ..BarState::default()
         };
-        assert_ne!(base, BarState { hidden: 1, ..base.clone() });
-        assert_ne!(base, BarState { tab: Some((1, 2)), ..base.clone() });
         assert_ne!(
-            BarState { tab: Some((1, 3)), ..base.clone() },
-            BarState { tab: Some((2, 3)), ..base.clone() },
+            base,
+            BarState {
+                hidden: 1,
+                ..base.clone()
+            }
+        );
+        assert_ne!(
+            base,
+            BarState {
+                tab: Some((1, 2)),
+                ..base.clone()
+            }
+        );
+        assert_ne!(
+            BarState {
+                tab: Some((1, 3)),
+                ..base.clone()
+            },
+            BarState {
+                tab: Some((2, 3)),
+                ..base.clone()
+            },
             "moving between tabs must redraw the indicator"
         );
     }

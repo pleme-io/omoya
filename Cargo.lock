@@ -1059,12 +1059,33 @@ dependencies = [
 
 [[package]]
 name = "irodori"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7c1e6ec2a36084626fdbd4dcfb8beb53d0b5f6125b4cd54a4d45abddf6ffbbb9"
+dependencies = [
+ "serde",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "irodori"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "640574130cdc97c1022d27d84fea0f668c1983d9a733380e48a7511c48a4d795"
 dependencies = [
  "serde",
  "thiserror 2.0.20",
+]
+
+[[package]]
+name = "ishou-tokens"
+version = "0.1.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d1b0a9df497f745e442e996cb7c5444f587335cce4d2a4c9c44616ae08e64824"
+dependencies = [
+ "irodori 0.1.1",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1661,7 +1682,8 @@ dependencies = [
  "blake3",
  "evdev",
  "fontdue",
- "irodori",
+ "irodori 0.2.0",
+ "ishou-tokens",
  "kanshou",
  "kukaku",
  "mekuri",

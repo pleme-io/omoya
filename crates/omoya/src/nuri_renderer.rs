@@ -444,7 +444,8 @@ impl NuriFramebuffer<'_> {
                 u32::try_from(self.width).unwrap_or(0),
                 u32::try_from(self.height).unwrap_or(0),
             );
-            let mut known = mekuri::kentou::Target::<mekuri::kentou::Known>::owned(w, h, generation);
+            let mut known =
+                mekuri::kentou::Target::<mekuri::kentou::Known>::owned(w, h, generation);
             let region = bounding_region(damage, w, h);
             let claim = mekuri::kentou::Damage::since(generation, region);
             match known.load_preserving(&claim) {
@@ -536,8 +537,12 @@ fn bounding_region(
     }
     let x = x0.max(0);
     let y = y0.max(0);
-    let w = u32::try_from(x1.max(0) - x).unwrap_or(0).min(width.saturating_sub(u32::try_from(x).unwrap_or(0)));
-    let h = u32::try_from(y1.max(0) - y).unwrap_or(0).min(height.saturating_sub(u32::try_from(y).unwrap_or(0)));
+    let w = u32::try_from(x1.max(0) - x)
+        .unwrap_or(0)
+        .min(width.saturating_sub(u32::try_from(x).unwrap_or(0)));
+    let h = u32::try_from(y1.max(0) - y)
+        .unwrap_or(0)
+        .min(height.saturating_sub(u32::try_from(y).unwrap_or(0)));
     mekuri::kentou::Region {
         x: u32::try_from(x).unwrap_or(0),
         y: u32::try_from(y).unwrap_or(0),
@@ -1167,8 +1172,10 @@ impl ImportMemWl for NuriRenderer {
             // answer is the full copy below. Expressing it as `Option` is what
             // keeps "partial copy against an unknown baseline" from having a
             // spelling.
-            let slot = surface
-                .map(|sd| sd.data_map.get_or_insert_threadsafe(SurfaceShmTexture::default));
+            let slot = surface.map(|sd| {
+                sd.data_map
+                    .get_or_insert_threadsafe(SurfaceShmTexture::default)
+            });
             let ctx = self.context.clone();
             let reused = slot.and_then(|slot| {
                 let mut held = slot
@@ -1344,8 +1351,7 @@ pub trait ArmFlush {
 
 impl ArmFlush for NuriRenderer {
     fn arm_flush(&mut self, policy: crate::config::FlushPolicy, generation: Option<u64>) {
-        self.next_flush_plan =
-            generation.map(|g| (policy, mekuri::kentou::Revision::from_raw(g)));
+        self.next_flush_plan = generation.map(|g| (policy, mekuri::kentou::Revision::from_raw(g)));
     }
 }
 
@@ -1609,7 +1615,10 @@ mod tests {
         // and a test that says otherwise is testing its own fiction.
         let damaged_row = |k: usize| k % ROWS;
         let frames: Vec<Vec<u8>> = (0..N).fold(Vec::new(), |mut acc, k| {
-            let mut f = acc.last().cloned().unwrap_or_else(|| vec![0u8; ROWS * STRIDE]);
+            let mut f = acc
+                .last()
+                .cloned()
+                .unwrap_or_else(|| vec![0u8; ROWS * STRIDE]);
             if k > 0 {
                 let r = damaged_row(k);
                 f[r * STRIDE..(r + 1) * STRIDE].fill(u8::try_from(k).unwrap_or(0));

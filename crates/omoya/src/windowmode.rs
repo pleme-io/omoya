@@ -378,7 +378,11 @@ mod tests {
         // active == 2 (id 3). Remove it and active must fall back in range.
         w.leave(3);
         let g = w.group_of(1).expect("two members remain");
-        assert!(g.active < g.members.len(), "active {} out of range", g.active);
+        assert!(
+            g.active < g.members.len(),
+            "active {} out of range",
+            g.active
+        );
     }
 
     #[test]

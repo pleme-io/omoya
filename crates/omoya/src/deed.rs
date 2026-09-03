@@ -612,9 +612,7 @@ impl crate::state::Omoya {
     /// Give a window keyboard focus, and tell it so.
     fn focused_surface_id_of(&self, window: &smithay::desktop::Window) -> Option<u32> {
         use smithay::reexports::wayland_server::Resource as _;
-        window
-            .toplevel()
-            .map(|t| t.wl_surface().id().protocol_id())
+        window.toplevel().map(|t| t.wl_surface().id().protocol_id())
     }
 
     ///

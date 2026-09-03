@@ -170,7 +170,12 @@ pub fn centred(
 mod tests {
     use super::*;
 
-    fn zone(x: i32, y: i32, w: i32, h: i32) -> smithay::utils::Rectangle<i32, smithay::utils::Logical> {
+    fn zone(
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+    ) -> smithay::utils::Rectangle<i32, smithay::utils::Logical> {
         smithay::utils::Rectangle::new((x, y).into(), (w, h).into())
     }
 

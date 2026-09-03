@@ -363,7 +363,15 @@ mod tests {
     fn a_mapped_key_without_its_modifier_is_not_a_chord() {
         let (mut map, _clashes) = crate::deed::default_bindings();
         let bare = Modifiers::NONE;
-        for key in [Key::Tab, Key::F, Key::M, Key::T, Key::Q, Key::H, Key::Return] {
+        for key in [
+            Key::Tab,
+            Key::F,
+            Key::M,
+            Key::T,
+            Key::Q,
+            Key::H,
+            Key::Return,
+        ] {
             let hk = Hotkey::new(bare, key);
             let m = map.match_key(hk, &awase::MatchContext::default());
             assert!(

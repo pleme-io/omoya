@@ -752,9 +752,7 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 /// first time anything looks wrong.
 ///
 /// Selected once from `OMOYA_TRUEDAMAGE` at startup.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Mode {
     /// Compute nothing. Byte-for-byte the behaviour that shipped before this

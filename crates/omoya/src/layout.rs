@@ -606,16 +606,11 @@ impl crate::state::Omoya {
             // in the top-left of the box the seat would have given it.
             let rect = match client_fixed_size(w) {
                 Some(fixed) if floating_mode => crate::placement::snap_to_edges(
-                    Rectangle::new(
-                        crate::placement::centred_loc(usable, fixed),
-                        fixed,
-                    ),
+                    Rectangle::new(crate::placement::centred_loc(usable, fixed), fixed),
                     usable,
                     self.config.layout.snap_threshold,
                 ),
-                Some(fixed) => {
-                    Rectangle::new(crate::placement::centred_loc(usable, fixed), fixed)
-                }
+                Some(fixed) => Rectangle::new(crate::placement::centred_loc(usable, fixed), fixed),
                 None => rect,
             };
             if let Some(t) = w.toplevel() {

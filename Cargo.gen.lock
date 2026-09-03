@@ -1,12 +1,12 @@
 {
   "schema_version": 2,
-  "cargo_lock_sha256": "a3be6964bc8614189a01ef5471bf86dbc539766d5e788dd1e3310298bbd1d950",
+  "cargo_lock_sha256": "1eb6b858ff9715607f37975567f6c981c3dbdf17ad2f9c7e15485b2232b32eb1",
   "manifest_sha256": {
     "Cargo.toml": "9a780c514eb53e8d0a84880d86e0cbaae518963676fd6e5b1a8f03cec903fe57",
     "crates/hairetsu/Cargo.toml": "67a784b3f0dc716e74f9257bed09bef7c637618269586ecf20b1ff223114b0da",
     "crates/nuri/Cargo.toml": "3116435ecbd4619097d2879f5a26924834f5550aa4c732e667c3617e28d2865d",
     "crates/omoya-spec/Cargo.toml": "75cd6d31f2ef617df89556610445abab8cf9cddb49d7bbf04c28ac5b7fc89031",
-    "crates/omoya/Cargo.toml": "ebecb32145b8e97c83d8d6bb011e1b3507905bba3c7bea356da1c12a3662db2f",
+    "crates/omoya/Cargo.toml": "79aaa9f5f11878fd92af40dfc76bd10fa0727b7e75e25986430f041ab8814b4f",
     "crates/xkbcommon-hairetsu/Cargo.toml": "47e976fa1c8c185b17a5c2ced9fcec14a3fa5521a7bc9c046f3d23cf94af19b2"
   },
   "target_resolves": {
@@ -2221,6 +2221,34 @@
         "build_dependencies": [],
         "features": []
       },
+      "irodori-0.1.1": {
+        "runtime_dependencies": [
+          {
+            "name": "serde",
+            "package_key": "serde-1.0.229",
+            "kind": "normal",
+            "features": [
+              "derive"
+            ],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "thiserror",
+            "package_key": "thiserror-2.0.20",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": []
+      },
       "irodori-0.2.0": {
         "runtime_dependencies": [
           {
@@ -2248,6 +2276,46 @@
         ],
         "build_dependencies": [],
         "features": []
+      },
+      "ishou-tokens-0.1.15": {
+        "runtime_dependencies": [
+          {
+            "name": "irodori",
+            "package_key": "irodori-0.1.1",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "serde",
+            "package_key": "serde-1.0.229",
+            "kind": "normal",
+            "features": [
+              "derive"
+            ],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "serde_json",
+            "package_key": "serde_json-1.0.151",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": [
+          "default"
+        ]
       },
       "itoa-1.0.18": {
         "runtime_dependencies": [],
@@ -2656,6 +2724,16 @@
           {
             "name": "irodori",
             "package_key": "irodori-0.2.0",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "ishou_tokens",
+            "package_key": "ishou-tokens-0.1.15",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -10017,7 +10095,13 @@
     "inventory-0.3.24": {
       "edition": "2021"
     },
+    "irodori-0.1.1": {
+      "edition": "2024"
+    },
     "irodori-0.2.0": {
+      "edition": "2024"
+    },
+    "ishou-tokens-0.1.15": {
       "edition": "2024"
     },
     "itoa-1.0.18": {

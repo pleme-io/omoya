@@ -920,8 +920,12 @@ impl Introspect for OmoyaIntrospect {
             // A figure far below the machine's memcpy capability means the
             // flush is contending, not working.
             "flush_mb_per_s" => {
-                let us = self.flush_us_total.load(std::sync::atomic::Ordering::Relaxed);
-                let by = self.flush_bytes_total.load(std::sync::atomic::Ordering::Relaxed);
+                let us = self
+                    .flush_us_total
+                    .load(std::sync::atomic::Ordering::Relaxed);
+                let by = self
+                    .flush_bytes_total
+                    .load(std::sync::atomic::Ordering::Relaxed);
                 Ok(if us == 0 {
                     serde_json::json!(null)
                 } else {
