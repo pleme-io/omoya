@@ -199,10 +199,28 @@ fn parse_args() -> Result<Args, String> {
                     #[cfg(feature = "nested")]
                     "nested" | "winit" => Backend::Nested,
                     "drm" | "kms" => Backend::Drm,
+                    // ★ THE MESSAGE MUST NAME WHAT *THIS BINARY* ACCEPTS.
+                    //
+                    // It used to say "expected `nested` or `drm`"
+                    // unconditionally, so a shipped build — where `Nested` is
+                    // `#[cfg(feature = "nested")]` and its match arm compiles
+                    // out with it — answered
+                    //
+                    //     unknown backend `nested` — expected `nested` or `drm`
+                    //
+                    // which is self-contradicting and sends the reader to
+                    // look for a typo that is not there. Found by use, while
+                    // trying to run a nested seat to read the ukeire leaves
+                    // (2026-09-03). The list is now derived from the cfg, so
+                    // the refusal is accurate for the build in hand — the
+                    // same discipline `kotae` applies to a refusal: say why,
+                    // and never in terms the caller cannot act on.
                     other => {
-                        return Err(format!(
-                            "unknown backend `{other}` — expected `nested` or `drm`"
-                        ));
+                        #[cfg(feature = "nested")]
+                        let accepted = "`nested` or `drm`";
+                        #[cfg(not(feature = "nested"))]
+                        let accepted = "`drm` (this binary was built without the `nested` feature)";
+                        return Err(format!("unknown backend `{other}` — expected {accepted}"));
                     }
                 };
             }

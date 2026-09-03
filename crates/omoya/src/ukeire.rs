@@ -253,12 +253,36 @@ impl SeatModifier {
 /// vocabulary can land without changing any running seat.
 ///
 /// ★ NOT VALIDATED HERE, AND THAT IS DELIBERATE. Whether a layout string
-/// compiles is a question only libxkbcommon can answer, and answering it
-/// means building the keymap. So `Keymap` carries the operator's intent
-/// faithfully and `Ukeire::apply`'s caller reports a compile failure as a
-/// typed error with a fallback to a usable seat. Validating by pattern-match
-/// against a list of known layout names would be a guess wearing a check's
-/// clothes.
+/// compiles is a question only the xkb implementation can answer, and
+/// answering it means building the keymap. So `Keymap` carries the operator's
+/// intent faithfully and the caller reports a compile failure as a typed
+/// error with a fallback to a usable seat.
+///
+/// ── ★ WHAT THE SEAT CAN ACTUALLY REALISE TODAY: `us` AND NOTHING ELSE ────
+/// Measured live on plo 2026-09-03, and it is a floor in OUR OWN code rather
+/// than a fact about xkb. This workspace patches `libxkbcommon` out for the
+/// pure-Rust `xkbcommon-hairetsu`, whose `new_from_names` is:
+///
+/// ```text
+/// if !matches!(layout, "" | "us") || !variant.is_empty() { return None; }
+/// Some(Keymap::us())
+/// ```
+///
+/// So a `br` declaration compiles to `BadKeymap`, the seat keeps its previous
+/// keymap, and `ukeire_keymap_layout` reads `<bare>`. Proven by running it:
+/// `xkbcli compile-keymap --layout br` succeeds on the same machine, so the
+/// data is present and reachable — it is hairetsu that declines.
+///
+/// **The declaration is still worth carrying, and the surface is still worth
+/// having.** Before this vocabulary a non-US node got a US keymap with NO
+/// signal whatsoever; now it gets an ERROR line naming the layout and a leaf
+/// that says `<bare>` instead of confirming a change that did not happen.
+/// That is the difference between an unsolved problem and an invisible one.
+/// Refusing a non-`us` layout at parse time would be worse: it would make the
+/// truth about ggg's keyboard undeclarable, and the destination is hairetsu
+/// learning layouts, not the config forgetting them.
+///
+/// `pending-ukeire-layouts: hairetsu reads xkeyboard-config rules`
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Keymap {
@@ -843,6 +867,54 @@ mod tests {
         assert!(Keymap::default().is_default());
         let empty: Ukeire = serde_yaml::from_str("{}").unwrap();
         assert!(empty.keymap.is_default());
+    }
+
+    #[test]
+    fn the_xkb_floor_is_us_only_and_this_test_fails_when_that_changes() {
+        // ★ A TRIPWIRE ON A LIMIT WE OWN, not a celebration of it.
+        //
+        // This workspace patches `libxkbcommon` out for the pure-Rust
+        // `xkbcommon-hairetsu`, which accepts `""` or `"us"` with an empty
+        // variant and returns `None` — surfacing as `BadKeymap` — for
+        // anything else. So `ukeire.keymap.layout = "br"` is a declaration
+        // the seat cannot yet realise, and this test is what tells the next
+        // reader when it can: the moment hairetsu learns rules files, the
+        // assertion below flips and `docs/UKEIRE.md`'s claim must be
+        // rewritten in the same commit.
+        //
+        // Deliberately asserts the LIMIT rather than skipping the case,
+        // because a limit nobody probes is a limit that gets restated as a
+        // fact about the world. It is a fact about our code.
+        // Reached through smithay's own re-export rather than by declaring
+        // `xkbcommon` here: the workspace patch means that name resolves to
+        // hairetsu, and taking it from the consumer's path proves the test
+        // sees exactly what the seat sees.
+        use smithay::input::keyboard::xkb;
+        let ctx = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+        let compile = |layout: &str, variant: &str| {
+            xkb::Keymap::new_from_names(
+                &ctx,
+                "evdev",
+                "pc105",
+                layout,
+                variant,
+                None,
+                xkb::KEYMAP_COMPILE_NO_FLAGS,
+            )
+            .is_some()
+        };
+        assert!(compile("", ""), "the empty keymap must always compile");
+        assert!(compile("us", ""), "us must always compile");
+        assert!(
+            !compile("br", ""),
+            "hairetsu now compiles `br` — the floor moved. Update the \
+             `pending-ukeire-layouts` note in ukeire.rs and the keymap row \
+             in docs/UKEIRE.md, then flip this assertion."
+        );
+        assert!(
+            !compile("us", "dvorak"),
+            "hairetsu now accepts a variant — same follow-up as above"
+        );
     }
 
     #[test]
