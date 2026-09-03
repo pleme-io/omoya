@@ -552,9 +552,18 @@ where
         // constraint as `ExportMem` below and stated for the same reason.
         + ImportMem
         + smithay::backend::renderer::Bind<smithay::backend::allocator::dmabuf::Dmabuf>
-        // ★ How this frame may reach scanout. The trait's default is a no-op,
-        // so this excludes nothing: a renderer that composites straight into
-        // the mapping satisfies it by ignoring the plan.
+        // ★ How this frame may reach scanout. CORRECTED 2026-09-03: the trait
+        // no longer has a no-op default, so this comment's old claim that it
+        // "excludes nothing" is false — I removed that default in the same
+        // session and left this line describing the world before it.
+        //
+        // What it costs a second renderer is one method, and the honest
+        // answer for a GPU renderer is `{}`: a renderer that composites
+        // straight into its own target has no shadow-buffer flush plan to
+        // arm. Writing that `{}` deliberately is the point — the default
+        // silently gave every renderer the no-op, including one that DID have
+        // a baseline to preserve and would then have taken a full copy per
+        // frame with nothing reported.
         + crate::nuri_renderer::ArmFlush
         // ★ `ExportMem` so the seat can be SCREENSHOT. This is a real
         // constraint on what may drive this loop, and it is the right one: a
