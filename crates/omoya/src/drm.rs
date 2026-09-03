@@ -688,19 +688,33 @@ where
     let mut bar_buffer: Option<smithay::backend::renderer::element::memory::MemoryRenderBuffer> =
         None;
 
-    // ── ★ CHROME IDS: STABLE, AND ENOUGH FOR SEVERAL WINDOWS ────────────
+    // ── ★ CHROME NEEDS NO ID POOL — THE BUFFER CARRIES THE ID ───────────
     //
-    // Same reason the border edges have stable ids — a fresh `Id` each frame
-    // reads to the damage tracker as "the old element vanished and a new one
-    // appeared", which re-damages every rectangle every frame and quietly
-    // turns partial repaint back into full repaint. Four rects per window
-    // (bar + three buttons) for up to `CHROME_WINDOWS` windows; beyond that
-    // the extra windows render WITHOUT chrome rather than sharing ids, since
-    // two elements holding one id is the exact confusion these ids prevent.
+    // A `chrome_ids: Vec<Id>` pool used to sit here, sized `CHROME_WINDOWS *
+    // 4`, with a comment explaining that a fresh `Id` each frame reads to the
+    // damage tracker as "the old element vanished and a new one appeared",
+    // re-damaging every rectangle every frame and turning partial repaint
+    // back into full repaint. Every word of that is true. The pool was still
+    // dead: nothing ever indexed it.
+    //
+    // It is unnecessary because `MemoryRenderBufferRenderElement::from_buffer`
+    // takes its id from the `MemoryRenderBuffer`, which holds one from
+    // construction. So the chrome CACHE — which keeps the same buffer alive
+    // while `(id, title, width, focused)` is unchanged — is already the
+    // id-stability mechanism, and the pool was a second, unread one.
+    //
+    // `border_ids` below is the genuinely different case:
+    // `SolidColorRenderElement` has no buffer to carry an id, so it must be
+    // handed one explicitly. That is why one survives and the other does not.
+    //
+    // `CHROME_WINDOWS` stays — it is NOT part of the dead pool. It caps the
+    // window loop at `.take(CHROME_WINDOWS)` below, so past that limit the
+    // extra windows render without chrome rather than sharing ids.
+
+    /// How many windows get chrome. Beyond this they render without it, which
+    /// is the honest degradation: two elements holding one id is the exact
+    /// confusion stable ids exist to prevent.
     const CHROME_WINDOWS: usize = 8;
-    let chrome_ids: Vec<smithay::backend::renderer::element::Id> = (0..CHROME_WINDOWS * 4)
-        .map(|_| smithay::backend::renderer::element::Id::new())
-        .collect();
 
     let border_ids: [smithay::backend::renderer::element::Id; 4] = [
         smithay::backend::renderer::element::Id::new(),
@@ -1389,7 +1403,9 @@ where
                 // a full repaint has no baseline to preserve — so the policy is
                 // deliberately not applied on those frames.
                 {
-                    use crate::nuri_renderer::ArmFlush as _;
+                    // (No `use ArmFlush` here: the renderer's own generic
+                    // bound already carries it. The import was redundant and
+                    // warned as unused.)
                     renderer.arm_flush(
                     if age == 0 {
                         crate::config::FlushPolicy::Full

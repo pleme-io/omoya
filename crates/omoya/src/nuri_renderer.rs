@@ -1346,7 +1346,19 @@ pub trait ArmFlush {
     /// Call immediately before `bind`, with the generation of the slot about to
     /// be bound. `None` — a slot never drawn into — means there is no baseline,
     /// so the framebuffer takes the full copy whatever the policy says.
-    fn arm_flush(&mut self, _policy: crate::config::FlushPolicy, _generation: Option<u64>) {}
+    ///
+    /// ★ REQUIRED, NOT DEFAULTED — the default body was removed 2026-09-03.
+    ///
+    /// It used to be `fn arm_flush(..) {}`, an empty default. A renderer that
+    /// satisfied the bound without implementing it therefore armed NO flush
+    /// plan, `next_flush_plan` stayed `None`, and every frame took the full
+    /// copy — 1920x1080x4 bytes per frame on a compositor that has no GPU to
+    /// hide it. Nothing would have reported that: the call compiles, runs,
+    /// and does nothing.
+    ///
+    /// Without the body, a renderer that has no opinion must write `{}`
+    /// itself and say so. Same behaviour, but chosen rather than inherited.
+    fn arm_flush(&mut self, policy: crate::config::FlushPolicy, generation: Option<u64>);
 }
 
 impl ArmFlush for NuriRenderer {
