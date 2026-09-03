@@ -222,6 +222,22 @@ pub struct BarState {
     pub parcels: Vec<bool>,
     /// `HH:MM`. Local time; see [`Clock`].
     pub clock: Clock,
+    /// Windows that are minimised — alive, running, and mapped to nothing.
+    ///
+    /// ★ THE ONE STATE A SCREENSHOT CANNOT SHOW. A minimised window and a
+    /// closed one are the same picture, so without this the minimise chord is
+    /// a trapdoor: the operator's window is gone and nothing on the desktop
+    /// says it is recoverable. That is the "system has something to say" the
+    /// right zone was reserved for.
+    pub hidden: usize,
+    /// The focused window's position in its tab group, as `(index, total)`,
+    /// 1-based for display. `None` when it is not grouped.
+    ///
+    /// ★ ALSO INVISIBLE BY CONSTRUCTION. A tab group shows exactly one
+    /// member, so N-1 windows are hidden for a reason that is NOT minimise —
+    /// and with no indicator the group cannot be discovered at all, which
+    /// makes `Logo+Tab` indistinguishable from an unbound chord.
+    pub tab: Option<(usize, usize)>,
 }
 
 /// The clock, and whether it is telling the truth about its zone.
@@ -412,9 +428,47 @@ pub fn rasterize_h(state: &BarState, width: i32, height: i32) -> Option<Vec<u8>>
     let clock_blend = Blend::new(bg, state.clock.colour());
     draw_text(&mut buf, w, h, font, clock, centre, &clock_blend);
 
-    // ── Right: deliberately empty ────────────────────────────────────────
-    // Nothing earns this space yet. It fills when the system has something to
-    // say (§2.5: state colours, as (fg, bg) pairs).
+    // ── Right: the state a screenshot cannot show ────────────────────────
+    //
+    // This zone was reserved with "nothing earns this space yet. It fills when
+    // the system has something to say". These two earn it, and for the same
+    // reason: both describe windows that are ALIVE AND INVISIBLE, so the
+    // desktop itself cannot report them. A minimised window looks exactly like
+    // a closed one; an inactive tab looks exactly like a window that was never
+    // opened.
+    //
+    // ★ WORDS AND ASCII DIGITS, NOT ICONOGRAPHY. The face is whatever
+    // `font_bytes` found on the system, so a glyph outside basic Latin is a
+    // gamble — escriba shipped 23 EMPTY devicon glyphs exactly this way, and an
+    // indicator that renders as blank is worse than none because it reads as
+    // "nothing is hidden".
+    //
+    // ★ RIGHT-ALIGNED FROM THE MEASURED WIDTH, so the zone grows leftward and
+    // never collides with the screen-centred clock. Snapped to an even pixel
+    // for the same reason the clock is: two sub-pixel offsets rasterize to two
+    // different bitmaps and defeat the "re-rasterize only when text changed"
+    // rule that `wanted != bar_text` implements.
+    {
+        let mut parts: Vec<String> = Vec::new();
+        // Tabs first, then hidden — focused-window state before seat-wide
+        // state, which is the same left-to-right specificity the parcels use.
+        if let Some((idx, total)) = state.tab {
+            parts.push(format!("{idx}/{total}"));
+        }
+        if state.hidden > 0 {
+            parts.push(format!("{} hidden", state.hidden));
+        }
+        if !parts.is_empty() {
+            let text = parts.join("   ");
+            let tw = measure(font, &text);
+            #[allow(clippy::cast_precision_loss)]
+            let x = (((w as f32 - PAD - tw) / 2.0).round() * 2.0).max(0.0);
+            // `text`, not `text_muted`: this is the zone's whole purpose, and
+            // a muted warning about a window you cannot see is a warning that
+            // loses to the wallpaper.
+            draw_text(&mut buf, w, h, font, &text, x, &bright);
+        }
+    }
 
     Some(buf)
 }
@@ -536,6 +590,8 @@ mod tests {
 
     fn state(n: usize, focused: Option<usize>) -> BarState {
         BarState {
+            hidden: 0,
+            tab: None,
             parcels: (0..n).map(|i| Some(i) == focused).collect(),
             clock: Clock::Local("14:22".into()),
         }
@@ -613,10 +669,12 @@ mod tests {
         let local = BarState {
             parcels: vec![false],
             clock: Clock::Local("14:22".into()),
+            ..BarState::default()
         };
         let utc = BarState {
             parcels: vec![false],
             clock: Clock::UtcFallback("17:22 UTC".into()),
+            ..BarState::default()
         };
         assert_ne!(local.clock.colour(), utc.clock.colour());
         assert_eq!(utc.clock.colour(), role_warning());
@@ -624,6 +682,68 @@ mod tests {
             return;
         };
         assert_ne!(a, b, "the two clock states must not rasterize identically");
+    }
+
+    /// An empty right zone renders identically to one that was never asked
+    /// to draw — and a NON-empty one does not.
+    ///
+    /// ★ THE GATE THAT MAKES THE INDICATOR FALSIFIABLE. The whole point of
+    /// this zone is to report state a screenshot cannot show, so "does it
+    /// actually put pixels on the strip" is the only question worth asking —
+    /// and it is exactly the question that goes unasked when an indicator is
+    /// added by eye. escriba shipped 23 devicon glyphs that rendered blank;
+    /// a blank indicator is worse than none, because it reads as "nothing is
+    /// hidden".
+    #[test]
+    fn the_right_zone_draws_only_when_there_is_something_to_say() {
+        let quiet = BarState {
+            parcels: vec![true],
+            clock: Clock::Local("14:22".into()),
+            ..BarState::default()
+        };
+        let hidden = BarState {
+            hidden: 3,
+            ..quiet.clone()
+        };
+        let tabbed = BarState {
+            tab: Some((2, 3)),
+            ..quiet.clone()
+        };
+        let (Some(q), Some(h), Some(t)) = (
+            rasterize(&quiet, 900),
+            rasterize(&hidden, 900),
+            rasterize(&tabbed, 900),
+        ) else {
+            // No system face — `the_bar_is_absent_without_a_font_rather_than_blank`
+            // owns that case.
+            return;
+        };
+        assert_ne!(q, h, "3 hidden windows put no pixels on the strip");
+        assert_ne!(q, t, "a tab position put no pixels on the strip");
+        assert_ne!(h, t, "hidden and tab render identically — one is unreadable");
+    }
+
+    /// The re-rasterize gate sees the new fields.
+    ///
+    /// ★ `wanted != bar_text` in `drm.rs` is the ONLY thing that decides
+    /// whether the strip is redrawn, so a field outside `PartialEq` would
+    /// render once and then go permanently stale — the "correct declaration,
+    /// silently skipped" shape this seat has already been bitten by twice.
+    /// Asserting inequality here is what ties the two together.
+    #[test]
+    fn a_change_of_window_state_is_a_change_of_bar_state() {
+        let base = BarState {
+            parcels: vec![true],
+            clock: Clock::Local("14:22".into()),
+            ..BarState::default()
+        };
+        assert_ne!(base, BarState { hidden: 1, ..base.clone() });
+        assert_ne!(base, BarState { tab: Some((1, 2)), ..base.clone() });
+        assert_ne!(
+            BarState { tab: Some((1, 3)), ..base.clone() },
+            BarState { tab: Some((2, 3)), ..base.clone() },
+            "moving between tabs must redraw the indicator"
+        );
     }
 
     #[test]

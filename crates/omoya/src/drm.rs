@@ -1049,7 +1049,29 @@ where
                         })
                     })
                     .collect();
-                let wanted = crate::bar::BarState { parcels, clock };
+                // ── ★ THE INVISIBLE STATE, READ FROM THE SAME PLACE THE
+                // PLACEMENT USED ─────────────────────────────────────────────
+                //
+                // `windows` is what `apply_layout` consulted to decide who was
+                // mapped, so the bar cannot disagree with the screen about
+                // which windows are hidden — the same property the `parcels`
+                // row gets by reading `focus_rect` rather than re-deriving
+                // focus.
+                let hidden = data.state.windows.minimized_count();
+                // 1-based for display: a tab strip that starts at 0 reads as
+                // an off-by-one to everyone who has used any other tabbed
+                // thing.
+                let tab = data
+                    .state
+                    .focused_surface_id()
+                    .and_then(|id| data.state.windows.position_in_group(id))
+                    .map(|(idx, total)| (idx + 1, total));
+                let wanted = crate::bar::BarState {
+                    parcels,
+                    clock,
+                    hidden,
+                    tab,
+                };
                 if wanted != bar_text || bar_buffer.is_none() {
                     let bar_h = data.state.config.bar.height;
                     // Published so a caller can DERIVE the content region

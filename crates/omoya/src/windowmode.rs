@@ -237,6 +237,20 @@ impl Windows {
         self.groups.iter().position(|g| g.members.contains(&id))
     }
 
+    /// `id`'s 0-based position in its group and the group size.
+    ///
+    /// ★ POSITION IN `members`, NOT the active index. The indicator answers
+    /// "which of these am I looking at", so it must describe THIS window —
+    /// and for the visible member those coincide, which is exactly why
+    /// returning `active` would look correct in every hand test and be wrong
+    /// the moment anything asks about a window that is not the visible one.
+    #[must_use]
+    pub fn position_in_group(&self, id: u32) -> Option<(usize, usize)> {
+        let g = self.group_of(id)?;
+        let idx = g.members.iter().position(|m| *m == id)?;
+        Some((idx, g.members.len()))
+    }
+
     /// Forget a window entirely. Called when it is closed.
     ///
     /// ★ WITHOUT THIS, MINIMISE IS A LEAK — and a nasty one, because the state
@@ -408,6 +422,18 @@ mod tests {
         w.toggle_maximize(1); // 1 is the INACTIVE member
         assert_eq!(w.placement_of(1), Placement::Hidden);
         assert_eq!(w.placement_of(2), Placement::AsLaidOut);
+    }
+
+    #[test]
+    fn position_describes_the_asked_for_window_not_the_visible_one() {
+        // The trap: for the VISIBLE member, position and `active` coincide, so
+        // returning `active` passes every hand test and is wrong for anyone
+        // else in the group.
+        let mut w = Windows::default();
+        w.join(2, 1); // members [1, 2], active = 1 (id 2)
+        assert_eq!(w.position_in_group(1), Some((0, 2)), "the inactive member");
+        assert_eq!(w.position_in_group(2), Some((1, 2)), "the visible member");
+        assert_eq!(w.position_in_group(9), None, "ungrouped");
     }
 
     #[test]
