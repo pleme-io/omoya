@@ -15,8 +15,22 @@
 //! because the MCP server had no wire into the live process. omoya would have
 //! hit exactly that.
 //!
-//! ── ★ OBSERVE ONLY, AND THAT IS A DECISION NOT A STAGE ────────────────────
-//! Every leaf here is a READ. Nothing in this file can change the seat.
+//! ── ★ CORRECTED 2026-09-03: THE READ-ONLY CLAIM WAS FALSE ────────────────
+//! This said *"Every leaf here is a READ. Nothing in this file can change the
+//! seat."* It is not true and has not been for some time: this file ships
+//! `do`, `type`, `key`, `pointer` and `click` — a full synthetic-input surface
+//! and a deed queue, ungated, with no exclusion between callers.
+//!
+//! The cost is not theoretical. During the investigation that produced this
+//! correction, two agent sessions driving the same seat corrupted each other's
+//! measurements repeatedly — one moving the pointer while the other read a
+//! geometry that was true a moment earlier. A header promising read-only is
+//! worse than no header: it tells the next reader they need not check.
+//!
+//! `pending-postigo-gate:` the legality gate this header promises below, plus
+//! an advisory single-writer lease, are NOT built. What follows is the
+//! REASONING for observe-only, which still stands as the design intent — read
+//! it as the destination, not as a description of today.
 //!
 //! That is deliberate and it is not merely caution about an unfinished feature.
 //! An MCP surface on a compositor can black the screen of a machine someone is

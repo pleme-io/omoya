@@ -432,6 +432,17 @@ impl crate::state::Omoya {
                 .decoration_sent
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
+            // Resolved once: the id of whatever currently holds focus.
+            let focused_id = self
+                .space
+                .elements()
+                .find(|w| {
+                    self.space
+                        .element_geometry(w)
+                        .map(|g| (g.loc.x, g.loc.y, g.size.w, g.size.h))
+                        == *focused
+                })
+                .and_then(crate::layout::surface_id_of);
             let rows: Vec<crate::introspect::ToplevelRow> = seen
                 .iter()
                 .enumerate()
@@ -441,19 +452,32 @@ impl crate::state::Omoya {
                         .element_geometry(w)
                         .map(|g| (g.loc.x, g.loc.y, g.size.w, g.size.h));
                     let key = w.toplevel().map(|t| format!("{:?}", t.wl_surface().id()));
+                    // ★ FOCUS BY IDENTITY, NOT BY RECTANGLE.
+                    //
+                    // This compared the window's rect against the focused
+                    // rect, so two windows sharing a rect BOTH reported
+                    // `focused: true` — observed live, and easy to reach
+                    // because every floating window gets the same
+                    // float_width/float_height. A window id answers the
+                    // question that was being asked.
+                    let is_focused = crate::layout::surface_id_of(w)
+                        .zip(focused_id)
+                        .is_some_and(|(a, b)| a == b);
                     crate::introspect::ToplevelRow {
                         id: i as u64,
                         app_id: app.clone(),
                         decoration_mode_sent: key.and_then(|k| sent.get(&k).cloned()),
                         rect,
-                        // ★ The focus ring is the ONLY chrome omoya draws, and
-                        // only for the focused window. Counting it here is what
-                        // makes `0` on an unfocused window a readable fact
-                        // rather than an absence nobody looked for.
-                        decoration_elements_drawn: u32::from(
-                            rect.is_some() && *focused == rect.map(|r| (r.0, r.1, r.2, r.3)),
-                        ) * 4,
-                        focused: rect.is_some() && *focused == rect.map(|r| (r.0, r.1, r.2, r.3)),
+                        // ★ NAMED FOR WHAT IT COUNTS. This is the four
+                        // focus-RING edges, drawn only for the focused window.
+                        // It was called `decoration_elements_drawn`, which
+                        // reads as "all chrome" — so `chrome_verdict` reported
+                        // "none drawn" for every unfocused window whose
+                        // titlebar was demonstrably on screen, and pointed the
+                        // investigation at the renderer, which was correct.
+                        // The titlebar is counted separately below.
+                        decoration_elements_drawn: u32::from(is_focused) * 4,
+                        focused: is_focused,
                         tiled: false,
                     }
                 })
