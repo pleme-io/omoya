@@ -316,7 +316,13 @@ pub struct NuriFramebuffer<'a> {
 pub trait ScanoutFlush {
     /// Put everything drawn since the last flush onto the display, clipped to
     /// `damage`. An empty slice means "everything".
-    fn flush_damage(&mut self, damage: &[Rectangle<i32, Physical>]);
+    ///
+    /// Returns the BYTES actually written. ★ Returned rather than logged,
+    /// because the caller is the only place that can pair it with the elapsed
+    /// time it already measures — and bytes-over-time is what separates a slow
+    /// copy from a descheduled thread. Counting it inside would mean the
+    /// numerator and denominator lived in different places.
+    fn flush_damage(&mut self, damage: &[Rectangle<i32, Physical>]) -> u64;
 
     /// The scanout mapping's CURRENT bytes — what the display is actually
     /// showing, as opposed to what the compositor composed.
@@ -334,8 +340,8 @@ pub trait ScanoutFlush {
 }
 
 impl ScanoutFlush for NuriFramebuffer<'_> {
-    fn flush_damage(&mut self, damage: &[Rectangle<i32, Physical>]) {
-        NuriFramebuffer::flush_damage(self, damage);
+    fn flush_damage(&mut self, damage: &[Rectangle<i32, Physical>]) -> u64 {
+        NuriFramebuffer::flush_damage(self, damage)
     }
 
     fn scanout_bytes(&self) -> &[u8] {
@@ -355,19 +361,19 @@ impl NuriFramebuffer<'_> {
     /// (~32 px at 32bpp) costs MORE to skip than to write through, because
     /// stopping and restarting mid-line forces two partial-line flushes. Full
     /// rows keep every write contiguous and cache-line aligned at both ends.
-    pub fn flush_damage(&mut self, damage: &[Rectangle<i32, Physical>]) {
+    pub fn flush_damage(&mut self, damage: &[Rectangle<i32, Physical>]) -> u64 {
         let h = usize::try_from(self.height).unwrap_or(0);
         let full = self.stride.saturating_mul(h);
         let len = full.min(self.data.len()).min(self.shadow.len());
         if len == 0 {
-            return;
+            return 0;
         }
         // No damage at all means a full repaint was requested (age 0) or the
         // caller could not say — copy everything rather than leave the screen
         // holding a stale frame.
         if damage.is_empty() {
             self.data[..len].copy_from_slice(&self.shadow[..len]);
-            return;
+            return len as u64;
         }
 
         // ── ★ THE PARTIAL COPY IS OFF BY DEFAULT (plo, 2026-08-30) ──────────
@@ -443,6 +449,7 @@ impl NuriFramebuffer<'_> {
             let claim = mekuri::kentou::Damage::since(generation, region);
             match known.load_preserving(&claim) {
                 Ok(_painted) => {
+                    let mut wrote: u64 = 0;
                     // Row-major, so a rectangle is a contiguous run per row —
                     // one `copy_from_slice` each, which is what a streaming
                     // write into write-combining memory wants.
@@ -457,8 +464,9 @@ impl NuriFramebuffer<'_> {
                             continue;
                         }
                         self.data[a..b].copy_from_slice(&self.shadow[a..b]);
+                        wrote += (b - a) as u64;
                     }
-                    return;
+                    return wrote;
                 }
                 Err(_refused) => {
                     // Fall through. A refusal is the type saying the partial
@@ -486,6 +494,7 @@ impl NuriFramebuffer<'_> {
             .target
             .adopt_by_clearing(mekuri::kentou::Revision::ORIGIN);
         let _ = damage;
+        len as u64
     }
 }
 

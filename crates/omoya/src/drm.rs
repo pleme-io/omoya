@@ -1361,11 +1361,23 @@ where
                         // re-opening the damage-clipped flush is then the only
                         // move that pays.
                         let flush_start = std::time::Instant::now();
-                        fb.flush_damage(drawn.as_deref().unwrap_or(&[]));
-                        introspect.flush_us.store(
-                            u64::try_from(flush_start.elapsed().as_micros()).unwrap_or(u64::MAX),
-                            std::sync::atomic::Ordering::Relaxed,
-                        );
+                        let wrote = fb.flush_damage(drawn.as_deref().unwrap_or(&[]));
+                        let took =
+                            u64::try_from(flush_start.elapsed().as_micros()).unwrap_or(u64::MAX);
+                        // ★ LAST, MAX AND TOTAL — because the last value alone
+                        // is a point sample and reads 3x apart on this seat.
+                        // `max` bounds the tail; `total` divided by `presented`
+                        // is the mean; and `bytes/us` is the RATE, which is the
+                        // only one of these that can tell a slow copy from a
+                        // descheduled thread on a machine running other work.
+                        {
+                            use std::sync::atomic::Ordering::Relaxed;
+                            introspect.flush_us.store(took, Relaxed);
+                            introspect.flush_us_total.fetch_add(took, Relaxed);
+                            introspect.flush_us_max.fetch_max(took, Relaxed);
+                            introspect.flush_bytes.store(wrote, Relaxed);
+                            introspect.flush_bytes_total.fetch_add(wrote, Relaxed);
+                        }
                     }
 
                     // ── ★ THE STALE SCAN — AFTER THE FLUSH, BEFORE THE FLIP ──

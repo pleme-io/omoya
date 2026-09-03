@@ -288,6 +288,34 @@ pub struct OmoyaIntrospect {
     /// is bound by one memcpy into uncached memory, which no change detector
     /// upstream can improve.
     pub flush_us: AtomicU64,
+    /// The WORST flush seen since start, and the running total.
+    ///
+    /// ★ BECAUSE `flush_us` ALONE IS A POINT SAMPLE, AND I MIS-READ IT.
+    /// Three reads of `flush_us` on plo 2026-09-02 gave 3 729, 7 722 and
+    /// 10 873 µs — a 3x spread for what should be a fixed 8 294 400-byte copy.
+    /// Quoting any one of them as "the" flush cost is the dated-claim error in
+    /// miniature: each reading is honest and none is representative. `max`
+    /// bounds the tail and `total / presented` gives the mean, which together
+    /// say far more than a fresh sample ever can.
+    pub flush_us_max: AtomicU64,
+    pub flush_us_total: AtomicU64,
+    /// Bytes the last flush actually wrote, and the running total.
+    ///
+    /// ★ THE DENOMINATOR THAT MAKES `flush_us` INTERPRETABLE, and the reason
+    /// this is bytes rather than thread-CPU-time. `flush_us` is WALL CLOCK, so
+    /// it cannot by itself separate "the copy was slow" from "the thread was
+    /// descheduled mid-copy" — and plo demonstrably runs other heavy work (a
+    /// Kolla OpenStack was mid-bring-up during one of the readings above).
+    /// `flush_bytes / flush_us` is a RATE, and a rate that collapses while the
+    /// byte count holds constant is contention, not work. That distinction is
+    /// unavailable from a timer alone.
+    ///
+    /// It is also the direct measure of what a damage-clipped flush buys:
+    /// `Full` writes stride x height every presented frame, `Baselined` writes
+    /// only the damage, so the ratio of these two counters IS the saving —
+    /// observed rather than predicted.
+    pub flush_bytes: AtomicU64,
+    pub flush_bytes_total: AtomicU64,
     /// shm imports that copied the WHOLE buffer, versus only their damage.
     /// `import_full` staying high means the incremental path's precondition
     /// never holds — most likely `Arc::get_mut` failing because smithay is
@@ -872,6 +900,23 @@ impl Introspect for OmoyaIntrospect {
             )),
             "gather_us" => Ok(n(&self.gather_us)),
             "flush_us" => Ok(n(&self.flush_us)),
+            "flush_us_max" => Ok(n(&self.flush_us_max)),
+            "flush_us_total" => Ok(n(&self.flush_us_total)),
+            "flush_bytes" => Ok(n(&self.flush_bytes)),
+            "flush_bytes_total" => Ok(n(&self.flush_bytes_total)),
+            // The derived reading, computed here so two callers cannot derive
+            // it differently. MB/s over the whole run: bytes_total / us_total.
+            // A figure far below the machine's memcpy capability means the
+            // flush is contending, not working.
+            "flush_mb_per_s" => {
+                let us = self.flush_us_total.load(std::sync::atomic::Ordering::Relaxed);
+                let by = self.flush_bytes_total.load(std::sync::atomic::Ordering::Relaxed);
+                Ok(if us == 0 {
+                    serde_json::json!(null)
+                } else {
+                    serde_json::json!((by as f64) / (us as f64))
+                })
+            }
             // ★ WHICH MODE IS LIVE. Reading `td_dirty_pct` without this is a
             // measurement with no idea whether it changed anything: `verify`
             // publishes identical counters while leaving the screen untouched.
@@ -1287,7 +1332,12 @@ impl Introspect for OmoyaIntrospect {
             "blit_general",
             "blit_slow",
             "gather_us",
+            "flush_bytes",
+            "flush_bytes_total",
+            "flush_mb_per_s",
             "flush_us",
+            "flush_us_max",
+            "flush_us_total",
             "window_app_ids",
             "td_mode",
             "td_refined",
