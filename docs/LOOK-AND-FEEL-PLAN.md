@@ -12,6 +12,60 @@
 
 ---
 
+## STATUS — re-measured 2026-09-03, after implementation
+
+**P0, P1, P2 and P3 are SHIPPED.** The tier ledger in §5 predates them and its
+line *"nothing in §4 is built"* is now false; it is corrected in place below.
+Read this block before any other status claim in this file.
+
+| | state | evidence |
+|---|---|---|
+| P0 ground rung | **shipped** | `desktop` role in `ishou-tokens`; ladder gate |
+| P1 bar off its ground | **shipped** | `bar.rs`'s six hand-rolled role fns DELETED — the done-predicate |
+| P2 tobira icons | **shipped** | `icon_column` always reserved; `UiResult.icon` |
+| P3 window titles | **shipped** | `chrome.rs` titlebar + buttons, cached per `(id,title,width,focused)` |
+| P4 rounding | **not built** — and the naive form is a LIE, see §4 P4 | — |
+| P5 bar modules | **not built** | — |
+
+**Not visible on plo until the operator logs out and back in.** The running
+compositor is pinned to its old store path; a rebuild does not replace a live
+seat, and the `--launcher` argument pins tobira's store path too, so launcher
+changes need the same relogin.
+
+### ★ The finding that outranks everything else in this document
+
+**Every GPU client on plo renders on the CPU.** Measured from plo's journal:
+
+```
+WARN garasu::ctx: no hardware GPU adapter on this machine — rendering on the CPU
+     adapter="llvmpipe (LLVM 21.1.7, 256 bits)" ... backend=Vulkan device_type=Cpu
+```
+
+That message was **false** and has been fixed (`garasu@e3dad74`): plo holds a
+GeForce RTX 3070 with driver 580.142 loaded, seven kernel modules, live
+`/dev/nvidia*` nodes and `nvidia_icd.json` installed. The adapter is not
+absent, it is **refused** — and the refusal comes from us.
+
+The chain, and none of its links is a defect on its own:
+
+1. omoya is a **CPU compositor** (`nuri`), deliberately: no GPU driver
+   dependency, no `unsafe`, no dmabuf import path.
+2. It therefore advertises **linear-modifier dmabuf only**
+   (`nuri_renderer.rs`) — a tiled modifier is a layout only a GPU can decode,
+   and a CPU blitter reading one paints structured noise. Linear-only is the
+   *correct* policy for it.
+3. NVIDIA does not present linear.
+4. So no hardware adapter can present to an omoya surface, and every GPU
+   client — mado included, a GPU terminal — falls back to `llvmpipe`.
+
+**This is the likeliest single explanation for "the look and feel is bad" and
+the slow, wrong-looking startup**, and it is architectural rather than
+cosmetic. It is recorded here because a reader who fixes P4 and P5 without
+knowing it will have polished a software-rendered desktop. Whether omoya
+should gain a GPU path is a design question this document does not decide.
+
+---
+
 ## 0. The finding that reframes everything
 
 The operator's report was *"the look and feel is absolutely just bad"*, and the
@@ -234,9 +288,24 @@ CLOSED-LOOP MASS-SYNTHESIS binds.
 | a launcher row is indistinguishable from another provider's | P2 renders the `Icon` every provider already computes | **reachable now** — one wire |
 | blur / shadows / transparency proposed again | §1 records the measured refutation with numbers | documentation-only — no gate |
 
-★ **Tier honesty about this document:** nothing in §4 is built. P0–P5 are a
-plan, and the ledger says so. The only *shipped* rows are the ones marking
-existing refusals.
+★ **Tier honesty about this document — CORRECTED 2026-09-03.** This paragraph
+used to read *"nothing in §4 is built. P0–P5 are a plan."* That was true when
+written and false within the day: **P0–P3 shipped.** See the STATUS block at
+the top for what is built and what is not.
+
+The correction is the lesson, not an embarrassment. A dated claim in a plan
+rots **downward** — "nothing is built" reads as merely modest once things are
+built, so nothing ever flags it as wrong, and the next reader re-implements
+what already exists. Re-measure before acting on any row here.
+
+Rows that changed state:
+
+| row | was | now |
+|---|---|---|
+| desktop and client paint the same colour | not yet built | **shipped** (P0) |
+| `bar.rs`'s six hand-rolled role fns | live defect | **shipped** — the functions are gone |
+| a launcher row indistinguishable from another provider's | reachable now | **shipped** (P2) |
+| a fleet visual constant drifts between omoya and ishou | absent | still absent — `FleetThemedConfig` not adopted |
 
 ---
 
