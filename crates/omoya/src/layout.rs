@@ -605,11 +605,25 @@ impl crate::state::Omoya {
                     continue;
                 }
                 crate::windowmode::Placement::Maximized => {
+                    // ★ CONSTRAIN THE FRAME, NOT THE CONTENT. This mapped the
+                    // CONTENT at `usable.loc`/`usable.size` and skipped the
+                    // `content_for` shrink below, so the titlebar — which is
+                    // drawn ABOVE the content — rendered in the band the status
+                    // bar occupies (y 4..28 at bar_height 28) and the focus
+                    // ring landed at x = -2. A maximised window was the one
+                    // window whose controls were under the bar.
+                    let frame = usable;
+                    let content = crate::chrome::content_for(frame);
+                    let content = if content.size.is_empty() {
+                        frame
+                    } else {
+                        content
+                    };
                     if let Some(t) = w.toplevel() {
-                        t.with_pending_state(|st| st.size = Some(usable.size));
+                        t.with_pending_state(|st| st.size = Some(content.size));
                         t.send_pending_configure();
                     }
-                    self.space.map_element(w.clone(), usable.loc, true);
+                    self.space.map_element(w.clone(), content.loc, true);
                     continue;
                 }
                 crate::windowmode::Placement::AsLaidOut => {}

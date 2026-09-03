@@ -1302,12 +1302,31 @@ where
                 let colour = smithay::backend::renderer::Color32F::from(
                     crate::theme::focus_border_for_surface(false),
                 );
+                // ★ AROUND THE WHOLE FRAME — BAR INCLUDED.
+                //
+                // These were computed against the CONTENT rect, so the top
+                // edge landed in the band the titlebar occupies and the bar,
+                // pushed earlier in the element list, covered it. The left and
+                // right edges spanned only the content height, stopping short
+                // of the bar. The result was a three-sided bracket beside a
+                // window whose top 24 px had no ring at all — measured as
+                // `518,280 883x24 | 516,302 887x2`.
+                //
+                // The frame is the content grown upward by the bar; a window
+                // with no bar (an overlay, or a zero-height bar) is unchanged
+                // because `top` is then simply `fy`.
+                let top = fy - crate::chrome::HEIGHT;
+                let (top, span) = if top < fy {
+                    (top, fh + crate::chrome::HEIGHT)
+                } else {
+                    (fy, fh)
+                };
                 // top, bottom, left, right — each already inset into the gap.
                 let edges = [
-                    (fx - b, fy - b, fw + b * 2, b),
+                    (fx - b, top - b, fw + b * 2, b),
                     (fx - b, fy + fh, fw + b * 2, b),
-                    (fx - b, fy, b, fh),
-                    (fx + fw, fy, b, fh),
+                    (fx - b, top, b, span),
+                    (fx + fw, top, b, span),
                 ];
                 for (i, (x, y, w, h)) in edges.into_iter().enumerate() {
                     if w <= 0 || h <= 0 {

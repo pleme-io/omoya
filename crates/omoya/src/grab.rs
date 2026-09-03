@@ -111,7 +111,37 @@ impl PointerGrab<Omoya> for MoveGrab {
         handle.motion(data, None, event);
 
         let p: Point<i32, Logical> = (event.location.x as i32, event.location.y as i32).into();
-        let new_loc = p + self.offset;
+        // ★ CLAMPED, SO THE TITLEBAR CANNOT LEAVE THE SCREEN. `p + offset` is
+        // unbounded, and the titlebar is the ONE part of a window that must
+        // stay reachable — drag it past the top or the side and the thing you
+        // grab it by is the thing that has gone. Reuses `floatpos::clamped`
+        // rather than a second rule: the layout already clamps a remembered
+        // position on every pass, and two implementations of "keep it on
+        // screen" with different reference frames is how a window ends up
+        // snapping to one edge on drag and a different one on the next layout.
+        let new_loc = match data
+            .space
+            .element_geometry(&self.window)
+            .zip(usable_zone(data))
+        {
+            Some((geo, usable)) => {
+                // The BAR must stay inside, not the content — so the zone the
+                // frame is clamped into is grown upward by the bar's height,
+                // exactly as the frame is.
+                let frame = smithay::utils::Rectangle::new(
+                    (geo.loc.x, geo.loc.y - crate::chrome::HEIGHT).into(),
+                    (geo.size.w, geo.size.h + crate::chrome::HEIGHT).into(),
+                );
+                let want = p + self.offset;
+                let clamped = crate::floatpos::clamped(
+                    (want.x, want.y - crate::chrome::HEIGHT).into(),
+                    frame.size,
+                    usable,
+                );
+                Point::from((clamped.x, clamped.y + crate::chrome::HEIGHT))
+            }
+            None => p + self.offset,
+        };
         data.space.map_element(self.window.clone(), new_loc, true);
         // ★ RECORD IT. Writing only into the Space is what made dragging look
         // broken: the next `apply_layout` re-derived the position from the
@@ -302,4 +332,20 @@ mod snap_tests {
         let start = (700, 400);
         assert_eq!(snap_rect(start, (300, 200), (0, 0, 1920, 1080), 16), start);
     }
+}
+
+/// The zone a dragged window must stay inside — the output minus the bar.
+///
+/// ★ THE SAME ZONE THE LAYOUT USES. The release snap took its zone from
+/// `space.output_geometry` (the whole output) while the layout snaps to the
+/// non-exclusive zone, so the two disagreed by the bar's height and a window
+/// snapped to one edge on drag and a different one on the next layout pass.
+fn usable_zone(data: &Omoya) -> Option<smithay::utils::Rectangle<i32, Logical>> {
+    let output = data.space.outputs().next()?;
+    let geo = data.space.output_geometry(output)?;
+    let bar = data.config.bar.height;
+    Some(smithay::utils::Rectangle::new(
+        (geo.loc.x, geo.loc.y + bar).into(),
+        (geo.size.w, (geo.size.h - bar).max(0)).into(),
+    ))
 }
