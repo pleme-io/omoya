@@ -218,7 +218,7 @@ renderer-gated — so "select a GPU renderer and NVIDIA can present" was false.
 | **M0** ✅ | dmabuf round-trips through Vulkan in pure Rust | shipped — but see the note below on what it does and does not prove |
 | **M1a** ✅ | tiled dmabuf imported as a SAMPLED image; modifiers queried from the driver | shipped and **verified on plo's RTX 3070**: 7 importable modifiers (6 NVIDIA vendor layouts + LINEAR). ★ The hardware refuted an assumption — the 3070 ACCEPTS `DRM_FORMAT_MOD_INVALID` at `vkCreateImage`, so the refusal had to become ours at the import boundary. llvmpipe would have passed either way. |
 | **M1** | Import a real client dmabuf — tiled, device-local — as a **sampled** `VkImage`, composite from it, never touch it with the CPU | With a GPU client on plo: `gather_us < 5 000` (baseline **693 952**) **and** `Cost::cpu_bytes_per_frame == 0`. Not a pixel. |
-| **M2** ◑ | `impl Renderer + Frame + ImportDma + ImportMem + Bind<Dmabuf> + ExportMem + ArmFlush` for `Kasane` | `git show --stat <commit> -- crates/omoya/src/drm.rs` is **empty**. If drm.rs needs editing the seam was wrong. **The seam is confirmed to be a generic bound** (`drm.rs:560-595`), so satisfying it changes nothing there by construction. |
+| **M2** ✅ | `impl Renderer + Frame + ImportDma + ImportMem + Bind<Dmabuf> + ExportMem + ArmFlush` for `Kasane` | `git show --stat <commit> -- crates/omoya/src/drm.rs` is **empty**. If drm.rs needs editing the seam was wrong. **The seam is confirmed to be a generic bound** (`drm.rs:560-595`), so satisfying it changes nothing there by construction. |
 | **M3** ✅ | The dmabuf global becomes a typed capability on the renderer bound, not a shell variable | `wayland-info` lists `zwp_linux_dmabuf_v1` under kasane and does **not** under nuri, with `OMOYA_ADVERTISE_DMABUF` unset in both runs. `vulkaninfo` then names the RTX 3070 under Presentable Surfaces. |
 | **M4** ✅ | Device selection by DRM node + typed fallback | kasane binds the physical device whose `VkPhysicalDeviceDrmPropertiesEXT` major:minor matches the `DrmDeviceFd`'s `st_rdev` (226:1 / 226:128 on plo). Red run: hide the loader → nuri, fallback proven rather than inferred. |
 | **M5** | Scanout | page-flip from a GPU-composited buffer; `Cost::is_zero_copy()` true for a client surface. |
@@ -241,8 +241,10 @@ under lavapipe with the Vulkan validation layer on (23 tests, `--test-threads=1`
 | the smithay adapter's SHAPE — `Renderer`/`Frame`/`ImportDma` + the three omoya-local traits | shipped |
 | `Bind<Dmabuf>` — the renderer targets the scanout dmabuf directly, no shadow | shipped |
 | rendering INTO a shared dmabuf, proven by an independent second import | shipped |
-| `ImportMem` — a staging buffer and a host→device upload | **not built** |
-| `ExportMem` — the readback exists; smithay's `TextureMapping` does not | **not built** |
+| `ImportMem` — `Uploaded` + `Gpu::upload_texture`, for `wl_shm` clients | shipped |
+| `ExportMem` — `Target::capture`, an explicit copy paid once per screenshot | shipped |
+| **`drm.rs`'s complete renderer bound, asserted verbatim** | **shipped** |
+| the seat SELECTING this renderer | **not built** — see below |
 | a pipelined command-buffer ring (this waits on a fence per frame) | **not built** |
 
 **First pixel:** opaque red over the left half of a blue clear reads back
@@ -272,10 +274,26 @@ had drawn into a private image sharing a handle. An imported target has NO
 readback buffer at all, tied to the backing type, so "a scanout target that
 silently pays for a per-frame host copy" has no representation.
 
-★ **Nothing constructs a `KasaneRenderer` yet, and that is the type system
-working.** `drm.rs`'s bound demands the three unbuilt impls, so a half-built
-renderer cannot be selected — the alternative compiles, gets chosen, and
-composes a black screen.
+★★ **M2's done-predicate is met.** `drm::run` would accept `KasaneRenderer` —
+the bound is restated verbatim in a test, so a break names the missing trait at
+the definition rather than at the seat's generic instantiation. `drm.rs` is
+byte-unchanged, by construction.
+
+★ **What that does NOT mean.** Nothing SELECTS this renderer: the seat still
+builds a `NuriRenderer`, and it has never composited a real client — every gate
+runs against synthetic buffers on lavapipe. *The traits are satisfied* and *a
+seat works* are different claims. Wiring the choice decides what a live desktop
+runs on, so it belongs behind a config knob with a typed fallback, as its own
+change.
+
+★★ **The last test written found a bug in everything before it: every textured
+surface was drawn UPSIDE DOWN.** WGSL's NDC puts +Y up and Vulkan's puts +Y
+down; naga emits the shader as written, and wgpu — its usual host — compensates
+with a negative-height viewport that kasane does not set. It survived four
+tests, because a full-screen quad looks identical either way, the placement
+test varied only X, the crop test varied only `src.x`, and the dmabuf and
+upload tests used single-colour textures. It took a PARTIAL update of a
+two-valued texture landing in the wrong corner.
 
 ★★ **The validation gate is the load-bearing part, and its justification is a
 measurement.** Two red runs proved a pipeline-creation test blind to a wrong
