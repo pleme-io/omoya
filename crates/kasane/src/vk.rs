@@ -725,7 +725,23 @@ impl Gpu {
             .array_layers(1)
             .samples(vk::SampleCountFlags::TYPE_1)
             .tiling(vk::ImageTiling::LINEAR)
-            .usage(vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::TRANSFER_DST)
+            // ★ SAMPLED IS NOT OPTIONAL, and its absence was invisible.
+            //
+            // `import_linear` was written for M0, whose only job is to read
+            // the buffer back with the CPU — so TRANSFER was all it needed.
+            // The moment a client buffer is COMPOSITED it becomes a texture,
+            // and an image without this bit may not be viewed as one, barriered
+            // to SHADER_READ_ONLY_OPTIMAL, or written into a descriptor.
+            //
+            // lavapipe did all three anyway and returned the RIGHT PIXELS.
+            // Three separate VUIDs fired under the validation layer and not one
+            // test could see them — this is the class that gate exists for, and
+            // `import_tiled` (M1a, written to be sampled) already had it.
+            .usage(
+                vk::ImageUsageFlags::SAMPLED
+                    | vk::ImageUsageFlags::TRANSFER_SRC
+                    | vk::ImageUsageFlags::TRANSFER_DST,
+            )
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
             // ★ Same VUID-VkImageCreateInfo-pNext-01443 as the export side —
             // this image also chains `VkExternalMemoryImageCreateInfo`. See
@@ -767,12 +783,39 @@ impl Gpu {
         };
 
         match make() {
-            Ok(memory) => Ok(Imported {
-                gpu: self,
-                image,
-                memory,
-                geometry,
-            }),
+            Ok(memory) => {
+                // The view must be made AFTER the memory is bound: a view of
+                // an unbound image is invalid, and the driver need not say so.
+                let view_info = vk::ImageViewCreateInfo::default()
+                    .image(image)
+                    .view_type(vk::ImageViewType::TYPE_2D)
+                    .format(FORMAT)
+                    .subresource_range(
+                        vk::ImageSubresourceRange::default()
+                            .aspect_mask(vk::ImageAspectFlags::COLOR)
+                            .level_count(1)
+                            .layer_count(1),
+                    );
+                // SAFETY: `view_info` is a local naming an image with memory
+                // bound on the line above.
+                match unsafe { self.device.create_image_view(&view_info, None) } {
+                    Ok(view) => Ok(Imported {
+                        gpu: self,
+                        image,
+                        memory,
+                        view,
+                        geometry,
+                    }),
+                    Err(e) => {
+                        // SAFETY: both are live and neither is referenced yet.
+                        unsafe {
+                            self.device.destroy_image(image, None);
+                            self.device.free_memory(memory, None);
+                        }
+                        Err(driver("create_image_view(import)", e))
+                    }
+                }
+            }
             Err(e) => {
                 // SAFETY: live image; memory was never bound on this path.
                 unsafe { self.device.destroy_image(image, None) };
@@ -926,12 +969,34 @@ pub struct Pipelines<'g> {
     pub(crate) solid: vk::Pipeline,
     sampler_nearest: vk::Sampler,
     sampler_linear: vk::Sampler,
+    /// Descriptor sets for textured draws, reset once per frame.
+    ///
+    /// ★ RESET, NOT FREED PER SET. A compositor allocates the same handful of
+    /// descriptors every frame; freeing individually needs
+    /// `FREE_DESCRIPTOR_SET` and leaves the pool fragmented. Resetting the
+    /// whole pool at the top of a frame is one call and cannot fragment.
+    ///
+    /// ★ Safe only because `Target::draw` waits on its fence before returning,
+    /// so the previous frame's sets are certainly not in use. When the
+    /// command-buffer ring lands, this becomes one pool PER FRAME IN FLIGHT —
+    /// resetting a pool whose sets a running frame still references is
+    /// undefined behaviour, and it is the first thing the ring must fix.
+    descriptor_pool: vk::DescriptorPool,
     /// The colour format these were compiled against, so a caller cannot bind
     /// them to a mismatched attachment without the check being possible.
     pub format: vk::Format,
 }
 
 impl<'g> Pipelines<'g> {
+    /// How many textured draws one frame may contain.
+    ///
+    /// ★ A HARD CEILING, and it fails LOUDLY rather than silently dropping the
+    /// surplus — a compositor that quietly stops drawing after the 256th
+    /// surface produces a half-rendered screen with no error, which is
+    /// indistinguishable from a client bug. 256 is far above any real seat
+    /// (plo runs single digits); raising it is one constant.
+    pub const MAX_TEXTURE_DRAWS: u32 = 256;
+
     /// Compile the compositor's two pipelines for `format`.
     ///
     /// # Errors
@@ -954,6 +1019,7 @@ impl<'g> Pipelines<'g> {
             solid: vk::Pipeline::null(),
             sampler_nearest: vk::Sampler::null(),
             sampler_linear: vk::Sampler::null(),
+            descriptor_pool: vk::DescriptorPool::null(),
             format,
         };
         match built.finish_building() {
@@ -1012,6 +1078,23 @@ impl<'g> Pipelines<'g> {
 
         self.textured = self.pipeline(crate::entry::FRAGMENT_TEXTURE)?;
         self.solid = self.pipeline(crate::entry::FRAGMENT_SOLID)?;
+
+        // Two descriptors per set — the WGSL declares the image and the
+        // sampler separately, so the pool must size both.
+        let sizes = [
+            vk::DescriptorPoolSize::default()
+                .ty(vk::DescriptorType::SAMPLED_IMAGE)
+                .descriptor_count(Self::MAX_TEXTURE_DRAWS),
+            vk::DescriptorPoolSize::default()
+                .ty(vk::DescriptorType::SAMPLER)
+                .descriptor_count(Self::MAX_TEXTURE_DRAWS),
+        ];
+        let pool_info = vk::DescriptorPoolCreateInfo::default()
+            .max_sets(Self::MAX_TEXTURE_DRAWS)
+            .pool_sizes(&sizes);
+        // SAFETY: `sizes` outlives the call.
+        self.descriptor_pool = unsafe { dev.create_descriptor_pool(&pool_info, None) }
+            .map_err(|e| driver("create_descriptor_pool", e))?;
         Ok(())
     }
 
@@ -1147,6 +1230,8 @@ impl Drop for Pipelines<'_> {
             dev.destroy_pipeline(self.solid, None);
             dev.destroy_sampler(self.sampler_linear, None);
             dev.destroy_sampler(self.sampler_nearest, None);
+            // Before the set layout it was built from.
+            dev.destroy_descriptor_pool(self.descriptor_pool, None);
             dev.destroy_pipeline_layout(self.layout, None);
             dev.destroy_descriptor_set_layout(self.set_layout, None);
             // Destroyed LAST of the children but before the device: pipelines
@@ -1156,6 +1241,19 @@ impl Drop for Pipelines<'_> {
             dev.destroy_shader_module(self.module, None);
         }
     }
+}
+
+/// A sampleable image, borrowed for the length of a draw list.
+///
+/// ★ Carries the IMAGE as well as the view because the recorder has to
+/// transition the image's layout to `SHADER_READ_ONLY_OPTIMAL`, and a view
+/// does not name its image. Passing only the view compiles and then samples an
+/// image in the wrong layout — undefined, and on a real driver it reads as
+/// garbage rather than an error.
+#[derive(Clone, Copy, Debug)]
+pub struct TextureRef {
+    pub(crate) image: vk::Image,
+    pub(crate) view: vk::ImageView,
 }
 
 /// One rectangle to draw, as a closed set.
@@ -1168,6 +1266,15 @@ impl Drop for Pipelines<'_> {
 pub enum Draw {
     /// A flat premultiplied colour — a bar background, a border, an overlay.
     Solid(crate::Params),
+    /// A client surface, sampled from an imported buffer.
+    Texture {
+        /// Where it goes and how opaque it is.
+        params: crate::Params,
+        /// What to sample.
+        texture: TextureRef,
+        /// How to sample it when the sizes differ.
+        filter: Filter,
+    },
 }
 
 /// An off-screen render target, plus the path to read it back.
@@ -1340,7 +1447,35 @@ impl<'g> Target<'g> {
             });
         }
 
+        // ★ REFUSED, NOT SILENTLY SHORTENED. Allocating past the pool's
+        // capacity returns ERROR_OUT_OF_POOL_MEMORY mid-frame, which would
+        // abandon a half-recorded command buffer; saying so here names the
+        // real limit instead.
+        let textures = draws
+            .iter()
+            .filter(|d| matches!(d, Draw::Texture { .. }))
+            .count();
+        if textures > Pipelines::MAX_TEXTURE_DRAWS as usize {
+            return Err(KasaneError::Vulkan {
+                call: "Target::draw",
+                result: format!(
+                    "{textures} textured draws exceeds MAX_TEXTURE_DRAWS \
+                     ({}); raise the constant rather than dropping surfaces",
+                    Pipelines::MAX_TEXTURE_DRAWS
+                ),
+            });
+        }
+
         let dev = &self.gpu.device;
+        // Reclaim last frame's descriptor sets. Safe because this function
+        // waits on its fence before returning — see the field's own note for
+        // what the command-buffer ring must change here.
+        // SAFETY: the pool is live and no submitted work references its sets.
+        unsafe {
+            dev.reset_descriptor_pool(pipes.descriptor_pool, vk::DescriptorPoolResetFlags::empty())
+        }
+        .map_err(|e| driver("reset_descriptor_pool", e))?;
+
         let alloc = vk::CommandBufferAllocateInfo::default()
             .command_pool(self.gpu.command_pool)
             .level(vk::CommandBufferLevel::PRIMARY)
@@ -1378,6 +1513,42 @@ impl<'g> Target<'g> {
             .aspect_mask(vk::ImageAspectFlags::COLOR)
             .level_count(1)
             .layer_count(1);
+
+        // ★ EVERY SAMPLED IMAGE MOVES TO SHADER_READ_ONLY_OPTIMAL FIRST, and
+        // this must happen OUTSIDE the rendering scope — layout transitions
+        // are illegal between `cmd_begin_rendering` and `cmd_end_rendering`.
+        //
+        // The source layout is UNDEFINED, which discards the image's previous
+        // CONTENTS in general — but not here: an imported dmabuf's pixels live
+        // in memory the exporter wrote and this image is only a view onto it.
+        // Naming the real previous layout is impossible anyway, because the
+        // buffer came from another process that never told us.
+        for d in draws {
+            if let Draw::Texture { texture, .. } = *d {
+                let b = vk::ImageMemoryBarrier::default()
+                    .old_layout(vk::ImageLayout::UNDEFINED)
+                    .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                    .src_access_mask(vk::AccessFlags::empty())
+                    .dst_access_mask(vk::AccessFlags::SHADER_READ)
+                    .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .image(texture.image)
+                    .subresource_range(whole);
+                // SAFETY: recording into a live buffer; `b` is a local naming
+                // an image the caller borrows for this call.
+                unsafe {
+                    dev.cmd_pipeline_barrier(
+                        cmd,
+                        vk::PipelineStageFlags::TOP_OF_PIPE,
+                        vk::PipelineStageFlags::FRAGMENT_SHADER,
+                        vk::DependencyFlags::empty(),
+                        &[],
+                        &[],
+                        &[b],
+                    );
+                }
+            }
+        }
 
         // UNDEFINED → COLOR_ATTACHMENT_OPTIMAL. The old contents are discarded,
         // which is correct: the render pass clears.
@@ -1434,6 +1605,73 @@ impl<'g> Target<'g> {
 
         for d in draws {
             match *d {
+                Draw::Texture {
+                    params,
+                    texture,
+                    filter,
+                } => {
+                    // One set per draw, from the pool reset at the top of this
+                    // frame. Vulkan forbids updating a set that a submitted
+                    // command buffer still references, so re-using one set
+                    // across draws in a frame would be undefined — the mistake
+                    // is invisible until two surfaces are on screen and one
+                    // shows the other's contents.
+                    let layouts = [pipes.set_layout];
+                    let alloc = vk::DescriptorSetAllocateInfo::default()
+                        .descriptor_pool(pipes.descriptor_pool)
+                        .set_layouts(&layouts);
+                    // SAFETY: `layouts` outlives the call; the pool is live.
+                    let sets = unsafe { dev.allocate_descriptor_sets(&alloc) }
+                        .map_err(|e| driver("allocate_descriptor_sets", e))?;
+                    let set = sets[0];
+
+                    let image_info = [vk::DescriptorImageInfo::default()
+                        .image_view(texture.view)
+                        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
+                    let sampler_info =
+                        [vk::DescriptorImageInfo::default().sampler(pipes.sampler_for(filter))];
+                    // Binding 0 is the image and 1 is the sampler, matching
+                    // what the WGSL declares — naga lowers `texture_2d` and
+                    // `sampler` to two descriptors, not a combined one.
+                    let writes = [
+                        vk::WriteDescriptorSet::default()
+                            .dst_set(set)
+                            .dst_binding(0)
+                            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                            .image_info(&image_info),
+                        vk::WriteDescriptorSet::default()
+                            .dst_set(set)
+                            .dst_binding(1)
+                            .descriptor_type(vk::DescriptorType::SAMPLER)
+                            .image_info(&sampler_info),
+                    ];
+                    // SAFETY: every borrowed array is a local outliving the
+                    // call, and the set was allocated from this device.
+                    unsafe { dev.update_descriptor_sets(&writes, &[]) };
+
+                    // SAFETY: the pipeline matches the attachment format
+                    // (checked in `draw`), and the set matches the layout the
+                    // pipeline was built with.
+                    unsafe {
+                        dev.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipes.textured);
+                        dev.cmd_bind_descriptor_sets(
+                            cmd,
+                            vk::PipelineBindPoint::GRAPHICS,
+                            pipes.layout,
+                            0,
+                            &[set],
+                            &[],
+                        );
+                        dev.cmd_push_constants(
+                            cmd,
+                            pipes.layout,
+                            vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                            0,
+                            params.bytes(),
+                        );
+                        dev.cmd_draw(cmd, 4, 1, 0, 0);
+                    }
+                }
                 Draw::Solid(params) => {
                     // SAFETY: the pipeline was compiled for this attachment
                     // format (checked in `draw`), the push-constant range
@@ -1644,6 +1882,72 @@ impl Exported<'_> {
     /// stays alive, because a dmabuf is refcounted by the KERNEL. That is
     /// exactly the property a compositor depends on — a client's buffer must
     /// outlive the client's own frame bookkeeping.
+    /// Repaint a rectangle of this buffer, through the driver's own stride.
+    ///
+    /// ★ Exists so a test can build a buffer with DISTINGUISHABLE REGIONS. A
+    /// uniformly filled buffer cannot prove that a source rectangle is
+    /// honoured — every crop of it looks the same — so "the UVs are ignored"
+    /// and "the UVs work" produce identical pixels.
+    ///
+    /// Uses `Geometry::byte_offset`, so the row pitch is the one the driver
+    /// reported rather than `width * 4`. That distinction is the whole reason
+    /// `Geometry` carries a stride.
+    ///
+    /// # Errors
+    /// [`KasaneError::Vulkan`] if the memory cannot be mapped, or
+    /// [`KasaneError::OutOfBounds`] if the rectangle leaves the buffer.
+    pub fn fill_rect(
+        &mut self,
+        x0: u32,
+        y0: u32,
+        w: u32,
+        h: u32,
+        colour: [u8; 4],
+    ) -> Result<(), KasaneError> {
+        if x0 + w > self.geometry.width || y0 + h > self.geometry.height {
+            return Err(KasaneError::OutOfBounds {
+                x: x0 + w,
+                y: y0 + h,
+                width: self.geometry.width,
+                height: self.geometry.height,
+            });
+        }
+        let size = self.geometry.min_size();
+        // SAFETY: the memory was allocated HOST_VISIBLE | HOST_COHERENT by
+        // `export_linear`, and it is unmapped before returning.
+        let ptr = unsafe {
+            self.gpu
+                .device
+                .map_memory(self.memory, 0, size, vk::MemoryMapFlags::empty())
+        }
+        .map_err(|e| driver("map_memory(fill_rect)", e))?
+        .cast::<u8>();
+
+        for y in y0..y0 + h {
+            for x in x0..x0 + w {
+                let Some(off) = self.geometry.byte_offset(x, y) else {
+                    continue;
+                };
+                if off + 4 > size {
+                    continue;
+                }
+                // SAFETY: `off + 4 <= size` is checked directly above, and
+                // `ptr` maps exactly `size` bytes.
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        colour.as_ptr(),
+                        ptr.add(usize::try_from(off).unwrap_or(0)),
+                        4,
+                    );
+                }
+            }
+        }
+        // HOST_COHERENT, so no explicit flush before unmapping.
+        // SAFETY: mapped on the line above and not referenced after.
+        unsafe { self.gpu.device.unmap_memory(self.memory) };
+        Ok(())
+    }
+
     pub fn take_fd(&mut self) -> Option<OwnedFd> {
         self.fd.take()
     }
@@ -1666,10 +1970,27 @@ pub struct Imported<'g> {
     gpu: &'g Gpu,
     image: vk::Image,
     memory: vk::DeviceMemory,
+    /// A view of the whole image, so it can be SAMPLED.
+    ///
+    /// ★ Created at import time rather than on demand. A view is cheap and
+    /// immutable, and creating one per frame would put a driver call on the
+    /// hot path to produce a value that never changes. It also means
+    /// [`Imported::texture`] cannot fail, so a draw list can be built without
+    /// error handling per surface.
+    view: vk::ImageView,
     pub geometry: Geometry,
 }
 
 impl Imported<'_> {
+    /// This buffer as something a [`Draw::Texture`] can sample.
+    #[must_use]
+    pub fn texture(&self) -> TextureRef {
+        TextureRef {
+            image: self.image,
+            view: self.view,
+        }
+    }
+
     /// Read one pixel as B,G,R,A — the DRM `ARGB8888` byte order.
     ///
     /// # Errors
@@ -1711,8 +2032,10 @@ impl Imported<'_> {
 
 impl Drop for Imported<'_> {
     fn drop(&mut self) {
-        // SAFETY: both handles came from `gpu.device` and are destroyed once.
+        // SAFETY: every handle came from `gpu.device` and is destroyed once.
+        // The view goes FIRST — it is a child of the image.
         unsafe {
+            self.gpu.device.destroy_image_view(self.view, None);
             self.gpu.device.destroy_image(self.image, None);
             self.gpu.device.free_memory(self.memory, None);
         }
@@ -1934,12 +2257,39 @@ impl Gpu {
         };
 
         match make() {
-            Ok(memory) => Ok(Imported {
-                gpu: self,
-                image,
-                memory,
-                geometry,
-            }),
+            Ok(memory) => {
+                // The view must be made AFTER the memory is bound: a view of
+                // an unbound image is invalid, and the driver need not say so.
+                let view_info = vk::ImageViewCreateInfo::default()
+                    .image(image)
+                    .view_type(vk::ImageViewType::TYPE_2D)
+                    .format(FORMAT)
+                    .subresource_range(
+                        vk::ImageSubresourceRange::default()
+                            .aspect_mask(vk::ImageAspectFlags::COLOR)
+                            .level_count(1)
+                            .layer_count(1),
+                    );
+                // SAFETY: `view_info` is a local naming an image with memory
+                // bound on the line above.
+                match unsafe { self.device.create_image_view(&view_info, None) } {
+                    Ok(view) => Ok(Imported {
+                        gpu: self,
+                        image,
+                        memory,
+                        view,
+                        geometry,
+                    }),
+                    Err(e) => {
+                        // SAFETY: both are live and neither is referenced yet.
+                        unsafe {
+                            self.device.destroy_image(image, None);
+                            self.device.free_memory(memory, None);
+                        }
+                        Err(driver("create_image_view(import)", e))
+                    }
+                }
+            }
             Err(e) => {
                 // SAFETY: live image; memory was never bound on this path.
                 unsafe { self.device.destroy_image(image, None) };
@@ -2661,6 +3011,146 @@ mod tests {
             0,
             "the Vulkan validation layer reported errors — see the \
              `kasane VALIDATION ERROR:` lines above for the VUIDs"
+        );
+    }
+
+    /// ★★★ A CLIENT BUFFER, COMPOSITED BY THE GPU — the whole point of kasane.
+    ///
+    /// A real kernel dmabuf is exported, imported as a SAMPLED image, and
+    /// drawn into a render target by the fragment shader. The pixel that comes
+    /// back has been through: host write → dmabuf → `vkBindImageMemory` →
+    /// layout transition → descriptor set → `textureSample` → blend →
+    /// attachment → copy. Every stage in pure Rust over `ash`.
+    ///
+    /// ── ★ WHAT THIS PROVES THAT M0 DOES NOT ──────────────────────────────
+    /// M0 imports a dmabuf and reads it back with the CPU. That proves the
+    /// external-memory machinery and nothing about compositing — it is, in
+    /// fact, exactly the readback path that put the desktop on llvmpipe. This
+    /// is the first test in which the GPU *looks at* a client buffer.
+    ///
+    /// ── ★ SCALED 2:1 ON PURPOSE ──────────────────────────────────────────
+    /// The source is 8x8 and the destination 16x16, so the sampler, the UV
+    /// rectangle and `Filter::Nearest` are all exercised. A 1:1 blit would
+    /// pass even if the UVs were ignored entirely.
+    #[test]
+    fn a_client_buffer_is_sampled_and_composited_by_the_gpu() {
+        let gpu = match Gpu::open() {
+            Ok(g) => g,
+            Err(e) => {
+                skip_or_panic("texture draw", &e);
+                return;
+            }
+        };
+        // Asymmetric across all four channels, so a channel swap or a
+        // byte-order mistake cannot pass. Opaque, so the blend is the identity
+        // and this test measures SAMPLING, not blending — that is the other
+        // test's job.
+        const FILL: [u8; 4] = [0x40, 0x80, 0xc0, 0xff];
+
+        let mut exported = gpu.export_linear(8, 8, FILL).expect("export");
+        let geometry = exported.geometry;
+        let fd = exported.take_fd().expect("the exporter owns the fd");
+        let imported = gpu.import_linear(fd, geometry).expect("import");
+
+        let pipes = Pipelines::new(&gpu, FORMAT).expect("pipelines");
+        let target = Target::new(&gpu, 16, 16, FORMAT).expect("target");
+
+        let draw = Draw::Texture {
+            params: crate::Params {
+                // The whole target.
+                dst: [-1.0, -1.0, 2.0, 2.0],
+                // The whole source.
+                src: [0.0, 0.0, 1.0, 1.0],
+                tint: [1.0, 1.0, 1.0, 1.0],
+            },
+            texture: imported.texture(),
+            // NEAREST so the expected value is exact. LINEAR would blend
+            // texels at the edges and the assertion would need a tolerance
+            // that could hide a real error.
+            filter: Filter::Nearest,
+        };
+        // Cleared to a colour that is NOT the fill, so a draw that did nothing
+        // at all fails rather than coincidentally matching.
+        target
+            .draw(&pipes, [0.0, 1.0, 0.0, 1.0], &[draw])
+            .expect("draw");
+
+        let px = target.read_pixel(8, 8).expect("read");
+        assert_eq!(
+            px, FILL,
+            "the composited pixel must be the client buffer's own — got \
+             {px:?}, wanted {FILL:?}. A value of [0,255,0,255] means the draw \
+             did not happen at all and this is the green clear."
+        );
+        eprintln!(
+            "kasane S2d: {:?} sampled a dmabuf and composited it: {px:?}",
+            gpu.device_name
+        );
+    }
+
+    /// ★ THE SOURCE RECTANGLE IS HONOURED — cropping is one draw, not a pass.
+    ///
+    /// Half of an 8x8 source is drawn across the whole target. If `src` were
+    /// ignored the result would be identical to the test above, which is
+    /// exactly why that one cannot prove this: both halves of a uniformly
+    /// filled buffer are the same colour.
+    ///
+    /// So the source is filled by hand with two different halves, through the
+    /// SAME mapping the exporter used, and each half is asked for separately.
+    #[test]
+    fn the_source_rectangle_selects_which_part_of_the_buffer_is_drawn() {
+        let gpu = match Gpu::open() {
+            Ok(g) => g,
+            Err(e) => {
+                skip_or_panic("uv crop", &e);
+                return;
+            }
+        };
+        const LEFT: [u8; 4] = [0x11, 0x22, 0x33, 0xff];
+        const RIGHT: [u8; 4] = [0xaa, 0xbb, 0xcc, 0xff];
+
+        let mut exported = gpu.export_linear(8, 8, LEFT).expect("export");
+        // Repaint the right half through the exporter's own mapping, so the
+        // stride comes from the driver rather than from an assumption.
+        exported.fill_rect(4, 0, 4, 8, RIGHT).expect("repaint");
+        let geometry = exported.geometry;
+        let fd = exported.take_fd().expect("fd");
+        let imported = gpu.import_linear(fd, geometry).expect("import");
+
+        let pipes = Pipelines::new(&gpu, FORMAT).expect("pipelines");
+        let target = Target::new(&gpu, 16, 16, FORMAT).expect("target");
+
+        let sample_half = |u: f32| Draw::Texture {
+            params: crate::Params {
+                dst: [-1.0, -1.0, 2.0, 2.0],
+                // Half the width of the source, starting at `u`.
+                src: [u, 0.0, 0.5, 1.0],
+                tint: [1.0, 1.0, 1.0, 1.0],
+            },
+            texture: imported.texture(),
+            filter: Filter::Nearest,
+        };
+
+        target
+            .draw(&pipes, [0.0, 0.0, 0.0, 1.0], &[sample_half(0.0)])
+            .expect("draw left");
+        let got_left = target.read_pixel(8, 8).expect("read");
+
+        target
+            .draw(&pipes, [0.0, 0.0, 0.0, 1.0], &[sample_half(0.5)])
+            .expect("draw right");
+        let got_right = target.read_pixel(8, 8).expect("read");
+
+        assert_eq!(got_left, LEFT, "src.x = 0.0 must sample the left half");
+        assert_eq!(
+            got_right, RIGHT,
+            "src.x = 0.5 must sample the RIGHT half; getting the left one \
+             back means the UV rectangle is ignored and every surface would \
+             be drawn uncropped"
+        );
+        assert_ne!(
+            got_left, got_right,
+            "the two halves must differ or this test proves nothing"
         );
     }
 }
