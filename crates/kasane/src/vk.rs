@@ -98,6 +98,53 @@ pub fn validation_active() -> bool {
 static VALIDATION_INSTALLED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// Validation errors matching a documented, MEASURED disagreement.
+///
+/// Counted separately and reported, never hidden — see [`EXEMPT_VUIDS`].
+static VALIDATION_EXEMPT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// How many exempted validation errors have been seen.
+///
+/// ★ Reported by the gate on every run so a growing list is VISIBLE. An
+/// exemption nobody sees is an exemption nobody re-examines.
+#[must_use]
+pub fn validation_exempt() -> usize {
+    VALIDATION_EXEMPT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The one validation error this crate has measured to be wrong about us.
+///
+/// ── ★ AN EXEMPTION IS THE DANGEROUS DIRECTION, so this one carries its
+/// receipt and is matched on the VUID ALONE — never on a substring of the
+/// message prose, which would silence a whole family of unrelated errors.
+///
+/// **`VUID-VkImageViewCreateInfo-None-02273`** — "the format features of the
+/// resultant image view must contain at least one bit". Fires when a view is
+/// created on a `DRM_FORMAT_MODIFIER_EXT`-tiled image.
+///
+/// Measured on lavapipe 2026-09-03, and the measurement refutes the layer:
+///
+///   * `vkGetImageDrmFormatModifierPropertiesEXT` on the actual image reports
+///     modifier **`0x0`** — exactly the one requested, so the explicit create
+///     info was honoured and it is not a case of the driver substituting one.
+///   * `vkGetPhysicalDeviceFormatProperties2` reports modifier `0x0` with
+///     features **`0xdd83`** — that is `SAMPLED_IMAGE`, `STORAGE_IMAGE`,
+///     `COLOR_ATTACHMENT`, `COLOR_ATTACHMENT_BLEND`, `BLIT_SRC`, `BLIT_DST`,
+///     `SAMPLED_IMAGE_FILTER_LINEAR`, `TRANSFER_SRC` and `TRANSFER_DST`. Very
+///     far from "no supported format features".
+///   * The frame renders correctly and an INDEPENDENT import of the same
+///     dmabuf reads back the drawn pixel.
+///
+/// So the image is right, its modifier is right, and its features are right;
+/// the layer is reading something else. Both alternatives were checked before
+/// exempting — this is not a shrug.
+///
+/// ★ **RE-MEASURE ON REAL HARDWARE.** This is justified on lavapipe. If the
+/// same VUID fires on plo's RTX 3070, that is a DIFFERENT observation and must
+/// be diagnosed rather than inheriting this exemption.
+/// `pending-kasane: re-measure VUID-02273 on the 3070`
+const EXEMPT_VUIDS: &[&str] = &["VUID-VkImageViewCreateInfo-None-02273"];
+
 /// The layer's callback. Records errors and prints everything it is given.
 ///
 /// # Safety
@@ -124,6 +171,13 @@ unsafe extern "system" fn debug_callback(
             .unwrap_or("<no message>")
     };
     if severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::ERROR) {
+        // Matched on the VUID identifier alone. Matching prose would make one
+        // exemption silence every error that happens to share a phrase.
+        if EXEMPT_VUIDS.iter().any(|v| message.contains(v)) {
+            VALIDATION_EXEMPT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            eprintln!("kasane validation (KNOWN, exempt): {message}");
+            return vk::FALSE;
+        }
         VALIDATION_ERRORS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         eprintln!("kasane VALIDATION ERROR: {message}");
     } else {
@@ -947,6 +1001,74 @@ impl crate::Params {
     }
 }
 
+/// What an imported dmabuf is going to be USED for.
+///
+/// ── ★ WHY THIS IS ONE CHOICE AND NOT TWO FIELDS ──────────────────────────
+/// Importing a dmabuf needs two things that must agree: the `VkImageUsageFlags`
+/// the image is created with, and the `VkFormatFeatureFlags` the modifier must
+/// support. Passing them separately makes the disagreement expressible — and
+/// it is a disagreement with no error: the driver offers a modifier list
+/// filtered for `SAMPLED_IMAGE`, the import checks against that list, and
+/// then creates a `COLOR_ATTACHMENT` image whose modifier was never validated
+/// for
+/// rendering.
+///
+/// Deriving both from one enum makes that unrepresentable. A caller states the
+/// PURPOSE; the flags follow.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ImportUse {
+    /// A client surface the compositor will sample.
+    Surface,
+    /// A scanout buffer the compositor will render into.
+    RenderTarget,
+}
+
+impl ImportUse {
+    /// The image usage this purpose needs.
+    ///
+    /// ── ★ EXACTLY ONE BIT, AND THE FIRST DRAFT HAD TWO ───────────────────
+    /// This originally added `TRANSFER_SRC` to both, reasoning that either
+    /// might be read back. That was WRONG, and the validation layer caught it
+    /// the first time a dmabuf was used as a render target:
+    ///
+    /// ```text
+    /// vkCreateImageView(): format B8G8R8A8_UNORM with tiling
+    ///   DRM_FORMAT_MODIFIER_EXT has no supported format features
+    /// vkCmdCopyImageToBuffer(): srcImage ... must contain TRANSFER_SRC_BIT
+    /// ```
+    ///
+    /// With DRM-modifier tiling the format features come from the MODIFIER,
+    /// not from `optimalTilingFeatures` — and lavapipe's linear modifier
+    /// offers `COLOR_ATTACHMENT` without `TRANSFER_SRC`. Asking for a usage the
+    /// modifier does not support left an image whose view had no valid
+    /// features at all, and lavapipe created it anyway. The pixels still came
+    /// out right, which is precisely why nothing but the layer could see it.
+    ///
+    /// So the usage is now exactly the bit the purpose needs, and
+    /// [`ImportUse::required_feature`] is its mirror — see the test that pins
+    /// the correspondence.
+    fn usage(self) -> vk::ImageUsageFlags {
+        match self {
+            Self::Surface => vk::ImageUsageFlags::SAMPLED,
+            Self::RenderTarget => vk::ImageUsageFlags::COLOR_ATTACHMENT,
+        }
+    }
+
+    /// The format feature a modifier must support to serve this purpose.
+    ///
+    /// ★ THE MIRROR OF [`ImportUse::usage`]. A modifier the driver can SAMPLE
+    /// is not necessarily one it can RENDER INTO, and nothing reports the
+    /// difference — the image is created and the pixels come out wrong. The
+    /// two must name the same capability, which is what the correspondence
+    /// test asserts.
+    fn required_feature(self) -> vk::FormatFeatureFlags {
+        match self {
+            Self::Surface => vk::FormatFeatureFlags::SAMPLED_IMAGE,
+            Self::RenderTarget => vk::FormatFeatureFlags::COLOR_ATTACHMENT,
+        }
+    }
+}
+
 /// How a texture is sampled when the source and destination sizes differ.
 ///
 /// A closed pair rather than a `bool`, so a call site reads as what it means
@@ -1316,14 +1438,85 @@ pub enum Draw {
 /// `linearTilingFeatures`, so the image creation fails on plo's 3070 and
 /// succeeds in CI — the worst possible split, since the test machine would
 /// prove a path the real machine cannot take.
+/// Where a [`Target`]'s pixels live, and therefore who destroys them.
+///
+/// ★ A CLOSED CHOICE rather than an `Option<DeviceMemory>` beside a raw image.
+/// With separate fields, "an owned target whose memory handle is null" and "an
+/// imported target that also tries to free memory it does not own" are both
+/// constructible, and the second is a double free the driver will not warn
+/// about. As two variants, neither has a representation.
+enum Backing {
+    /// This target allocated its own image — the off-screen case.
+    Owned {
+        image: vk::Image,
+        view: vk::ImageView,
+        memory: vk::DeviceMemory,
+    },
+    /// The image came from a dmabuf and the import owns every handle.
+    ///
+    /// Held rather than borrowed so the import cannot be dropped while the
+    /// target still renders into it.
+    Imported(Imported),
+}
+
+impl Backing {
+    fn image(&self) -> vk::Image {
+        match self {
+            Self::Owned { image, .. } => *image,
+            Self::Imported(i) => i.texture().image,
+        }
+    }
+
+    fn view(&self) -> vk::ImageView {
+        match self {
+            Self::Owned { view, .. } => *view,
+            Self::Imported(i) => i.texture().view,
+        }
+    }
+
+    /// Destroy what this backing owns.
+    ///
+    /// ★ Only the `Owned` arm does anything: an imported backing's handles
+    /// belong to the `Imported`, whose own `Drop` frees them. Freeing them
+    /// here as well is the double free the enum exists to prevent, so the
+    /// `Imported` arm is deliberately empty rather than accidentally omitted.
+    ///
+    /// # Safety
+    /// Must be called at most once, and only while the device is alive.
+    unsafe fn destroy(&self, dev: &ash::Device) {
+        if let Self::Owned {
+            image,
+            view,
+            memory,
+        } = self
+        {
+            // SAFETY: the caller guarantees a live device and a single call.
+            // Memory is freed AFTER the objects bound to it, which is the
+            // ordering Vulkan requires.
+            unsafe {
+                dev.destroy_image_view(*view, None);
+                dev.destroy_image(*image, None);
+                dev.free_memory(*memory, None);
+            }
+        }
+    }
+}
+
 pub struct Target {
     /// The device. See [`Pipelines`]'s field for why this is an `Arc`.
     gpu: std::sync::Arc<Gpu>,
-    image: vk::Image,
-    view: vk::ImageView,
-    image_memory: vk::DeviceMemory,
-    readback: vk::Buffer,
-    readback_memory: vk::DeviceMemory,
+    backing: Backing,
+    /// Host-visible copy of the last frame — `None` for an imported target.
+    ///
+    /// ★★ AN IMPORTED TARGET MUST NOT BE COPIED EVERY FRAME. It is the
+    /// scanout buffer; the display reads it directly, and copying it into host
+    /// memory each frame is exactly the 12.0ms-of-a-12.1ms-frame cost this
+    /// whole crate exists to remove. An OWNED target is off-screen, so a
+    /// readback is the ONLY way to observe it and is always wanted.
+    ///
+    /// Tying this to the backing rather than to a flag means "a scanout target
+    /// that silently pays for a readback" has no representation.
+    readback: Option<(vk::Buffer, vk::DeviceMemory)>,
     /// Size in pixels.
     pub extent: vk::Extent2D,
     /// Colour format — must match the [`Pipelines`] used to draw into it.
@@ -1331,7 +1524,7 @@ pub struct Target {
 }
 
 impl Target {
-    /// Create a `width` x `height` target in `format`.
+    /// Create a `width` x `height` off-screen target in `format`.
     ///
     /// # Errors
     /// [`KasaneError::Vulkan`] for any driver refusal; every one names the
@@ -1342,26 +1535,82 @@ impl Target {
         height: u32,
         format: vk::Format,
     ) -> Result<Self, KasaneError> {
-        let extent = vk::Extent2D { width, height };
-        let mut t = Self {
-            gpu: std::sync::Arc::clone(gpu),
-            image: vk::Image::null(),
-            view: vk::ImageView::null(),
-            image_memory: vk::DeviceMemory::null(),
-            readback: vk::Buffer::null(),
-            readback_memory: vk::DeviceMemory::null(),
-            extent,
-            format,
-        };
-        // Same incremental shape as `Pipelines`: `Drop` cleans up a failure
-        // part-way through, which matters because a compositor retries.
-        t.build(width, height, format)?;
-        Ok(t)
+        let backing = Self::owned_backing(gpu, width, height, format)?;
+        Self::with_backing(gpu, backing, vk::Extent2D { width, height }, format)
     }
 
-    fn build(&mut self, width: u32, height: u32, format: vk::Format) -> Result<(), KasaneError> {
-        let dev = &self.gpu.device;
+    /// Render into a dmabuf somebody else allocated — a scanout buffer.
+    ///
+    /// ── ★ THIS IS WHAT MAKES ZERO-COPY POSSIBLE ──────────────────────────
+    /// [`Target::new`] allocates its own image, so anything drawn into it must
+    /// be copied somewhere to be seen. This one renders DIRECTLY into the
+    /// buffer the display scans out of: no shadow, no flush, no copy. It is
+    /// the difference between nuri's measured 12.0 ms of a 12.1 ms frame and
+    /// nothing at all.
+    ///
+    /// # Errors
+    /// [`KasaneError::ModifierNotSupported`] if the device cannot RENDER INTO
+    /// that layout — a different question from whether it can sample it, and
+    /// checked against the right list by [`ImportUse`].
+    pub fn from_dmabuf(
+        gpu: &std::sync::Arc<Gpu>,
+        fd: OwnedFd,
+        geometry: Geometry,
+        modifier: u64,
+    ) -> Result<Self, KasaneError> {
+        let imported = gpu.import_for(fd, geometry, modifier, ImportUse::RenderTarget)?;
+        let extent = vk::Extent2D {
+            width: geometry.width,
+            height: geometry.height,
+        };
+        Self::with_backing(gpu, Backing::Imported(imported), extent, FORMAT)
+    }
 
+    /// Add the readback buffer to a backing and make a `Target`.
+    ///
+    /// ★ Shared by both constructors so the readback path cannot exist for one
+    /// and not the other — an imported target that could not be screenshot
+    /// would fail `ExportMem` only on the machine that has a real display.
+    fn with_backing(
+        gpu: &std::sync::Arc<Gpu>,
+        backing: Backing,
+        extent: vk::Extent2D,
+        format: vk::Format,
+    ) -> Result<Self, KasaneError> {
+        // Only an owned target gets one — see the field's own note.
+        let readback = match &backing {
+            Backing::Owned { .. } => match Self::readback_buffer(gpu, extent) {
+                Ok(pair) => Some(pair),
+                Err(e) => {
+                    // The backing is not owned by a `Target` yet, so nothing
+                    // else will free it.
+                    // SAFETY: built above, destroyed once, device alive.
+                    unsafe { backing.destroy(&gpu.device) };
+                    return Err(e);
+                }
+            },
+            Backing::Imported(_) => None,
+        };
+        Ok(Self {
+            gpu: std::sync::Arc::clone(gpu),
+            backing,
+            readback,
+            extent,
+            format,
+        })
+    }
+
+    /// Allocate an image this target owns, plus its view.
+    ///
+    /// Self-cleaning: a failure part-way through destroys what it made, so a
+    /// retrying compositor does not leak an image per attempt.
+    fn owned_backing(
+        gpu: &std::sync::Arc<Gpu>,
+        width: u32,
+        height: u32,
+        format: vk::Format,
+    ) -> Result<Backing, KasaneError> {
+        let dev = &gpu.device;
         let image_info = vk::ImageCreateInfo::default()
             .image_type(vk::ImageType::TYPE_2D)
             .format(format)
@@ -1373,76 +1622,119 @@ impl Target {
             .mip_levels(1)
             .array_layers(1)
             .samples(vk::SampleCountFlags::TYPE_1)
+            // ★ OPTIMAL TILING AND A COPY, NOT A LINEAR ATTACHMENT.
+            // Rendering into a LINEAR host-visible image and mapping it would
+            // be shorter, and it works on lavapipe. It does NOT work on the
+            // hardware this exists for: NVIDIA does not advertise
+            // COLOR_ATTACHMENT in `linearTilingFeatures`, so image creation
+            // fails on plo's 3070 and succeeds in CI — the worst possible
+            // split, where the test machine proves a path the real machine
+            // cannot take.
             .tiling(vk::ImageTiling::OPTIMAL)
-            // TRANSFER_SRC is what makes the result readable at all — see the
-            // struct header for why the copy is not optional.
             .usage(vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_SRC)
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
             .initial_layout(vk::ImageLayout::UNDEFINED);
         // SAFETY: `image_info` and everything it borrows are locals.
-        self.image = unsafe { dev.create_image(&image_info, None) }
+        let image = unsafe { dev.create_image(&image_info, None) }
             .map_err(|e| driver("create_image(target)", e))?;
 
-        // SAFETY: the image was just created on this device.
-        let reqs = unsafe { dev.get_image_memory_requirements(self.image) };
-        let idx = self.gpu.memory_type(
-            reqs.memory_type_bits,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            "DEVICE_LOCAL",
-        )?;
-        let alloc = vk::MemoryAllocateInfo::default()
-            .allocation_size(reqs.size)
-            .memory_type_index(idx);
-        // SAFETY: `alloc` is a local; `idx` came from this device's properties.
-        self.image_memory = unsafe { dev.allocate_memory(&alloc, None) }
-            .map_err(|e| driver("allocate_memory(target)", e))?;
-        // SAFETY: image and memory are both from this device, bound once.
-        unsafe { dev.bind_image_memory(self.image, self.image_memory, 0) }
-            .map_err(|e| driver("bind_image_memory(target)", e))?;
+        let finish = || -> Result<(vk::DeviceMemory, vk::ImageView), KasaneError> {
+            // SAFETY: the image was just created on this device.
+            let reqs = unsafe { dev.get_image_memory_requirements(image) };
+            let idx = gpu.memory_type(
+                reqs.memory_type_bits,
+                vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                "DEVICE_LOCAL",
+            )?;
+            let alloc = vk::MemoryAllocateInfo::default()
+                .allocation_size(reqs.size)
+                .memory_type_index(idx);
+            // SAFETY: `alloc` is a local; `idx` came from this device.
+            let memory = unsafe { dev.allocate_memory(&alloc, None) }
+                .map_err(|e| driver("allocate_memory(target)", e))?;
+            // SAFETY: image and memory are both from this device, bound once.
+            unsafe { dev.bind_image_memory(image, memory, 0) }
+                .map_err(|e| driver("bind_image_memory(target)", e))?;
 
-        let view_info = vk::ImageViewCreateInfo::default()
-            .image(self.image)
-            .view_type(vk::ImageViewType::TYPE_2D)
-            .format(format)
-            .subresource_range(
-                vk::ImageSubresourceRange::default()
-                    .aspect_mask(vk::ImageAspectFlags::COLOR)
-                    .level_count(1)
-                    .layer_count(1),
-            );
-        // SAFETY: `view_info` is a local naming a live image.
-        self.view = unsafe { dev.create_image_view(&view_info, None) }
-            .map_err(|e| driver("create_image_view(target)", e))?;
+            let view_info = vk::ImageViewCreateInfo::default()
+                .image(image)
+                .view_type(vk::ImageViewType::TYPE_2D)
+                .format(format)
+                .subresource_range(
+                    vk::ImageSubresourceRange::default()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .level_count(1)
+                        .layer_count(1),
+                );
+            // SAFETY: `view_info` names an image with memory bound above.
+            let view = unsafe { dev.create_image_view(&view_info, None) }
+                .map_err(|e| driver("create_image_view(target)", e))?;
+            Ok((memory, view))
+        };
 
-        // ★ TIGHTLY PACKED, deliberately. `cmd_copy_image_to_buffer` with
-        // `buffer_row_length: 0` means "rows are `width` texels", so the
-        // readback has no stride of its own to get wrong — unlike the imported
-        // side, where the DRIVER picks the stride and it must be asked for.
-        let size = u64::from(width) * u64::from(height) * 4;
+        match finish() {
+            Ok((memory, view)) => Ok(Backing::Owned {
+                image,
+                view,
+                memory,
+            }),
+            Err(e) => {
+                // SAFETY: live image; the memory either was never allocated or
+                // is freed by the allocator's own failure path.
+                unsafe { dev.destroy_image(image, None) };
+                Err(e)
+            }
+        }
+    }
+
+    /// The host-visible buffer a finished frame is copied into.
+    ///
+    /// ★ TIGHTLY PACKED, deliberately. `cmd_copy_image_to_buffer` with
+    /// `buffer_row_length: 0` means "rows are `width` texels", so the readback
+    /// has no stride of its own to get wrong — unlike the imported side, where
+    /// the DRIVER picks the stride and it must be asked for.
+    fn readback_buffer(
+        gpu: &std::sync::Arc<Gpu>,
+        extent: vk::Extent2D,
+    ) -> Result<(vk::Buffer, vk::DeviceMemory), KasaneError> {
+        let dev = &gpu.device;
+        let size = u64::from(extent.width) * u64::from(extent.height) * 4;
         let buf_info = vk::BufferCreateInfo::default()
             .size(size)
             .usage(vk::BufferUsageFlags::TRANSFER_DST)
             .sharing_mode(vk::SharingMode::EXCLUSIVE);
         // SAFETY: `buf_info` is a local.
-        self.readback = unsafe { dev.create_buffer(&buf_info, None) }
+        let buffer = unsafe { dev.create_buffer(&buf_info, None) }
             .map_err(|e| driver("create_buffer(readback)", e))?;
-        // SAFETY: the buffer was just created on this device.
-        let breqs = unsafe { dev.get_buffer_memory_requirements(self.readback) };
-        let bidx = self.gpu.memory_type(
-            breqs.memory_type_bits,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-            "HOST_VISIBLE | HOST_COHERENT",
-        )?;
-        let balloc = vk::MemoryAllocateInfo::default()
-            .allocation_size(breqs.size)
-            .memory_type_index(bidx);
-        // SAFETY: `balloc` is a local; `bidx` came from this device.
-        self.readback_memory = unsafe { dev.allocate_memory(&balloc, None) }
-            .map_err(|e| driver("allocate_memory(readback)", e))?;
-        // SAFETY: buffer and memory both from this device, bound once.
-        unsafe { dev.bind_buffer_memory(self.readback, self.readback_memory, 0) }
-            .map_err(|e| driver("bind_buffer_memory", e))?;
-        Ok(())
+
+        let finish = || -> Result<vk::DeviceMemory, KasaneError> {
+            // SAFETY: the buffer was just created on this device.
+            let reqs = unsafe { dev.get_buffer_memory_requirements(buffer) };
+            let idx = gpu.memory_type(
+                reqs.memory_type_bits,
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+                "HOST_VISIBLE | HOST_COHERENT",
+            )?;
+            let alloc = vk::MemoryAllocateInfo::default()
+                .allocation_size(reqs.size)
+                .memory_type_index(idx);
+            // SAFETY: `alloc` is a local; `idx` came from this device.
+            let memory = unsafe { dev.allocate_memory(&alloc, None) }
+                .map_err(|e| driver("allocate_memory(readback)", e))?;
+            // SAFETY: buffer and memory both from this device, bound once.
+            unsafe { dev.bind_buffer_memory(buffer, memory, 0) }
+                .map_err(|e| driver("bind_buffer_memory", e))?;
+            Ok(memory)
+        };
+
+        match finish() {
+            Ok(memory) => Ok((buffer, memory)),
+            Err(e) => {
+                // SAFETY: live buffer, nothing bound to it.
+                unsafe { dev.destroy_buffer(buffer, None) };
+                Err(e)
+            }
+        }
     }
 
     /// Clear to `clear`, run `draws`, copy the result back, and wait for it.
@@ -1603,7 +1895,7 @@ impl Target {
         );
 
         let attachment = vk::RenderingAttachmentInfo::default()
-            .image_view(self.view)
+            .image_view(self.backing.view())
             .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
             .load_op(vk::AttachmentLoadOp::CLEAR)
             .store_op(vk::AttachmentStoreOp::STORE)
@@ -1715,40 +2007,67 @@ impl Target {
         // SAFETY: inside the scope opened above.
         unsafe { self.gpu.dyn_render.cmd_end_rendering(cmd) };
 
-        self.barrier(
-            cmd,
-            vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-            vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
-            vk::AccessFlags::TRANSFER_READ,
-            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-            vk::PipelineStageFlags::TRANSFER,
-            whole,
-        );
-
-        let region = vk::BufferImageCopy::default()
-            // 0 means "tightly packed at the image's width" — see `build`.
-            .buffer_row_length(0)
-            .buffer_image_height(0)
-            .image_subresource(
-                vk::ImageSubresourceLayers::default()
-                    .aspect_mask(vk::ImageAspectFlags::COLOR)
-                    .layer_count(1),
-            )
-            .image_extent(vk::Extent3D {
-                width: self.extent.width,
-                height: self.extent.height,
-                depth: 1,
-            });
-        // SAFETY: image is in TRANSFER_SRC_OPTIMAL, buffer is large enough
-        // (allocated as width*height*4 in `build`), region is a local.
-        unsafe {
-            dev.cmd_copy_image_to_buffer(
+        if let Some((readback, _)) = self.readback {
+            self.barrier(
                 cmd,
-                self.image,
+                vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
                 vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                self.readback,
-                &[region],
+                vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+                vk::AccessFlags::TRANSFER_READ,
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                vk::PipelineStageFlags::TRANSFER,
+                whole,
+            );
+
+            let region = vk::BufferImageCopy::default()
+                // 0 means "tightly packed at the image's width" — see
+                // `readback_buffer`.
+                .buffer_row_length(0)
+                .buffer_image_height(0)
+                .image_subresource(
+                    vk::ImageSubresourceLayers::default()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .layer_count(1),
+                )
+                .image_extent(vk::Extent3D {
+                    width: self.extent.width,
+                    height: self.extent.height,
+                    depth: 1,
+                });
+            // SAFETY: image is in TRANSFER_SRC_OPTIMAL, the buffer is
+            // width*height*4 bytes, and `region` is a local.
+            unsafe {
+                dev.cmd_copy_image_to_buffer(
+                    cmd,
+                    self.backing.image(),
+                    vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                    readback,
+                    &[region],
+                );
+            }
+        } else {
+            // ── ★ AN IMPORTED TARGET IS RELEASED, NOT COPIED ─────────────
+            // Nothing is read back; the buffer's other user is the display (or
+            // another process). GENERAL is the layout an external consumer of
+            // a dmabuf expects, and the transition is what makes this frame's
+            // writes visible to it.
+            //
+            // ★ NOT YET A FOREIGN-QUEUE RELEASE. Strictly this wants
+            // `VK_EXT_queue_family_foreign` — an explicit ownership transfer to
+            // `VK_QUEUE_FAMILY_FOREIGN_EXT` — which is M5's work and is why
+            // `Gpu::queue_family` is carried but unread. Without it the
+            // handover relies on the layout transition alone, which is enough
+            // for a linear buffer on one device and is NOT a general
+            // guarantee. `pending-kasane: foreign-queue release`.
+            self.barrier(
+                cmd,
+                vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+                vk::ImageLayout::GENERAL,
+                vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+                vk::AccessFlags::MEMORY_READ,
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                vk::PipelineStageFlags::BOTTOM_OF_PIPE,
+                whole,
             );
         }
 
@@ -1845,7 +2164,7 @@ impl Target {
             .dst_access_mask(dst_access)
             .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
             .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .image(self.image)
+            .image(self.backing.image())
             .subresource_range(range);
         // SAFETY: recording into a live buffer; `b` is a local naming a live
         // image owned by this target.
@@ -1878,13 +2197,26 @@ impl Target {
                 ),
             });
         }
+        // ★ AN IMPORTED TARGET HAS NO READBACK, and saying so is better than
+        // returning stale or zero pixels. Copying a scanout buffer every frame
+        // is the cost this crate exists to remove, so the absence is by
+        // design — see the `readback` field.
+        let Some((_, readback_memory)) = self.readback else {
+            return Err(KasaneError::Vulkan {
+                call: "Target::read_pixel",
+                result: "this target renders into an imported dmabuf and has no \
+                         readback buffer, by design. Capturing one needs an \
+                         explicit copy submit — `ExportMem`'s job, not built."
+                    .to_owned(),
+            });
+        };
         let size = u64::from(self.extent.width) * u64::from(self.extent.height) * 4;
-        // SAFETY: the memory is HOST_VISIBLE (selected in `build`), the range
-        // is the whole allocation, and it is unmapped before returning.
+        // SAFETY: the memory is HOST_VISIBLE (selected in `readback_buffer`),
+        // the range is the whole allocation, and it is unmapped before return.
         let ptr = unsafe {
             self.gpu
                 .device
-                .map_memory(self.readback_memory, 0, size, vk::MemoryMapFlags::empty())
+                .map_memory(readback_memory, 0, size, vk::MemoryMapFlags::empty())
         }
         .map_err(|e| driver("map_memory(readback)", e))?;
 
@@ -1902,7 +2234,7 @@ impl Target {
         };
         // SAFETY: mapped on the line above, and nothing holds a reference into
         // it — `px` is a copy.
-        unsafe { self.gpu.device.unmap_memory(self.readback_memory) };
+        unsafe { self.gpu.device.unmap_memory(readback_memory) };
         Ok(px)
     }
 }
@@ -1911,15 +2243,15 @@ impl Drop for Target {
     fn drop(&mut self) {
         let dev = &self.gpu.device;
         // SAFETY: every handle came from this device and is destroyed once.
-        // Null handles are legal to pass, which is what makes a partially
-        // built target safe to drop. Memory is freed AFTER the object bound to
-        // it, which is the ordering Vulkan requires.
+        // The backing frees only what it OWNS — an imported one frees nothing
+        // here, because its `Imported` does it. Memory is freed after the
+        // objects bound to it, which is the ordering Vulkan requires.
         unsafe {
-            dev.destroy_image_view(self.view, None);
-            dev.destroy_image(self.image, None);
-            dev.free_memory(self.image_memory, None);
-            dev.destroy_buffer(self.readback, None);
-            dev.free_memory(self.readback_memory, None);
+            self.backing.destroy(dev);
+            if let Some((buffer, memory)) = self.readback {
+                dev.destroy_buffer(buffer, None);
+                dev.free_memory(memory, None);
+            }
         }
     }
 }
@@ -2050,6 +2382,28 @@ pub struct Imported {
 }
 
 impl Imported {
+    /// The DRM modifier the driver says this image actually has.
+    ///
+    /// ★ A DIAGNOSTIC FOR ONE SPECIFIC DOUBT. The validation layer reported
+    /// that a view on this image "has no supported format features", while our
+    /// own query says the requested modifier has plenty. Exactly one of three
+    /// things is true: the image has a different modifier than we asked for
+    /// (our bug), the layer cannot determine it (a layer limitation), or our
+    /// query reads a different list than the layer does. This answers the
+    /// first, which is the only one that would be a defect in kasane.
+    ///
+    /// # Errors
+    /// [`KasaneError::Vulkan`] if the driver refuses the query.
+    pub fn actual_modifier(&self) -> Result<u64, KasaneError> {
+        let loader =
+            ash::ext::image_drm_format_modifier::Device::new(&self.gpu.instance, &self.gpu.device);
+        let mut props = vk::ImageDrmFormatModifierPropertiesEXT::default();
+        // SAFETY: live device and image; `props` is a local outliving the call.
+        unsafe { loader.get_image_drm_format_modifier_properties(self.image, &mut props) }
+            .map_err(|e| driver("get_image_drm_format_modifier_properties", e))?;
+        Ok(props.drm_format_modifier)
+    }
+
     /// This buffer as something a [`Draw::Texture`] can sample.
     #[must_use]
     pub fn texture(&self) -> TextureRef {
@@ -2146,8 +2500,49 @@ impl Gpu {
     /// Filtered to modifiers usable as a SAMPLED image, because sampling is
     /// what compositing does — a modifier the device can only render to is of
     /// no use for importing somebody else's buffer.
+    /// Modifiers this device can SAMPLE — the client-surface question.
+    ///
+    /// Kept as its own name because it is what the dmabuf global advertises,
+    /// and that global is specifically about what clients may hand us.
     #[must_use]
     pub fn importable_modifiers(&self) -> Vec<u64> {
+        self.modifiers_for(ImportUse::Surface)
+    }
+
+    /// Modifiers this device can RENDER INTO.
+    ///
+    /// ★ NOT THE SAME LIST as [`Gpu::importable_modifiers`], and assuming it
+    /// is would be a silent error: a driver may sample a layout it cannot use
+    /// as a colour attachment. Measured per device rather than reasoned about.
+    #[must_use]
+    pub fn renderable_modifiers(&self) -> Vec<u64> {
+        self.modifiers_for(ImportUse::RenderTarget)
+    }
+
+    /// Every modifier this device reports, with its raw feature bits.
+    ///
+    /// ★ A DIAGNOSTIC, not a decision input. When the validation layer and our
+    /// own filter disagree about what a modifier supports, the only way to
+    /// tell which is wrong is to print what the driver actually said.
+    #[must_use]
+    pub fn modifier_features(&self) -> Vec<(u64, u32)> {
+        self.query_modifiers()
+            .into_iter()
+            .map(|m| {
+                (
+                    m.drm_format_modifier,
+                    m.drm_format_modifier_tiling_features.as_raw(),
+                )
+            })
+            .collect()
+    }
+
+    /// The modifiers this device offers for one purpose.
+    /// Every modifier this device reports for [`FORMAT`], raw.
+    ///
+    /// ★ ONE QUERY, so the filter and the diagnostic can never disagree about
+    /// what the driver said — which matters precisely when they seem to.
+    fn query_modifiers(&self) -> Vec<vk::DrmFormatModifierPropertiesEXT> {
         let mut list = vk::DrmFormatModifierPropertiesListEXT::default();
         let mut props = vk::FormatProperties2::default().push_next(&mut list);
         // SAFETY: live instance and physical device; `props` and the struct it
@@ -2182,16 +2577,21 @@ impl Gpu {
         // `n` from the first query is the right bound: the second call fills
         // at most that many, and re-reading the count would need the wrappers
         // to still be alive.
+        store.truncate(n);
         store
+    }
+
+    /// The modifiers this device offers for one purpose.
+    fn modifiers_for(&self, purpose: ImportUse) -> Vec<u64> {
+        self.query_modifiers()
             .iter()
-            .take(n)
             .filter(|m| {
                 // Single-plane only: multi-plane formats are a YUV concern and
                 // this crate composites BGRA. `accepts` refuses them on the
                 // nuri side for the same reason.
                 m.drm_format_modifier_plane_count == 1
                     && m.drm_format_modifier_tiling_features
-                        .contains(vk::FormatFeatureFlags::SAMPLED_IMAGE)
+                        .contains(purpose.required_feature())
             })
             .map(|m| m.drm_format_modifier)
             .collect()
@@ -2217,6 +2617,28 @@ impl Gpu {
         geometry: Geometry,
         modifier: u64,
     ) -> Result<Imported, KasaneError> {
+        self.import_for(fd, geometry, modifier, ImportUse::Surface)
+    }
+
+    /// Import a dmabuf for a stated PURPOSE.
+    ///
+    /// ★ ONE ENGINE, TWO FACES. A render target and a client surface differ in
+    /// exactly two values — the image usage and the format feature a modifier
+    /// must carry — and [`ImportUse`] derives both from one choice, so the
+    /// pair cannot disagree. Copying this function to change two flags would
+    /// have been the second copy of ~120 lines, and the copy that drifts.
+    ///
+    /// # Errors
+    /// [`KasaneError::ModifierNotSupported`] if the modifier is not one this
+    /// device offers FOR THAT PURPOSE, or [`KasaneError::Vulkan`] naming the
+    /// failing call.
+    pub fn import_for(
+        self: &std::sync::Arc<Self>,
+        fd: OwnedFd,
+        geometry: Geometry,
+        modifier: u64,
+        purpose: ImportUse,
+    ) -> Result<Imported, KasaneError> {
         // ── ★ VALIDATE THE MODIFIER OURSELVES ────────────────────────────
         //
         // Measured on plo's RTX 3070: `vkCreateImage` ACCEPTS
@@ -2228,7 +2650,10 @@ impl Gpu {
         // This is the same rule `nuri::accepts` applies on the CPU side:
         // refuse at the boundary rather than guess. It is the only place that
         // still knows which buffer it was.
-        let offered = self.importable_modifiers();
+        // ★ Against the list for THIS PURPOSE. Checking a render target
+        // against the sampled list would pass on a modifier the device cannot
+        // render into, and the driver would not say so.
+        let offered = self.modifiers_for(purpose);
         if !offered.contains(&modifier) {
             return Err(KasaneError::ModifierNotSupported { modifier, offered });
         }
@@ -2276,7 +2701,7 @@ impl Gpu {
             .tiling(vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT)
             // SAMPLED, because compositing reads it. TRANSFER_SRC as well so a
             // screenshot can copy it out without a second import.
-            .usage(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_SRC)
+            .usage(purpose.usage())
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
             // UNDEFINED, not PREINITIALIZED: the contents come from another
             // process and we make no claim about them until the layout
@@ -3082,6 +3507,14 @@ mod tests {
         // The count is process-global, so this fails if ANY test in this run
         // provoked an error. That is deliberate: a race can only turn a
         // passing test red, never let a real error through.
+        // ★ REPORTED, ALWAYS. An exemption that nobody sees is an exemption
+        // nobody re-examines, and this number growing is the signal that the
+        // list needs another look.
+        eprintln!(
+            "kasane: {} exempted validation error(s) from {} known VUID(s)",
+            validation_exempt(),
+            EXEMPT_VUIDS.len()
+        );
         assert_eq!(
             validation_errors(),
             0,
@@ -3227,6 +3660,179 @@ mod tests {
         assert_ne!(
             got_left, got_right,
             "the two halves must differ or this test proves nothing"
+        );
+    }
+
+    /// ★★★ RENDERING STRAIGHT INTO A SHARED DMABUF — the thing that makes
+    /// zero-copy possible, and the shape M5's scanout needs.
+    ///
+    /// `Target::new` allocates its own image, so anything drawn into it must
+    /// be copied to be seen — which is the 12.0 ms of a 12.1 ms frame that
+    /// nuri pays. This renders into a buffer somebody else allocated.
+    ///
+    /// ── ★ READ BACK THROUGH A SECOND, INDEPENDENT IMPORT ─────────────────
+    /// Reading through the target's own readback buffer would prove nothing:
+    /// it would pass even if the GPU had drawn into a private image that
+    /// merely shares a handle. So the dmabuf fd is DUPLICATED before the
+    /// target takes it, and the duplicate is imported separately and read.
+    /// A pixel that arrives there was genuinely written into the shared
+    /// buffer.
+    #[test]
+    fn a_frame_can_be_rendered_directly_into_a_shared_dmabuf() {
+        let gpu = match Gpu::open() {
+            Ok(g) => std::sync::Arc::new(g),
+            Err(e) => {
+                skip_or_panic("dmabuf target", &e);
+                return;
+            }
+        };
+
+        // ★ MEASURED, NOT ASSUMED. Whether a device can RENDER INTO a layout
+        // is a different question from whether it can SAMPLE one, and the
+        // answer differs by driver. `ImportUse` is what keeps the two lists
+        // from being confused; this prints both so a failure here is
+        // diagnosable rather than a shrug.
+        let renderable = gpu.renderable_modifiers();
+        let samplable = gpu.importable_modifiers();
+        eprintln!(
+            "kasane S2e: {:?} renderable={renderable:x?} samplable={samplable:x?} \
+             raw_features={:#x?}",
+            gpu.device_name,
+            gpu.modifier_features()
+        );
+
+        /// `DRM_FORMAT_MOD_LINEAR`, the one layout every exporter can produce.
+        const LINEAR: u64 = 0;
+        if !renderable.contains(&LINEAR) {
+            // A legitimate device answer, not a failure: this device cannot
+            // render into a linear buffer. Saying so beats asserting a
+            // capability the hardware never offered.
+            eprintln!(
+                "kasane S2e: this device offers no LINEAR render target; \
+                 skipping (renderable={renderable:x?})"
+            );
+            return;
+        }
+
+        const SIZE: u32 = 16;
+        // Exported black, so the drawn colour cannot be mistaken for the
+        // buffer's initial contents.
+        let mut exported = gpu
+            .export_linear(SIZE, SIZE, [0, 0, 0, 0xff])
+            .expect("export");
+        let geometry = exported.geometry;
+        let fd = exported.take_fd().expect("fd");
+        // The second handle, taken BEFORE the target consumes the first.
+        let read_fd = fd.try_clone().expect("dup the dmabuf fd");
+
+        // ★ Import it FIRST as a bare object so the driver can be asked what
+        // modifier the image really has — the one measurement that separates
+        // "kasane asked for the wrong thing" from "the layer cannot tell".
+        let probe = gpu
+            .import_for(
+                fd.try_clone().expect("dup for the probe"),
+                geometry,
+                LINEAR,
+                ImportUse::RenderTarget,
+            )
+            .expect("probe import");
+        match probe.actual_modifier() {
+            Ok(m) => {
+                eprintln!("kasane S2e: the driver says the image's modifier is {m:#x}");
+                assert_eq!(
+                    m, LINEAR,
+                    "the image must carry the modifier that was asked for; a \
+                     different one means the explicit-modifier create info was \
+                     ignored, and every feature check was against the wrong \
+                     layout"
+                );
+            }
+            Err(e) => eprintln!("kasane S2e: the driver would not say ({e})"),
+        }
+        drop(probe);
+
+        let target =
+            Target::from_dmabuf(&gpu, fd, geometry, LINEAR).expect("import as a render target");
+        let pipes = Pipelines::new(&gpu, FORMAT).expect("pipelines");
+
+        // Opaque green over the whole target, via the clear — the simplest
+        // thing that cannot be confused with black.
+        target
+            .draw(&pipes, [0.0, 1.0, 0.0, 1.0], &[])
+            .expect("draw");
+
+        // ★ THE INDEPENDENT READ.
+        let witness = gpu.import_linear(read_fd, geometry).expect("second import");
+        let px = witness.pixel(SIZE / 2, SIZE / 2).expect("read");
+        assert_eq!(
+            px,
+            [0, 255, 0, 255],
+            "a second import of the SAME dmabuf must see the green this frame \
+             drew (BGRA). Black means the GPU rendered into a private image \
+             and the buffer was never shared; got {px:?}"
+        );
+        eprintln!("kasane S2e: the shared buffer holds {px:?} — rendered, not copied");
+    }
+
+    /// ★ USAGE AND FEATURE NAME THE SAME CAPABILITY.
+    ///
+    /// [`ImportUse`] exists so these two cannot disagree, and this pins that
+    /// they actually don't. The first draft DID disagree — usage asked for
+    /// `COLOR_ATTACHMENT | TRANSFER_SRC` while the feature check tested only
+    /// `COLOR_ATTACHMENT` — so a modifier was validated for one capability and
+    /// the image created demanding two. The validation layer caught it; this
+    /// makes the next such drift a test failure instead.
+    #[test]
+    fn every_import_purpose_checks_the_feature_its_usage_needs() {
+        // The pairs that must correspond, written out rather than derived, so
+        // this test fails when someone changes one side.
+        let pairs = [
+            (
+                ImportUse::Surface,
+                vk::ImageUsageFlags::SAMPLED,
+                vk::FormatFeatureFlags::SAMPLED_IMAGE,
+            ),
+            (
+                ImportUse::RenderTarget,
+                vk::ImageUsageFlags::COLOR_ATTACHMENT,
+                vk::FormatFeatureFlags::COLOR_ATTACHMENT,
+            ),
+        ];
+        for (purpose, usage, feature) in pairs {
+            // Raw bits, per the rule at the top of this file: ash is built
+            // without its `debug` feature, so these flags have no `Debug`.
+            assert_eq!(
+                purpose.usage().as_raw(),
+                usage.as_raw(),
+                "{purpose:?} asks for a usage its feature check does not cover"
+            );
+            assert_eq!(
+                purpose.required_feature().as_raw(),
+                feature.as_raw(),
+                "{purpose:?} checks a feature its usage does not need"
+            );
+        }
+    }
+
+    /// ★ THE TWO MODIFIER LISTS ARE ASKED SEPARATELY.
+    ///
+    /// A device may sample a layout it cannot render into. Reusing the sampled
+    /// list to validate a render target would pass on a modifier the device
+    /// cannot use as a colour attachment, and the driver need not say so —
+    /// the image is created and the pixels come out wrong.
+    ///
+    /// On lavapipe both lists happen to be `[0]`, so this cannot assert they
+    /// DIFFER. What it can assert — and what would actually regress — is that
+    /// they are computed from different feature bits rather than one aliasing
+    /// the other.
+    #[test]
+    fn renderable_and_samplable_modifiers_are_different_questions() {
+        assert_ne!(
+            ImportUse::Surface.required_feature().as_raw(),
+            ImportUse::RenderTarget.required_feature().as_raw(),
+            "if both purposes checked the same feature, `renderable_modifiers` \
+             would be an alias for `importable_modifiers` and the distinction \
+             this whole enum exists for would be gone"
         );
     }
 }
