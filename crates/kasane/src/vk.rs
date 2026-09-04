@@ -36,7 +36,7 @@
 //! GPU.
 //!
 //! ── ★ WHAT IT DOES NOT PROVE (M1) ────────────────────────────────────────
-//! The buffer here is LINEAR and HOST_VISIBLE, because that is what lets the
+//! The buffer here is LINEAR and `HOST_VISIBLE`, because that is what lets the
 //! test read a pixel back by mapping. A real client buffer from NVIDIA is
 //! TILED and device-local: it needs `VK_EXT_image_drm_format_modifier` on the
 //! import and a `vkCmdCopyImageToBuffer` to read back. Both are M1, and this
@@ -127,6 +127,16 @@ unsafe extern "system" fn debug_callback(
     vk::FALSE
 }
 
+/// A driver-reported extension name, as a `CStr`.
+///
+/// # Safety contract
+/// `extension_name` is a NUL-terminated fixed array the driver filled; the
+/// Vulkan spec guarantees the terminator, so this cannot run off the end.
+fn ext_name(e: &vk::ExtensionProperties) -> &std::ffi::CStr {
+    // SAFETY: see the note above — the terminator is spec-guaranteed.
+    unsafe { std::ffi::CStr::from_ptr(e.extension_name.as_ptr()) }
+}
+
 fn driver(call: &'static str, e: vk::Result) -> KasaneError {
     KasaneError::Vulkan {
         call,
@@ -166,6 +176,12 @@ pub struct Gpu {
     pub(crate) queue: vk::Queue,
     /// Its family index — needed for command pools and for the foreign-queue
     /// ownership transfers an imported dmabuf requires.
+    ///
+    /// ★ Not read yet: the `VK_EXT_queue_family_foreign` acquire/release pair
+    /// is M5's, and it needs exactly this. Recorded at open time because that
+    /// is where the choice is made, and re-deriving it later would risk
+    /// disagreeing with the family the pool was created against.
+    #[allow(dead_code, reason = "M5's foreign-queue transfer needs it; see above")]
     pub(crate) queue_family: u32,
     /// One command pool, reset per frame rather than freed per buffer.
     pub(crate) command_pool: vk::CommandPool,
@@ -215,16 +231,14 @@ impl Gpu {
         let layer_name = c"VK_LAYER_KHRONOS_validation";
         // SAFETY: enumerating layers takes no arguments that could dangle.
         let have_layer = want_validation
-            && unsafe { entry.enumerate_instance_layer_properties() }
-                .map(|ls| {
-                    ls.iter().any(|l| {
-                        // SAFETY: `layer_name` is a NUL-terminated fixed array
-                        // the loader filled; the spec guarantees the terminator.
-                        let n = unsafe { std::ffi::CStr::from_ptr(l.layer_name.as_ptr()) };
-                        n == layer_name
-                    })
+            && unsafe { entry.enumerate_instance_layer_properties() }.is_ok_and(|ls| {
+                ls.iter().any(|l| {
+                    // SAFETY: `layer_name` is a NUL-terminated fixed array
+                    // the loader filled; the spec guarantees the terminator.
+                    let n = unsafe { std::ffi::CStr::from_ptr(l.layer_name.as_ptr()) };
+                    n == layer_name
                 })
-                .unwrap_or(false);
+            });
 
         let layers: Vec<*const std::ffi::c_char> = if have_layer {
             vec![layer_name.as_ptr()]
@@ -299,6 +313,12 @@ impl Gpu {
         }
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one linear device-selection sequence whose ORDER is load-bearing: \
+                  enumerate, filter by extension, choose a graphics queue, open. \
+                  Splitting it would hide that order behind call sites."
+    )]
     fn pick(
         entry: &ash::Entry,
         instance: &ash::Instance,
@@ -318,9 +338,8 @@ impl Gpu {
         for pd in physicals {
             examined += 1;
             // SAFETY: `pd` came from this instance and is live.
-            let exts = match unsafe { instance.enumerate_device_extension_properties(pd) } {
-                Ok(e) => e,
-                Err(_) => continue,
+            let Ok(exts) = (unsafe { instance.enumerate_device_extension_properties(pd) }) else {
+                continue;
             };
             let has = |want: &std::ffi::CStr| {
                 exts.iter().any(|e| {
@@ -409,16 +428,8 @@ impl Gpu {
         // Enumerated ONCE and shared. Two optional extensions are decided from
         // this list; asking the driver twice invites the two answers to be
         // taken from different enumerations.
-        let device_exts = match unsafe { instance.enumerate_device_extension_properties(physical) }
-        {
-            Ok(e) => e,
-            Err(_) => Vec::new(),
-        };
-        // SAFETY: `extension_name` is a NUL-terminated fixed array the driver
-        // filled; the spec guarantees the terminator.
-        fn ext_name(e: &vk::ExtensionProperties) -> &std::ffi::CStr {
-            unsafe { std::ffi::CStr::from_ptr(e.extension_name.as_ptr()) }
-        }
+        let device_exts: Vec<vk::ExtensionProperties> =
+            unsafe { instance.enumerate_device_extension_properties(physical) }.unwrap_or_default();
         let has_drm = device_exts
             .iter()
             .any(|e| ext_name(e) == ash::ext::physical_device_drm::NAME);
@@ -853,7 +864,7 @@ impl Gpu {
         // The message names OUR blob rather than the driver, because the
         // `Driver` arm otherwise reads as a hardware problem and sends the
         // reader to the wrong machine.
-        if crate::COMPOSITE_SPV.len() % 4 != 0 {
+        if !crate::COMPOSITE_SPV.len().is_multiple_of(4) {
             return Err(Unavailable::Driver(format!(
                 "the compiled shader is {} bytes, not a whole number of 32-bit \
                  SPIR-V words — build.rs emitted a short blob; this is not a \
@@ -1238,7 +1249,10 @@ impl Drop for Pipelines<'_> {
             // reference it at creation time only, so this order is safe and
             // the reverse would be too — stated because the next reader will
             // wonder.
-            dev.destroy_shader_module(self.module, None);
+            //
+            // Through `Gpu`'s own helper rather than a second `dev.` call, so
+            // there is one spelling of "destroy this module" in the crate.
+            self.gpu.destroy_shader_module(self.module);
         }
     }
 }
@@ -1495,6 +1509,14 @@ impl<'g> Target<'g> {
         result
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one linear command-recording sequence whose ORDER is the \
+                  correctness: barrier in, begin rendering, draw, end, barrier \
+                  out, copy. Splitting it puts that order behind call sites, \
+                  which is exactly where a missing barrier hides. The one \
+                  self-contained block (descriptor writes) is already extracted."
+    )]
     fn record_and_submit(
         &self,
         cmd: vk::CommandBuffer,
@@ -1585,10 +1607,28 @@ impl<'g> Target<'g> {
         unsafe { self.gpu.dyn_render.cmd_begin_rendering(cmd, &rendering) };
 
         // Viewport and scissor are dynamic so one pipeline serves any size.
+        //
+        // ★ The casts are lossless for every real output. `f32` holds integers
+        // exactly to 2^24 = 16,777,216, and Vulkan's own
+        // `maxViewportDimensions` is far below that on all known hardware
+        // (65,536 at the extreme). A display wider than 16 million pixels
+        // would lose precision here; it would also not fit in the driver's
+        // limits, so the refusal comes first.
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "exact below 2^24; maxViewportDimensions is orders of magnitude smaller"
+        )]
         let viewport = vk::Viewport {
             x: 0.0,
             y: 0.0,
+            #[allow(
+                clippy::cast_precision_loss,
+                reason = "exact below 2^24; Vulkan's own maxViewportDimensions \
+                          is orders of magnitude smaller, so a display big \
+                          enough to lose precision is refused by the driver first"
+            )]
             width: self.extent.width as f32,
+            #[allow(clippy::cast_precision_loss, reason = "see width")]
             height: self.extent.height as f32,
             min_depth: 0.0,
             max_depth: 1.0,
@@ -1610,45 +1650,7 @@ impl<'g> Target<'g> {
                     texture,
                     filter,
                 } => {
-                    // One set per draw, from the pool reset at the top of this
-                    // frame. Vulkan forbids updating a set that a submitted
-                    // command buffer still references, so re-using one set
-                    // across draws in a frame would be undefined — the mistake
-                    // is invisible until two surfaces are on screen and one
-                    // shows the other's contents.
-                    let layouts = [pipes.set_layout];
-                    let alloc = vk::DescriptorSetAllocateInfo::default()
-                        .descriptor_pool(pipes.descriptor_pool)
-                        .set_layouts(&layouts);
-                    // SAFETY: `layouts` outlives the call; the pool is live.
-                    let sets = unsafe { dev.allocate_descriptor_sets(&alloc) }
-                        .map_err(|e| driver("allocate_descriptor_sets", e))?;
-                    let set = sets[0];
-
-                    let image_info = [vk::DescriptorImageInfo::default()
-                        .image_view(texture.view)
-                        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
-                    let sampler_info =
-                        [vk::DescriptorImageInfo::default().sampler(pipes.sampler_for(filter))];
-                    // Binding 0 is the image and 1 is the sampler, matching
-                    // what the WGSL declares — naga lowers `texture_2d` and
-                    // `sampler` to two descriptors, not a combined one.
-                    let writes = [
-                        vk::WriteDescriptorSet::default()
-                            .dst_set(set)
-                            .dst_binding(0)
-                            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                            .image_info(&image_info),
-                        vk::WriteDescriptorSet::default()
-                            .dst_set(set)
-                            .dst_binding(1)
-                            .descriptor_type(vk::DescriptorType::SAMPLER)
-                            .image_info(&sampler_info),
-                    ];
-                    // SAFETY: every borrowed array is a local outliving the
-                    // call, and the set was allocated from this device.
-                    unsafe { dev.update_descriptor_sets(&writes, &[]) };
-
+                    let set = Self::texture_descriptor(dev, pipes, texture, filter)?;
                     // SAFETY: the pipeline matches the attachment format
                     // (checked in `draw`), and the set matches the layout the
                     // pipeline was built with.
@@ -1758,6 +1760,53 @@ impl<'g> Target<'g> {
         // a slow exhaustion that presents far from its cause.
         unsafe { dev.destroy_fence(fence, None) };
         waited.map_err(|e| driver("submit/wait", e))
+    }
+
+    /// Allocate and write one descriptor set naming `texture` and a sampler.
+    ///
+    /// ★ ONE SET PER DRAW, from the pool reset at the top of this frame.
+    /// Vulkan forbids updating a set that a submitted command buffer still
+    /// references, so re-using a single set across the draws in a frame is
+    /// undefined — and the symptom is invisible until two surfaces are on
+    /// screen and one shows the other's contents.
+    fn texture_descriptor(
+        dev: &ash::Device,
+        pipes: &Pipelines<'_>,
+        texture: TextureRef,
+        filter: Filter,
+    ) -> Result<vk::DescriptorSet, KasaneError> {
+        let layouts = [pipes.set_layout];
+        let alloc = vk::DescriptorSetAllocateInfo::default()
+            .descriptor_pool(pipes.descriptor_pool)
+            .set_layouts(&layouts);
+        // SAFETY: `layouts` outlives the call; the pool is live.
+        let sets = unsafe { dev.allocate_descriptor_sets(&alloc) }
+            .map_err(|e| driver("allocate_descriptor_sets", e))?;
+        let set = sets[0];
+
+        let image_info = [vk::DescriptorImageInfo::default()
+            .image_view(texture.view)
+            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
+        let sampler_info = [vk::DescriptorImageInfo::default().sampler(pipes.sampler_for(filter))];
+        // Binding 0 is the image and 1 is the sampler, matching what the WGSL
+        // declares — naga lowers `texture_2d` and `sampler` to two
+        // descriptors, not a combined one.
+        let writes = [
+            vk::WriteDescriptorSet::default()
+                .dst_set(set)
+                .dst_binding(0)
+                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                .image_info(&image_info),
+            vk::WriteDescriptorSet::default()
+                .dst_set(set)
+                .dst_binding(1)
+                .descriptor_type(vk::DescriptorType::SAMPLER)
+                .image_info(&sampler_info),
+        ];
+        // SAFETY: every borrowed array is a local outliving the call, and the
+        // set was allocated from this device.
+        unsafe { dev.update_descriptor_sets(&writes, &[]) };
+        Ok(set)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2367,11 +2416,11 @@ impl Gpu {
             self.instance
                 .get_physical_device_properties2(self.physical, &mut props);
         }
-        let primary = drm.has_primary.eq(&vk::TRUE).then(|| DrmNode {
+        let primary = drm.has_primary.eq(&vk::TRUE).then_some(DrmNode {
             major: drm.primary_major,
             minor: drm.primary_minor,
         });
-        let render = drm.has_render.eq(&vk::TRUE).then(|| DrmNode {
+        let render = drm.has_render.eq(&vk::TRUE).then_some(DrmNode {
             major: drm.render_major,
             minor: drm.render_minor,
         });
@@ -2403,16 +2452,21 @@ impl Gpu {
 /// environment that is SUPPOSED to have a device says so when it does not.
 #[cfg(test)]
 fn skip_or_panic(what: &str, why: &dyn std::fmt::Display) {
-    if std::env::var_os("OMOYA_REQUIRE_GPU").is_some() {
-        panic!(
-            "{what}: no GPU pipe, but OMOYA_REQUIRE_GPU is set — this \
-             environment is supposed to have a device. Reason: {why}"
-        );
-    }
+    assert!(
+        std::env::var_os("OMOYA_REQUIRE_GPU").is_none(),
+        "{what}: no GPU pipe, but OMOYA_REQUIRE_GPU is set — this \
+         environment is supposed to have a device. Reason: {why}"
+    );
     eprintln!("SKIP: {what} — {why}");
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::items_after_statements,
+    reason = "a test's constants are declared where they are used, next to the \
+              assertion that reads them — moving them to the top of the \
+              function separates a value from its explanation"
+)]
 mod tests {
     use super::*;
 
@@ -2845,18 +2899,21 @@ mod tests {
                 return;
             }
         };
-        const W: u32 = 64;
-        const H: u32 = 32;
+        // As f32 directly: these feed a clip-space transform, and routing a
+        // `u32` through `as u16` to reach `f32::from` is a narrowing cast
+        // wearing a lossless one's clothes.
+        const W: f32 = 64.0;
+        const H: f32 = 32.0;
         const FMT: vk::Format = vk::Format::B8G8R8A8_UNORM;
 
+        // The target takes pixel counts; the transform takes f32. Written once
+        // here rather than casting at four call sites.
+        let (wpx, hpx) = (64_u32, 32_u32);
         let pipes = Pipelines::new(&gpu, FMT).expect("pipelines");
-        let target = Target::new(&gpu, W, H, FMT).expect("target");
+        let target = Target::new(&gpu, wpx, hpx, FMT).expect("target");
 
         let red = crate::Params {
-            dst: crate::Params::dst_from_pixels(
-                [0.0, 0.0, f32::from(W as u16) / 2.0, f32::from(H as u16)],
-                (f32::from(W as u16), f32::from(H as u16)),
-            ),
+            dst: crate::Params::dst_from_pixels([0.0, 0.0, W / 2.0, H], (W, H)),
             src: [0.0, 0.0, 1.0, 1.0],
             tint: [1.0, 0.0, 0.0, 1.0],
         };
@@ -2868,8 +2925,8 @@ mod tests {
         // ★ B8G8R8A8_UNORM is BLUE FIRST in memory. Writing the expectation
         // as RGBA here is the classic way to get a test that passes on a
         // channel swap.
-        let left = target.read_pixel(W / 4, H / 2).expect("read left");
-        let right = target.read_pixel(3 * W / 4, H / 2).expect("read right");
+        let left = target.read_pixel(wpx / 4, hpx / 2).expect("read left");
+        let right = target.read_pixel(3 * wpx / 4, hpx / 2).expect("read right");
 
         assert_eq!(
             left,
@@ -2899,8 +2956,8 @@ mod tests {
     /// vacuous — see the note at the clear below, where that mistake was
     /// made and caught:
     ///
-    ///   premultiplied (ONE, ONE_MINUS_SRC_ALPHA):  0.5 + 1.0*0.5 = 1.00 → 255
-    ///   straight      (SRC_ALPHA, ONE_MINUS_SRC):  0.25 + 0.5    = 0.75 → 191
+    ///   premultiplied (ONE, `ONE_MINUS_SRC_ALPHA)`:  0.5 + 1.0*0.5 = 1.00 → 255
+    ///   straight      (`SRC_ALPHA`, `ONE_MINUS_SRC)`:  0.25 + 0.5    = 0.75 → 191
     ///
     /// So a red channel of 255 proves the premultiplied path and 191 proves
     /// the reflex mistake. Every Wayland buffer is premultiplied, so 191 would

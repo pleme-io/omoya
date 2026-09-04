@@ -4,7 +4,7 @@
 //! omoya composites on the CPU, so it advertises **linear-modifier dmabuf
 //! only** — a tiled modifier describes a layout only a GPU can decode, and a
 //! CPU blitter reading one paints structured noise. NVIDIA does not present
-//! linear. So on plo, a machine with a GeForce RTX 3070, **every GPU client
+//! linear. So on plo, a machine with a `GeForce` RTX 3070, **every GPU client
 //! renders through `llvmpipe`** — `mado` included, which is a GPU terminal.
 //!
 //! kasane is the second pipe. It imports a client's dmabuf as a Vulkan image
@@ -142,7 +142,18 @@ impl Params {
     /// `Params` cannot leave the range describing the old struct — which
     /// Vulkan would accept, silently passing a shader fewer bytes than it
     /// reads.
-    pub(crate) const SIZE: u32 = std::mem::size_of::<Self>() as u32;
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "three vec4<f32> is 48 bytes; the assertion below makes a size \
+                  that could not fit a compile error rather than a wrap"
+    )]
+    pub(crate) const SIZE: u32 = {
+        // ★ A compile-time floor under the cast. If `Params` ever grew past
+        // `u32::MAX` the cast would silently wrap and the push-constant range
+        // would describe a tiny struct; this makes that a build failure.
+        assert!(std::mem::size_of::<Self>() <= u32::MAX as usize);
+        std::mem::size_of::<Self>() as u32
+    };
 
     /// Map a rectangle in PIXELS on an output of `size` to clip space.
     ///
@@ -292,6 +303,13 @@ pub enum KasaneError {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::float_cmp,
+    reason = "every expected value here is exactly representable — -1.0, 2.0, \
+              0.5, 28.0 — because the transform is a scale and a bias by \
+              powers of two. An epsilon would weaken the assertion without \
+              making it more correct, and would hide a sign error of 2.0."
+)]
 mod tests {
     use super::*;
 
@@ -524,7 +542,7 @@ mod tests {
     #[test]
     fn the_compiled_shader_is_a_spirv_module_with_the_three_entry_points() {
         assert!(
-            COMPOSITE_SPV.len() >= 20 && COMPOSITE_SPV.len() % 4 == 0,
+            COMPOSITE_SPV.len() >= 20 && COMPOSITE_SPV.len().is_multiple_of(4),
             "SPIR-V is a stream of 32-bit words with a 5-word header; got {} bytes",
             COMPOSITE_SPV.len()
         );
