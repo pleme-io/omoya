@@ -301,6 +301,21 @@ pub struct Omoya {
     /// `PointerMotionAbsolute` arm could be written without touching state,
     /// and the mouse arm could not, so the mouse arm was never written.
     pub pointer_location: Point<f64, Logical>,
+    /// Whether a client has asked for the pointer to be HIDDEN.
+    ///
+    /// ── ★ `cursor_image` USED TO DISCARD THIS ────────────────────────────
+    /// The `SeatHandler::cursor_image` hook was an empty stub, so every
+    /// client request about the pointer was thrown away — an I-beam over
+    /// text, a resize arrow, and a request to hide the pointer entirely. The
+    /// last one is the one an operator FEELS: a terminal hides the pointer
+    /// while you type so the arrow does not sit on top of the words, and
+    /// omoya kept drawing it.
+    ///
+    /// A bool rather than the full `CursorImageStatus`: rendering a client's
+    /// own cursor SURFACE is a larger piece (`pending-cursor-surface`), and
+    /// claiming to store a status we then ignore would be the same shape as
+    /// the stub. This stores exactly what is acted on.
+    pub pointer_hidden: bool,
 }
 
 impl Omoya {
@@ -397,6 +412,7 @@ impl Omoya {
             // adds one later, and a "centre" computed before that would be a
             // guess dressed as a position.
             pointer_location: (0.0, 0.0).into(),
+            pointer_hidden: false,
             mode,
             reserved,
             owed_vt_switches: 0,

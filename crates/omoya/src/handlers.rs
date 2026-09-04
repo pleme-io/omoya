@@ -610,8 +610,24 @@ impl SeatHandler for Omoya {
     fn cursor_image(
         &mut self,
         _seat: &Seat<Self>,
-        _image: smithay::input::pointer::CursorImageStatus,
+        image: smithay::input::pointer::CursorImageStatus,
     ) {
+        // ★ WAS AN EMPTY STUB — every client request about the pointer was
+        // discarded. `Hidden` is the one an operator feels: a terminal hides
+        // the pointer while you type so the arrow is not sitting on the
+        // words, and omoya kept drawing it regardless.
+        //
+        // `Surface(_)` still falls back to our own arrow. Rendering a
+        // client's cursor surface is a larger piece and pretending otherwise
+        // by storing a status nobody reads would be the stub again with more
+        // steps. `pending-cursor-surface:` names it.
+        let hidden = matches!(image, smithay::input::pointer::CursorImageStatus::Hidden);
+        if hidden != self.pointer_hidden {
+            self.pointer_hidden = hidden;
+            // The pointer's appearance changed, so the frame that shows it is
+            // owed — without this the change waits for whatever redraws next.
+            self.owed.mark(crate::owed::Owed::Pointer);
+        }
     }
 
     fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&WlSurface>) {

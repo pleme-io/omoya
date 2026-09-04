@@ -1036,7 +1036,12 @@ where
 
             let mut elements: Vec<SeatElements<R, _>> =
                 Vec::with_capacity(space_elements.len() + 6);
-            {
+            // ★ A CLIENT MAY ASK FOR NO POINTER AT ALL, and until now that
+            // request was discarded by an empty `cursor_image` stub. A
+            // terminal hides the pointer while you type; drawing the arrow
+            // over the words anyway is the seat overruling the application
+            // about its own surface.
+            if !data.state.pointer_hidden {
                 // ── ★ THE POINTER, AS AN ARROW ──────────────────────────
                 //
                 // This was a 12x12 solid square, which the operator read
