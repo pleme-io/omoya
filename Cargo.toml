@@ -18,7 +18,7 @@ members = ["crates/omoya-spec", "crates/nuri", "crates/kasane", "crates/hairetsu
 xkbcommon = { path = "crates/xkbcommon-hairetsu" }
 
 [workspace.package]
-version = "0.1.104"
+version = "0.1.105"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/pleme-io/omoya"
