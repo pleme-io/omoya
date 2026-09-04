@@ -68,6 +68,14 @@ pub struct Gpu {
     /// True when this is a software rasteriser. Not a defect — it is how CI
     /// exercises the path — but a seat must be able to tell the difference.
     pub is_cpu: bool,
+    /// Whether `VK_EXT_physical_device_drm` was available and enabled.
+    ///
+    /// ★ Recorded rather than assumed: querying `PhysicalDeviceDrmPropertiesEXT`
+    /// on a device that never enabled the extension leaves the struct as the
+    /// zeroes it was initialised with, and `has_primary=0 major=0 minor=0` is
+    /// indistinguishable from a real answer of "no primary node". Carrying the
+    /// flag is what lets `drm_nodes` say NOT ASKED instead of guessing.
+    pub has_drm: bool,
 }
 
 impl Gpu {
@@ -162,7 +170,22 @@ impl Gpu {
         let queues = [vk::DeviceQueueCreateInfo::default()
             .queue_family_index(queue_family)
             .queue_priorities(&priorities)];
-        let want = [
+        // ★ OPTIONAL, NOT REQUIRED — and the asymmetry that made this a bug is
+        // worth stating. The FILTER above tests three extensions; this list
+        // asked for four. A device with the three but not
+        // `physical_device_drm` therefore PASSED the filter, was chosen, and
+        // died here with ERROR_EXTENSION_NOT_PRESENT — bypassing the typed
+        // `NoDeviceWithDmabuf { examined }` refusal and surfacing as an opaque
+        // `Driver(String)`. lavapipe is exactly that device, which is why
+        // kasane's tests skipped on the build machine and the GPU path went
+        // untested in CI.
+        //
+        // Adding it to the filter would have been the wrong fix: it makes
+        // lavapipe an HONEST refusal and leaves the import path with no
+        // coverage anywhere a GPU is absent. Requesting it only when present,
+        // and reporting no DRM node when it is not, keeps the software
+        // rasteriser usable as a test device while M4 stays exact on hardware.
+        let mut want = vec![
             ash::khr::external_memory_fd::NAME.as_ptr(),
             ash::ext::external_memory_dma_buf::NAME.as_ptr(),
             // ★ M1. A real client buffer from a GPU is TILED, and its layout
@@ -170,11 +193,26 @@ impl Gpu {
             // only importable layout is linear — the CPU-readback path this
             // crate exists to remove.
             ash::ext::image_drm_format_modifier::NAME.as_ptr(),
-            // ★ M4. Reports this device's DRM major:minor, which is how the
-            // GPU that drives the display is identified — by the node the
-            // kernel keyed it on, not by a vendor string.
-            ash::ext::physical_device_drm::NAME.as_ptr(),
         ];
+        // ★ M4, requested only if the device has it. `has_drm` is carried on
+        // the Gpu so `drm_nodes()` answers "not asked" rather than querying a
+        // properties struct the driver never filled — an unasked query returns
+        // zeroes, and zeroes are a valid-looking DRM node of 0:0.
+        let has_drm = {
+            let exts = match unsafe { instance.enumerate_device_extension_properties(physical) } {
+                Ok(e) => e,
+                Err(_) => Vec::new(),
+            };
+            exts.iter().any(|e| {
+                // SAFETY: `extension_name` is a NUL-terminated fixed array the
+                // driver filled; the spec guarantees the terminator.
+                let name = unsafe { std::ffi::CStr::from_ptr(e.extension_name.as_ptr()) };
+                name == ash::ext::physical_device_drm::NAME
+            })
+        };
+        if has_drm {
+            want.push(ash::ext::physical_device_drm::NAME.as_ptr());
+        }
         let dci = vk::DeviceCreateInfo::default()
             .queue_create_infos(&queues)
             .enabled_extension_names(&want);
@@ -201,6 +239,7 @@ impl Gpu {
             mem_props,
             device_name: name,
             is_cpu: props.device_type == vk::PhysicalDeviceType::CPU,
+            has_drm,
         })
     }
 
@@ -841,6 +880,12 @@ impl Gpu {
     /// legitimate answer and not an error.
     #[must_use]
     pub fn drm_nodes(&self) -> (Option<DrmNode>, Option<DrmNode>) {
+        // ★ NOT ASKED is not NO NODE. Without the extension the properties
+        // struct keeps its zeroes and would read as a device with no primary
+        // node — a plausible answer that happens to be a lie.
+        if !self.has_drm {
+            return (None, None);
+        }
         let mut drm = vk::PhysicalDeviceDrmPropertiesEXT::default();
         let mut props = vk::PhysicalDeviceProperties2::default().push_next(&mut drm);
         // SAFETY: live instance and physical device; `props` and the struct it
@@ -871,6 +916,29 @@ impl Gpu {
     }
 }
 
+/// Refuse to pass by skipping, when the caller said a GPU must be there.
+///
+/// ── ★ A SKIPPED TEST REPORTS `ok` ────────────────────────────────────────
+/// Every GPU test here ends `eprintln!("SKIP: …"); return;` when no device is
+/// available, and `cargo test` then prints `ok` for it. That is right for a
+/// developer laptop and WRONG for CI: the suite went green on the build
+/// machine for weeks while exercising none of the Vulkan path, because
+/// lavapipe was being rejected by a bug (see `Gpu::open`). A green suite that
+/// ran nothing is worse than a red one.
+///
+/// With `OMOYA_REQUIRE_GPU=1` a skip becomes a panic naming the reason, so an
+/// environment that is SUPPOSED to have a device says so when it does not.
+#[cfg(test)]
+fn skip_or_panic(what: &str, why: &dyn std::fmt::Display) {
+    if std::env::var_os("OMOYA_REQUIRE_GPU").is_some() {
+        panic!(
+            "{what}: no GPU pipe, but OMOYA_REQUIRE_GPU is set — this \
+             environment is supposed to have a device. Reason: {why}"
+        );
+    }
+    eprintln!("SKIP: {what} — {why}");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -890,7 +958,7 @@ mod tests {
         let gpu = match Gpu::open() {
             Ok(g) => g,
             Err(e) => {
-                eprintln!("SKIP: no GPU pipe on this machine — {e}");
+                skip_or_panic("GPU test", &e);
                 return;
             }
         };
@@ -967,7 +1035,7 @@ mod tests {
         let gpu = match Gpu::open() {
             Ok(g) => g,
             Err(e) => {
-                eprintln!("SKIP: no GPU pipe — {e}");
+                skip_or_panic("GPU test", &e);
                 return;
             }
         };
@@ -1015,7 +1083,7 @@ mod tests {
         let gpu = match Gpu::open() {
             Ok(g) => g,
             Err(e) => {
-                eprintln!("SKIP: no GPU pipe — {e}");
+                skip_or_panic("GPU test", &e);
                 return;
             }
         };
@@ -1062,7 +1130,7 @@ mod tests {
         let gpu = match Gpu::open() {
             Ok(g) => g,
             Err(e) => {
-                eprintln!("SKIP: no GPU pipe — {e}");
+                skip_or_panic("GPU test", &e);
                 return;
             }
         };

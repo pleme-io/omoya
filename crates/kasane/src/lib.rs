@@ -218,6 +218,18 @@ mod tests {
         // every hardware run report a defect that is not there, and the real
         // GPU failures would be lost in it.
         let Ok(entries) = std::fs::read_dir(&dir) else {
+            // ★ SKIPS OFF-TREE, but REFUSES to skip where a GPU run is
+            // required — the same rule the Vulkan tests obey. A source seal
+            // that prints SKIP and reports `ok` is a seal that stopped
+            // sealing, and the SKIP line interleaves with another test's
+            // result, attributing it to the wrong test.
+            assert!(
+                std::env::var_os("OMOYA_REQUIRE_GPU").is_none(),
+                "the source seal cannot run: {} is absent, and \
+                 OMOYA_REQUIRE_GPU is set — this run was supposed to be \
+                 on-tree",
+                dir.display()
+            );
             eprintln!(
                 "SKIP: {} is not present — source scan needs the source tree",
                 dir.display()
