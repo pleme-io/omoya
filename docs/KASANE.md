@@ -218,10 +218,44 @@ renderer-gated — so "select a GPU renderer and NVIDIA can present" was false.
 | **M0** ✅ | dmabuf round-trips through Vulkan in pure Rust | shipped — but see the note below on what it does and does not prove |
 | **M1a** ✅ | tiled dmabuf imported as a SAMPLED image; modifiers queried from the driver | shipped and **verified on plo's RTX 3070**: 7 importable modifiers (6 NVIDIA vendor layouts + LINEAR). ★ The hardware refuted an assumption — the 3070 ACCEPTS `DRM_FORMAT_MOD_INVALID` at `vkCreateImage`, so the refusal had to become ours at the import boundary. llvmpipe would have passed either way. |
 | **M1** | Import a real client dmabuf — tiled, device-local — as a **sampled** `VkImage`, composite from it, never touch it with the CPU | With a GPU client on plo: `gather_us < 5 000` (baseline **693 952**) **and** `Cost::cpu_bytes_per_frame == 0`. Not a pixel. |
-| **M2** | `impl Renderer + Frame + ImportDma + ImportMem + Bind<Dmabuf> + ExportMem + ArmFlush` for `Kasane` | `git show --stat <commit> -- crates/omoya/src/drm.rs` is **empty**. If drm.rs needs editing the seam was wrong. |
+| **M2** ◑ | `impl Renderer + Frame + ImportDma + ImportMem + Bind<Dmabuf> + ExportMem + ArmFlush` for `Kasane` | `git show --stat <commit> -- crates/omoya/src/drm.rs` is **empty**. If drm.rs needs editing the seam was wrong. **The seam is confirmed to be a generic bound** (`drm.rs:560-595`), so satisfying it changes nothing there by construction. |
 | **M3** ✅ | The dmabuf global becomes a typed capability on the renderer bound, not a shell variable | `wayland-info` lists `zwp_linux_dmabuf_v1` under kasane and does **not** under nuri, with `OMOYA_ADVERTISE_DMABUF` unset in both runs. `vulkaninfo` then names the RTX 3070 under Presentable Surfaces. |
 | **M4** ✅ | Device selection by DRM node + typed fallback | kasane binds the physical device whose `VkPhysicalDeviceDrmPropertiesEXT` major:minor matches the `DrmDeviceFd`'s `st_rdev` (226:1 / 226:128 on plo). Red run: hide the loader → nuri, fallback proven rather than inferred. |
 | **M5** | Scanout | page-flip from a GPU-composited buffer; `Cost::is_zero_copy()` true for a client surface. |
+
+### ★ M2's substrate, shipped 2026-09-03 — the draw path exists
+
+M2 is not done, but it is no longer a blank. What now runs, verified on rio
+under lavapipe with the Vulkan validation layer on (23 tests, `--test-threads=1`):
+
+| piece | state |
+|---|---|
+| WGSL → SPIR-V, pure Rust, at build time (`naga` as a build-dep) | shipped |
+| three entry points in one module: quad vertex, textured, solid | shipped |
+| graphics pipelines, premultiplied blend, dynamic viewport/scissor | shipped |
+| **dynamic rendering** — no `VkRenderPass`/`VkFramebuffer` objects at all | shipped, REQUIRED |
+| a render target + submit + fence + readback | shipped |
+| `Draw` as a closed enum (`Solid` today) | shipped |
+| the validation gate — a `VK_EXT_debug_utils` messenger that FAILS the build | shipped |
+| `ImportDma`/`ImportMem`/`Bind<Dmabuf>`/`ExportMem`/`ArmFlush` impls | **not built** |
+| the texture draw (descriptor sets for a client surface) | **not built** |
+| a pipelined command-buffer ring (this waits on a fence per frame) | **not built** |
+
+**First pixel:** opaque red over the left half of a blue clear reads back
+`left=[0,0,255,255] right=[255,0,0,255]` (BGRA) — colour and position.
+
+★★ **The validation gate is the load-bearing part, and its justification is a
+measurement.** Two red runs proved a pipeline-creation test blind to a wrong
+descriptor type AND a wrong push-constant range: both compile clean, draw clean,
+and give the RIGHT PIXEL on lavapipe. Vulkan does not check a pipeline's layout
+against its shader's interface — only the layer does. It found a real violation
+the day it was added: `VUID-VkImageCreateInfo-pNext-01443` in M0's export path,
+live since M0 existed (`PREINITIALIZED` on an image chaining
+`VkExternalMemoryImageCreateInfo`; must be `UNDEFINED`). Both our drivers
+accepted it.
+
+Run it with:
+`KASANE_VALIDATION=1 VK_LAYER_PATH=<vulkan-validation-layers>/share/vulkan/explicit_layer.d`
 
 ★ **Shipped as of 2026-09-04: M0, M1a, M3, M4.** `AdvertisesDmabuf` is on the
 renderer bound and nuri answers `false` because it maps and copies; kasane
