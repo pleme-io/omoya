@@ -555,11 +555,11 @@ impl Gpu {
     /// A Vulkan failure, or no memory type that is both host-visible and
     /// permitted by the image's requirements.
     pub fn export_linear(
-        &self,
+        self: &std::sync::Arc<Self>,
         width: u32,
         height: u32,
         fill: [u8; 4],
-    ) -> Result<Exported<'_>, KasaneError> {
+    ) -> Result<Exported, KasaneError> {
         let mut external = vk::ExternalMemoryImageCreateInfo::default().handle_types(HANDLE);
         let ici = vk::ImageCreateInfo::default()
             .push_next(&mut external)
@@ -686,7 +686,7 @@ impl Gpu {
         let fd = unsafe { OwnedFd::from_raw_fd(raw) };
 
         Ok(Exported {
-            gpu: self,
+            gpu: std::sync::Arc::clone(self),
             image,
             memory,
             fd: Some(fd),
@@ -703,10 +703,10 @@ impl Gpu {
     /// A Vulkan failure, or no memory type permitted by BOTH the image's
     /// requirements and the driver's answer for this particular fd.
     pub fn import_linear(
-        &self,
+        self: &std::sync::Arc<Self>,
         fd: OwnedFd,
         geometry: Geometry,
-    ) -> Result<Imported<'_>, KasaneError> {
+    ) -> Result<Imported, KasaneError> {
         // ★ ASK THE DRIVER WHICH MEMORY TYPES THIS FD MAY USE, before consuming
         // it. Intersecting with the image's own requirements is what makes the
         // import legal; using either alone is how an import "succeeds" and then
@@ -811,7 +811,7 @@ impl Gpu {
                 // bound on the line above.
                 match unsafe { self.device.create_image_view(&view_info, None) } {
                     Ok(view) => Ok(Imported {
-                        gpu: self,
+                        gpu: std::sync::Arc::clone(self),
                         image,
                         memory,
                         view,
@@ -967,8 +967,19 @@ pub enum Filter {
 ///
 /// Borrows the [`Gpu`], so it cannot outlive the device that must destroy it.
 /// The compiler enforces the ordering; no comment has to.
-pub struct Pipelines<'g> {
-    gpu: &'g Gpu,
+pub struct Pipelines {
+    /// The device this belongs to.
+    ///
+    /// ★ AN `Arc`, NOT A BORROW — and the reason is structural, not stylistic.
+    /// A smithay `Renderer` must own its device AND its compiled pipelines,
+    /// because `render()` takes `&mut self` and hands back a `Frame` that
+    /// draws. With `gpu: &'g Gpu` that renderer is a self-referential struct,
+    /// which safe Rust cannot express at all.
+    ///
+    /// The guarantee is unchanged: the device outlives every object that must
+    /// be destroyed on it, enforced by the refcount instead of by a lifetime.
+    /// Drop order WITHIN this struct is still explicit and still load-bearing.
+    gpu: std::sync::Arc<Gpu>,
     module: vk::ShaderModule,
     set_layout: vk::DescriptorSetLayout,
     /// The pipeline layout, public because recording a draw needs it to push
@@ -998,7 +1009,7 @@ pub struct Pipelines<'g> {
     pub format: vk::Format,
 }
 
-impl<'g> Pipelines<'g> {
+impl Pipelines {
     /// How many textured draws one frame may contain.
     ///
     /// ★ A HARD CEILING, and it fails LOUDLY rather than silently dropping the
@@ -1014,7 +1025,7 @@ impl<'g> Pipelines<'g> {
     /// [`KasaneError::Vulkan`] if the driver refuses any object. Every failure
     /// here is a driver verdict rather than a state — the SPIR-V was validated
     /// at build time and the layouts are constants.
-    pub fn new(gpu: &'g Gpu, format: vk::Format) -> Result<Self, KasaneError> {
+    pub fn new(gpu: &std::sync::Arc<Gpu>, format: vk::Format) -> Result<Self, KasaneError> {
         let module = gpu.shader_module()?;
 
         // Built incrementally so that a failure part-way through still
@@ -1022,7 +1033,7 @@ impl<'g> Pipelines<'g> {
         // sampler and the pipeline leaks a sampler on every retry — and a
         // compositor retries.
         let mut built = Self {
-            gpu,
+            gpu: std::sync::Arc::clone(gpu),
             module,
             set_layout: vk::DescriptorSetLayout::null(),
             layout: vk::PipelineLayout::null(),
@@ -1230,7 +1241,7 @@ impl<'g> Pipelines<'g> {
     }
 }
 
-impl Drop for Pipelines<'_> {
+impl Drop for Pipelines {
     fn drop(&mut self) {
         let dev = &self.gpu.device;
         // SAFETY: every handle came from this device, and each is destroyed
@@ -1300,8 +1311,9 @@ pub enum Draw {
 /// `linearTilingFeatures`, so the image creation fails on plo's 3070 and
 /// succeeds in CI — the worst possible split, since the test machine would
 /// prove a path the real machine cannot take.
-pub struct Target<'g> {
-    gpu: &'g Gpu,
+pub struct Target {
+    /// The device. See [`Pipelines`]'s field for why this is an `Arc`.
+    gpu: std::sync::Arc<Gpu>,
     image: vk::Image,
     view: vk::ImageView,
     image_memory: vk::DeviceMemory,
@@ -1313,21 +1325,21 @@ pub struct Target<'g> {
     pub format: vk::Format,
 }
 
-impl<'g> Target<'g> {
+impl Target {
     /// Create a `width` x `height` target in `format`.
     ///
     /// # Errors
     /// [`KasaneError::Vulkan`] for any driver refusal; every one names the
     /// call that failed, because "could not create target" is not actionable.
     pub fn new(
-        gpu: &'g Gpu,
+        gpu: &std::sync::Arc<Gpu>,
         width: u32,
         height: u32,
         format: vk::Format,
     ) -> Result<Self, KasaneError> {
         let extent = vk::Extent2D { width, height };
         let mut t = Self {
-            gpu,
+            gpu: std::sync::Arc::clone(gpu),
             image: vk::Image::null(),
             view: vk::ImageView::null(),
             image_memory: vk::DeviceMemory::null(),
@@ -1441,7 +1453,7 @@ impl<'g> Target<'g> {
     /// [`KasaneError::Vulkan`] naming the failing call.
     pub fn draw(
         &self,
-        pipes: &Pipelines<'_>,
+        pipes: &Pipelines,
         clear: [f32; 4],
         draws: &[Draw],
     ) -> Result<(), KasaneError> {
@@ -1520,7 +1532,7 @@ impl<'g> Target<'g> {
     fn record_and_submit(
         &self,
         cmd: vk::CommandBuffer,
-        pipes: &Pipelines<'_>,
+        pipes: &Pipelines,
         clear: [f32; 4],
         draws: &[Draw],
     ) -> Result<(), KasaneError> {
@@ -1771,7 +1783,7 @@ impl<'g> Target<'g> {
     /// screen and one shows the other's contents.
     fn texture_descriptor(
         dev: &ash::Device,
-        pipes: &Pipelines<'_>,
+        pipes: &Pipelines,
         texture: TextureRef,
         filter: Filter,
     ) -> Result<vk::DescriptorSet, KasaneError> {
@@ -1890,7 +1902,7 @@ impl<'g> Target<'g> {
     }
 }
 
-impl Drop for Target<'_> {
+impl Drop for Target {
     fn drop(&mut self) {
         let dev = &self.gpu.device;
         // SAFETY: every handle came from this device and is destroyed once.
@@ -1911,8 +1923,9 @@ impl Drop for Target<'_> {
 ///
 /// Borrows the [`Gpu`], so it cannot outlive the device that must destroy it —
 /// the ordering is enforced by the compiler rather than by a comment.
-pub struct Exported<'g> {
-    gpu: &'g Gpu,
+pub struct Exported {
+    /// The device. See [`Pipelines`]'s field for why this is an `Arc`.
+    gpu: std::sync::Arc<Gpu>,
     image: vk::Image,
     memory: vk::DeviceMemory,
     /// The kernel dmabuf. `Option` because a type with a `Drop` impl cannot be
@@ -1923,7 +1936,7 @@ pub struct Exported<'g> {
     pub geometry: Geometry,
 }
 
-impl Exported<'_> {
+impl Exported {
     /// Take the dmabuf out, leaving the Vulkan objects to be dropped normally.
     ///
     /// ★ This ordering is the interesting part, not a formality: once the fd is
@@ -2002,7 +2015,7 @@ impl Exported<'_> {
     }
 }
 
-impl Drop for Exported<'_> {
+impl Drop for Exported {
     fn drop(&mut self) {
         // SAFETY: both handles came from `gpu.device` and are destroyed once.
         // The dmabuf fd keeps the underlying buffer alive independently, which
@@ -2015,8 +2028,9 @@ impl Drop for Exported<'_> {
 }
 
 /// A dmabuf imported as an image, with its pixels readable.
-pub struct Imported<'g> {
-    gpu: &'g Gpu,
+pub struct Imported {
+    /// The device. See [`Pipelines`]'s field for why this is an `Arc`.
+    gpu: std::sync::Arc<Gpu>,
     image: vk::Image,
     memory: vk::DeviceMemory,
     /// A view of the whole image, so it can be SAMPLED.
@@ -2030,7 +2044,7 @@ pub struct Imported<'g> {
     pub geometry: Geometry,
 }
 
-impl Imported<'_> {
+impl Imported {
     /// This buffer as something a [`Draw::Texture`] can sample.
     #[must_use]
     pub fn texture(&self) -> TextureRef {
@@ -2079,7 +2093,7 @@ impl Imported<'_> {
     }
 }
 
-impl Drop for Imported<'_> {
+impl Drop for Imported {
     fn drop(&mut self) {
         // SAFETY: every handle came from `gpu.device` and is destroyed once.
         // The view goes FIRST — it is a child of the image.
@@ -2193,11 +2207,11 @@ impl Gpu {
     /// A Vulkan failure, or no memory type permitted by both the image's
     /// requirements and the driver's answer for this particular fd.
     pub fn import_tiled(
-        &self,
+        self: &std::sync::Arc<Self>,
         fd: OwnedFd,
         geometry: Geometry,
         modifier: u64,
-    ) -> Result<Imported<'_>, KasaneError> {
+    ) -> Result<Imported, KasaneError> {
         // ── ★ VALIDATE THE MODIFIER OURSELVES ────────────────────────────
         //
         // Measured on plo's RTX 3070: `vkCreateImage` ACCEPTS
@@ -2323,7 +2337,7 @@ impl Gpu {
                 // bound on the line above.
                 match unsafe { self.device.create_image_view(&view_info, None) } {
                     Ok(view) => Ok(Imported {
-                        gpu: self,
+                        gpu: std::sync::Arc::clone(self),
                         image,
                         memory,
                         view,
@@ -2483,7 +2497,7 @@ mod tests {
     #[test]
     fn a_dmabuf_round_trips_through_vulkan_and_the_pixel_survives() {
         let gpu = match Gpu::open() {
-            Ok(g) => g,
+            Ok(g) => std::sync::Arc::new(g),
             Err(e) => {
                 skip_or_panic("GPU test", &e);
                 return;
@@ -2560,7 +2574,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     fn the_driver_reports_modifiers_it_can_sample() {
         let gpu = match Gpu::open() {
-            Ok(g) => g,
+            Ok(g) => std::sync::Arc::new(g),
             Err(e) => {
                 skip_or_panic("GPU test", &e);
                 return;
@@ -2608,7 +2622,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     fn an_unoffered_modifier_is_refused_at_the_boundary() {
         let gpu = match Gpu::open() {
-            Ok(g) => g,
+            Ok(g) => std::sync::Arc::new(g),
             Err(e) => {
                 skip_or_panic("GPU test", &e);
                 return;
@@ -2655,7 +2669,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     fn a_hardware_device_names_the_drm_node_it_drives() {
         let gpu = match Gpu::open() {
-            Ok(g) => g,
+            Ok(g) => std::sync::Arc::new(g),
             Err(e) => {
                 skip_or_panic("GPU test", &e);
                 return;
@@ -2715,7 +2729,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     fn the_selected_queue_family_supports_graphics() {
         let gpu = match Gpu::open() {
-            Ok(g) => g,
+            Ok(g) => std::sync::Arc::new(g),
             Err(e) => {
                 skip_or_panic("GPU test", &e);
                 return;
@@ -2755,7 +2769,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     fn the_device_has_a_command_pool() {
         let gpu = match Gpu::open() {
-            Ok(g) => g,
+            Ok(g) => std::sync::Arc::new(g),
             Err(e) => {
                 skip_or_panic("GPU test", &e);
                 return;
@@ -2777,7 +2791,7 @@ mod tests {
     #[test]
     fn the_driver_accepts_the_compiled_shader_module() {
         let gpu = match Gpu::open() {
-            Ok(g) => g,
+            Ok(g) => std::sync::Arc::new(g),
             Err(e) => {
                 skip_or_panic("shader module", &e);
                 return;
@@ -2824,7 +2838,7 @@ mod tests {
     #[test]
     fn the_compositor_pipelines_compile_on_this_driver() {
         let gpu = match Gpu::open() {
-            Ok(g) => g,
+            Ok(g) => std::sync::Arc::new(g),
             Err(e) => {
                 skip_or_panic("pipelines", &e);
                 return;
@@ -2864,7 +2878,7 @@ mod tests {
     #[test]
     fn dropping_a_partially_built_pipeline_set_is_safe() {
         let gpu = match Gpu::open() {
-            Ok(g) => g,
+            Ok(g) => std::sync::Arc::new(g),
             Err(e) => {
                 skip_or_panic("partial pipelines", &e);
                 return;
@@ -2893,7 +2907,7 @@ mod tests {
     #[test]
     fn a_solid_draw_lands_the_colour_and_the_place_it_was_given() {
         let gpu = match Gpu::open() {
-            Ok(g) => g,
+            Ok(g) => std::sync::Arc::new(g),
             Err(e) => {
                 skip_or_panic("solid draw", &e);
                 return;
@@ -2966,7 +2980,7 @@ mod tests {
     #[test]
     fn blending_treats_the_source_as_premultiplied() {
         let gpu = match Gpu::open() {
-            Ok(g) => g,
+            Ok(g) => std::sync::Arc::new(g),
             Err(e) => {
                 skip_or_panic("blend", &e);
                 return;
@@ -3031,7 +3045,7 @@ mod tests {
             return;
         }
         let gpu = match Gpu::open() {
-            Ok(g) => g,
+            Ok(g) => std::sync::Arc::new(g),
             Err(e) => {
                 skip_or_panic("validation", &e);
                 return;
@@ -3092,7 +3106,7 @@ mod tests {
     #[test]
     fn a_client_buffer_is_sampled_and_composited_by_the_gpu() {
         let gpu = match Gpu::open() {
-            Ok(g) => g,
+            Ok(g) => std::sync::Arc::new(g),
             Err(e) => {
                 skip_or_panic("texture draw", &e);
                 return;
@@ -3157,7 +3171,7 @@ mod tests {
     #[test]
     fn the_source_rectangle_selects_which_part_of_the_buffer_is_drawn() {
         let gpu = match Gpu::open() {
-            Ok(g) => g,
+            Ok(g) => std::sync::Arc::new(g),
             Err(e) => {
                 skip_or_panic("uv crop", &e);
                 return;
