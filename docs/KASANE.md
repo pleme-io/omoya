@@ -239,7 +239,8 @@ under lavapipe with the Vulkan validation layer on (23 tests, `--test-threads=1`
 | the validation gate — a `VK_EXT_debug_utils` messenger that FAILS the build | shipped |
 | the texture draw — a client dmabuf sampled and composited | shipped |
 | the smithay adapter's SHAPE — `Renderer`/`Frame`/`ImportDma` + the three omoya-local traits | shipped |
-| `Bind<Dmabuf>` — a dmabuf imported as a COLOR_ATTACHMENT | **not built** |
+| `Bind<Dmabuf>` — the renderer targets the scanout dmabuf directly, no shadow | shipped |
+| rendering INTO a shared dmabuf, proven by an independent second import | shipped |
 | `ImportMem` — a staging buffer and a host→device upload | **not built** |
 | `ExportMem` — the readback exists; smithay's `TextureMapping` does not | **not built** |
 | a pipelined command-buffer ring (this waits on a fence per frame) | **not built** |
@@ -263,6 +264,13 @@ is the proof. Everything left in M2 is fill-in-the-body work with no design risk
 ★ **`drm.rs` is byte-unchanged**, which is M2's stated done-predicate, and it
 holds by construction: the seam is a generic bound, so satisfying it IS the
 integration.
+
+★ **The scanout target is real: `Target::from_dmabuf` renders into a buffer
+somebody else allocated, verified by reading back through a SECOND, independent
+import of the same fd** — the target's own readback would pass even if the GPU
+had drawn into a private image sharing a handle. An imported target has NO
+readback buffer at all, tied to the backing type, so "a scanout target that
+silently pays for a per-frame host copy" has no representation.
 
 ★ **Nothing constructs a `KasaneRenderer` yet, and that is the type system
 working.** `drm.rs`'s bound demands the three unbuilt impls, so a half-built
