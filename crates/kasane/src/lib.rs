@@ -104,6 +104,65 @@ pub(crate) mod entry {
     pub const FRAGMENT_SOLID: &[u8] = b"fs_solid\0";
 }
 
+/// The push constants every draw carries — one struct, both entry points.
+///
+/// ★ ONE STRUCT FOR BOTH PIPELINES is deliberate. Vulkan validates that a
+/// pipeline's push-constant range matches its layout's, so two structs would
+/// mean two layouts, two ranges, and a mismatch that reports as a validation
+/// error about byte offsets rather than about the two shaders having drifted.
+/// `fs_solid` simply ignores `src`.
+///
+/// ★ AT THE CRATE ROOT, NOT IN `mod vk`, for the reason the SPIR-V blob is:
+/// `mod vk` is `#[cfg(target_os = "linux")]`, so a coordinate transform placed
+/// there is untested on the darwin workstation where it is written. Nothing
+/// about this struct needs a driver; only `bytes()` needs `unsafe`, and that
+/// one method stays in the seam.
+///
+/// `repr(C)` because these bytes are handed to a driver: Rust's default layout
+/// is explicitly allowed to reorder fields, and a reordered `dst`/`src` would
+/// draw every surface at the wrong place with no error anywhere.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Params {
+    /// Destination rectangle in CLIP SPACE: `[x, y, w, h]`, x and y in
+    /// `[-1, 1]`. Pre-transformed on the CPU so the shader has no matrix.
+    pub dst: [f32; 4],
+    /// Source rectangle in texture UV: `[u, v, w, h]` in `[0, 1]`. Carrying it
+    /// per-draw is what makes crop and scale one draw instead of a pre-pass.
+    pub src: [f32; 4],
+    /// Premultiplied colour for `fs_solid`; its `a` is the opacity multiplier
+    /// `fs_texture` applies.
+    pub tint: [f32; 4],
+}
+
+impl Params {
+    /// Byte size, as the pipeline layout's push-constant range declares it.
+    ///
+    /// Derived from the type rather than written as `48`, so adding a field to
+    /// `Params` cannot leave the range describing the old struct — which
+    /// Vulkan would accept, silently passing a shader fewer bytes than it
+    /// reads.
+    pub(crate) const SIZE: u32 = std::mem::size_of::<Self>() as u32;
+
+    /// Map a rectangle in PIXELS on an output of `size` to clip space.
+    ///
+    /// ★ Vulkan's Y axis points DOWN in framebuffer coordinates and clip space
+    /// runs -1 (top) to +1 (bottom), which is the same direction a compositor
+    /// already thinks in — so this is a scale and a bias, with no flip. Doing
+    /// the flip here "for OpenGL reasons" is the classic way to get an
+    /// upside-down desktop that looks correct in a screenshot.
+    #[must_use]
+    pub fn dst_from_pixels(rect: [f32; 4], size: (f32, f32)) -> [f32; 4] {
+        let (w, h) = size;
+        [
+            rect[0] / w * 2.0 - 1.0,
+            rect[1] / h * 2.0 - 1.0,
+            rect[2] / w * 2.0,
+            rect[3] / h * 2.0,
+        ]
+    }
+}
+
 use std::fmt;
 
 /// Why the GPU pipe is not available.
@@ -541,5 +600,60 @@ mod tests {
             i += len;
         }
         names
+    }
+
+    /// ★ THE CLIP-SPACE TRANSFORM, which is pure arithmetic and the easiest
+    /// thing here to get subtly wrong — a sign error draws the whole desktop
+    /// upside down, which looks like a driver bug and is not one.
+    #[test]
+    fn a_fullscreen_rect_covers_exactly_the_clip_volume() {
+        let got = Params::dst_from_pixels([0.0, 0.0, 1920.0, 1080.0], (1920.0, 1080.0));
+        assert_eq!(
+            got,
+            [-1.0, -1.0, 2.0, 2.0],
+            "a full-output rect must map to the whole clip volume: origin at \
+             (-1,-1) and extent 2x2"
+        );
+    }
+
+    /// ★ Y IS NOT FLIPPED. Vulkan's framebuffer Y points down and clip -1 is
+    /// the TOP, which is already the direction a compositor thinks in. The
+    /// reflex — flipping Y "because OpenGL" — produces an upside-down desktop
+    /// that a screenshot renders correctly, so it is diagnosed on hardware
+    /// rather than in a test. This pins the direction.
+    #[test]
+    fn the_top_of_the_screen_maps_to_the_top_of_clip_space() {
+        let top = Params::dst_from_pixels([0.0, 0.0, 100.0, 100.0], (1000.0, 1000.0));
+        let bottom = Params::dst_from_pixels([0.0, 900.0, 100.0, 100.0], (1000.0, 1000.0));
+        assert!(
+            top[1] < bottom[1],
+            "a rect at pixel y=0 must land above one at y=900; got {} vs {}",
+            top[1],
+            bottom[1]
+        );
+        assert_eq!(top[1], -1.0, "pixel y=0 is clip y=-1");
+    }
+
+    /// ★ A HALF-SIZED CENTRED RECT, so the scale and the bias are both pinned
+    /// rather than only their sum — the fullscreen case above passes for a
+    /// transform that is wrong in a way the two errors cancel.
+    #[test]
+    fn a_centred_quarter_rect_maps_to_the_middle_of_clip_space() {
+        let got = Params::dst_from_pixels([480.0, 270.0, 960.0, 540.0], (1920.0, 1080.0));
+        assert_eq!(got, [-0.5, -0.5, 1.0, 1.0]);
+    }
+
+    /// ★ THE PUSH-CONSTANT RANGE MATCHES THE STRUCT. `SIZE` is derived from
+    /// the type so this cannot drift, and the test says why that matters: a
+    /// range smaller than the struct passes Vulkan validation and hands the
+    /// shader fewer bytes than it reads.
+    #[test]
+    fn the_push_constant_size_is_the_three_vectors_the_shader_declares() {
+        assert_eq!(Params::SIZE, 48, "three vec4<f32> is 48 bytes");
+        assert_eq!(
+            Params::SIZE as usize,
+            core::mem::size_of::<Params>(),
+            "the declared range and the struct must not be able to disagree"
+        );
     }
 }

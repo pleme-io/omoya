@@ -1,6 +1,19 @@
 //! THE SEAM. Every `unsafe` in this crate is in this file, and a test in
 //! `lib.rs` fails the build if one escapes.
 //!
+//! ── ★ ash TYPES HAVE NO `Debug` HERE — USE `.as_raw()` ───────────────────
+//! `Cargo.toml` builds ash with `default-features = false`, which switches off
+//! its `debug` feature along with `linked`. So `{:?}` on a `Format`,
+//! `QueueFlags`, `ImageUsageFlags` or any other generated type is a COMPILE
+//! ERROR, not a runtime surprise — print `x.as_raw()` as `{:#x}` instead.
+//! (`vk::Result` is special-cased by ash and does implement `Debug`, which is
+//! why the error arms below can use `{e:?}`.)
+//!
+//! Written down because it has now cost two build cycles. Turning the `debug`
+//! feature on would fix the symptom and re-open the door to `linked` arriving
+//! by default on a version bump, which is the thing this crate exists to
+//! prevent.
+//!
 //! ── ★ WHY THE UNSAFE IS HERE AND NOWHERE ELSE ────────────────────────────
 //! The justification for binding Vulkan directly rather than going through
 //! EGL/GLES is that the C boundary is thin enough to contain. A boundary is
@@ -43,6 +56,77 @@ const FORMAT: vk::Format = vk::Format::B8G8R8A8_UNORM;
 /// The handle type. dmabuf, always — this crate has no other reason to exist.
 const HANDLE: vk::ExternalMemoryHandleTypeFlags = vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT;
 
+/// How many validation errors this process has seen.
+///
+/// ── ★ WHY A COUNTER AND NOT A PANIC ──────────────────────────────────────
+/// The callback is called BY THE DRIVER across an FFI boundary. Unwinding out
+/// of it is undefined behaviour, so it may only record. Tests then assert the
+/// count is zero, which turns a printed warning nobody reads into a failure.
+///
+/// Process-global rather than per-`Gpu` because the messenger is registered on
+/// the instance and tests run in parallel. A race can only make a test fail
+/// that should have passed — never the reverse — which is the safe direction
+/// for a gate.
+static VALIDATION_ERRORS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Validation errors seen so far, across every `Gpu` in this process.
+///
+/// Always 0 unless `KASANE_VALIDATION=1` was set and the layer was found —
+/// see [`Gpu::open`]. A zero here is therefore evidence only when validation
+/// was actually on, which [`validation_active`] answers.
+#[must_use]
+pub fn validation_errors() -> usize {
+    VALIDATION_ERRORS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Whether a validation messenger is actually installed.
+///
+/// ★ THE ANTI-VACUITY HALF. `validation_errors() == 0` is trivially true when
+/// the layer was never loaded, so a gate that checks only the count passes on
+/// every machine without the layer while claiming to prove something. A test
+/// asserts THIS first.
+#[must_use]
+pub fn validation_active() -> bool {
+    VALIDATION_INSTALLED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+static VALIDATION_INSTALLED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// The layer's callback. Records errors and prints everything it is given.
+///
+/// # Safety
+/// Called by the Vulkan loader with a valid `data` pointer, per the
+/// `VK_EXT_debug_utils` contract. It never unwinds and never returns TRUE
+/// (which would abort the call that triggered it).
+unsafe extern "system" fn debug_callback(
+    severity: vk::DebugUtilsMessageSeverityFlagsEXT,
+    _types: vk::DebugUtilsMessageTypeFlagsEXT,
+    data: *const vk::DebugUtilsMessengerCallbackDataEXT<'_>,
+    _user: *mut std::ffi::c_void,
+) -> vk::Bool32 {
+    // SAFETY: the loader guarantees `data` points at a live struct for the
+    // duration of the call, and `p_message` at a NUL-terminated string.
+    let message = unsafe {
+        data.as_ref()
+            .and_then(|d| {
+                if d.p_message.is_null() {
+                    None
+                } else {
+                    std::ffi::CStr::from_ptr(d.p_message).to_str().ok()
+                }
+            })
+            .unwrap_or("<no message>")
+    };
+    if severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::ERROR) {
+        VALIDATION_ERRORS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        eprintln!("kasane VALIDATION ERROR: {message}");
+    } else {
+        eprintln!("kasane validation: {message}");
+    }
+    vk::FALSE
+}
+
 fn driver(call: &'static str, e: vk::Result) -> KasaneError {
     KasaneError::Vulkan {
         call,
@@ -62,6 +146,16 @@ pub struct Gpu {
     device: ash::Device,
     mem_props: vk::PhysicalDeviceMemoryProperties,
     ext_fd: ash::khr::external_memory_fd::Device,
+    /// `cmd_begin_rendering` / `cmd_end_rendering`.
+    ///
+    /// ★ Loaded from the KHR extension rather than core: the device is opened
+    /// at API 1.2, where the core 1.3 entry points do not exist even though
+    /// the extension does. Calling the core ones on a 1.2 device is a null
+    /// function pointer, which crashes rather than erroring.
+    dyn_render: ash::khr::dynamic_rendering::Device,
+    /// The validation messenger, when `KASANE_VALIDATION=1` found the layer.
+    /// Held so `Drop` can destroy it BEFORE the instance it belongs to.
+    debug: Option<(ash::ext::debug_utils::Instance, vk::DebugUtilsMessengerEXT)>,
     /// What the driver calls itself. For reports, so "which GPU answered" is
     /// never a guess.
     pub device_name: String,
@@ -101,13 +195,100 @@ impl Gpu {
         let entry = unsafe { ash::Entry::load() }.map_err(|_| Unavailable::NoLoader)?;
 
         let app = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_2);
-        let ci = vk::InstanceCreateInfo::default().application_info(&app);
+
+        // ★★ VALIDATION IS OPT-IN, AND THE REASON IS A MEASUREMENT.
+        //
+        // Two red runs proved that a wrong push-constant range and a wrong
+        // descriptor type BOTH compile clean and draw wrong — lavapipe does
+        // not enforce the declarations, so nothing in this crate could see
+        // them. Under `VK_LAYER_KHRONOS_validation` the first is named
+        // exactly: VUID-VkGraphicsPipelineCreateInfo-layout-07987.
+        //
+        // So this is not developer comfort; it is the only mechanism that
+        // catches an entire CLASS — wrong layouts, missing barriers, sync
+        // hazards, objects destroyed while in use — none of which a driver is
+        // obliged to report. It is off by default because the layer costs real
+        // time per call and a compositor runs at 360 Hz.
+        //
+        // `KASANE_VALIDATION=1` plus `VK_LAYER_PATH` pointing at the layer.
+        let want_validation = std::env::var_os("KASANE_VALIDATION").is_some_and(|v| v == "1");
+        let layer_name = c"VK_LAYER_KHRONOS_validation";
+        // SAFETY: enumerating layers takes no arguments that could dangle.
+        let have_layer = want_validation
+            && unsafe { entry.enumerate_instance_layer_properties() }
+                .map(|ls| {
+                    ls.iter().any(|l| {
+                        // SAFETY: `layer_name` is a NUL-terminated fixed array
+                        // the loader filled; the spec guarantees the terminator.
+                        let n = unsafe { std::ffi::CStr::from_ptr(l.layer_name.as_ptr()) };
+                        n == layer_name
+                    })
+                })
+                .unwrap_or(false);
+
+        let layers: Vec<*const std::ffi::c_char> = if have_layer {
+            vec![layer_name.as_ptr()]
+        } else {
+            Vec::new()
+        };
+        // `VK_EXT_debug_utils` is provided BY the validation layer, so it is
+        // requested only alongside it — asking for it without the layer fails
+        // instance creation on a plain driver.
+        let inst_exts: Vec<*const std::ffi::c_char> = if have_layer {
+            vec![ash::ext::debug_utils::NAME.as_ptr()]
+        } else {
+            Vec::new()
+        };
+        if want_validation && !have_layer {
+            // ★ SAID OUT LOUD. A silent downgrade here would leave a run
+            // reporting zero validation errors because validation never
+            // loaded — the vacuous green this whole mechanism exists to
+            // avoid. `validation_active()` is the programmatic form.
+            eprintln!(
+                "kasane: KASANE_VALIDATION=1 but VK_LAYER_KHRONOS_validation was \
+                 not found — set VK_LAYER_PATH. Continuing WITHOUT validation."
+            );
+        }
+
+        let ci = vk::InstanceCreateInfo::default()
+            .application_info(&app)
+            .enabled_layer_names(&layers)
+            .enabled_extension_names(&inst_exts);
         // SAFETY: `ci` outlives the call, and `app` outlives `ci` — both are
         // locals in this frame. No allocator callbacks are supplied.
         let instance = unsafe { entry.create_instance(&ci, None) }
             .map_err(|e| Unavailable::Driver(format!("create_instance: {e:?}")))?;
 
-        match Self::pick(&entry, &instance) {
+        // The messenger has to outlive the instance's use, so it is held on
+        // `Gpu` and destroyed in `Drop` before the instance.
+        let debug = if have_layer {
+            let loader = ash::ext::debug_utils::Instance::new(&entry, &instance);
+            let info = vk::DebugUtilsMessengerCreateInfoEXT::default()
+                .message_severity(
+                    vk::DebugUtilsMessageSeverityFlagsEXT::ERROR
+                        | vk::DebugUtilsMessageSeverityFlagsEXT::WARNING,
+                )
+                .message_type(
+                    vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION
+                        | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE,
+                )
+                .pfn_user_callback(Some(debug_callback));
+            // SAFETY: `info` is a local; the callback is a `'static` fn.
+            match unsafe { loader.create_debug_utils_messenger(&info, None) } {
+                Ok(m) => {
+                    VALIDATION_INSTALLED.store(true, std::sync::atomic::Ordering::Relaxed);
+                    Some((loader, m))
+                }
+                Err(e) => {
+                    eprintln!("kasane: could not install the validation messenger: {e:?}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        match Self::pick(&entry, &instance, debug) {
             Ok(gpu) => Ok(gpu),
             Err(e) => {
                 // SAFETY: the instance was created above, nothing else holds it,
@@ -118,7 +299,13 @@ impl Gpu {
         }
     }
 
-    fn pick(entry: &ash::Entry, instance: &ash::Instance) -> Result<Self, Unavailable> {
+    fn pick(
+        entry: &ash::Entry,
+        instance: &ash::Instance,
+        // Created in `open` alongside the instance it belongs to, and moved
+        // here so the `Gpu` that owns its destruction also owns the instance.
+        debug: Option<(ash::ext::debug_utils::Instance, vk::DebugUtilsMessengerEXT)>,
+    ) -> Result<Self, Unavailable> {
         // SAFETY: `instance` is live for the whole function.
         let physicals = unsafe { instance.enumerate_physical_devices() }
             .map_err(|e| Unavailable::Driver(format!("enumerate_physical_devices: {e:?}")))?;
@@ -219,24 +406,67 @@ impl Gpu {
         // the Gpu so `drm_nodes()` answers "not asked" rather than querying a
         // properties struct the driver never filled — an unasked query returns
         // zeroes, and zeroes are a valid-looking DRM node of 0:0.
-        let has_drm = {
-            let exts = match unsafe { instance.enumerate_device_extension_properties(physical) } {
-                Ok(e) => e,
-                Err(_) => Vec::new(),
-            };
-            exts.iter().any(|e| {
-                // SAFETY: `extension_name` is a NUL-terminated fixed array the
-                // driver filled; the spec guarantees the terminator.
-                let name = unsafe { std::ffi::CStr::from_ptr(e.extension_name.as_ptr()) };
-                name == ash::ext::physical_device_drm::NAME
-            })
+        // Enumerated ONCE and shared. Two optional extensions are decided from
+        // this list; asking the driver twice invites the two answers to be
+        // taken from different enumerations.
+        let device_exts = match unsafe { instance.enumerate_device_extension_properties(physical) }
+        {
+            Ok(e) => e,
+            Err(_) => Vec::new(),
         };
+        // SAFETY: `extension_name` is a NUL-terminated fixed array the driver
+        // filled; the spec guarantees the terminator.
+        fn ext_name(e: &vk::ExtensionProperties) -> &std::ffi::CStr {
+            unsafe { std::ffi::CStr::from_ptr(e.extension_name.as_ptr()) }
+        }
+        let has_drm = device_exts
+            .iter()
+            .any(|e| ext_name(e) == ash::ext::physical_device_drm::NAME);
         if has_drm {
             want.push(ash::ext::physical_device_drm::NAME.as_ptr());
         }
+
+        // ★ DYNAMIC RENDERING, AND WHY IT IS REQUIRED RATHER THAN OPTIONAL.
+        //
+        // Without it a compositor needs `VkRenderPass` + `VkFramebuffer`
+        // objects, both of which are baked against a specific attachment set —
+        // so every output size and format change means recreating them, and a
+        // cache keyed on that tuple, and an invalidation rule. Dynamic
+        // rendering deletes that entire category: `cmd_begin_rendering` names
+        // its attachments inline, per frame.
+        //
+        // Supporting BOTH would double the draw path to serve hardware this
+        // fleet does not have. So absence is a typed state with a fallback —
+        // rule 4 of CONTAIN THE C — and the caller lands on nuri, which is a
+        // correct compositor, not a degraded one.
+        //
+        // Requested as the KHR extension rather than by raising the instance
+        // to API 1.3: a 1.2 driver that exposes the extension then still
+        // works, which is strictly more machines than a version bump reaches.
+        let has_dynamic_rendering = device_exts
+            .iter()
+            .any(|e| ext_name(e) == ash::khr::dynamic_rendering::NAME);
+        if !has_dynamic_rendering {
+            return Err(Unavailable::Driver(
+                "the device does not offer VK_KHR_dynamic_rendering, which the \
+                 compositor's draw path requires; falling back to the CPU pipe"
+                    .to_owned(),
+            ));
+        }
+        want.push(ash::khr::dynamic_rendering::NAME.as_ptr());
+
+        // The extension is not enough — the FEATURE has to be switched on in
+        // the device's pNext chain, and a driver that offers the extension
+        // while the feature is off would otherwise fail later, at
+        // `cmd_begin_rendering`, with a validation message about a command
+        // rather than about device creation.
+        let mut dyn_rendering =
+            vk::PhysicalDeviceDynamicRenderingFeatures::default().dynamic_rendering(true);
+
         let dci = vk::DeviceCreateInfo::default()
             .queue_create_infos(&queues)
-            .enabled_extension_names(&want);
+            .enabled_extension_names(&want)
+            .push_next(&mut dyn_rendering);
         // SAFETY: `physical` is live, `dci` and everything it borrows are
         // locals outliving the call.
         let device = unsafe { instance.create_device(physical, &dci, None) }
@@ -280,6 +510,8 @@ impl Gpu {
             queue_family,
             command_pool,
             ext_fd: ash::khr::external_memory_fd::Device::new(instance, &device),
+            dyn_render: ash::khr::dynamic_rendering::Device::new(instance, &device),
+            debug,
             instance: instance.clone(),
             physical,
             device,
@@ -330,13 +562,28 @@ impl Gpu {
             .mip_levels(1)
             .array_layers(1)
             .samples(vk::SampleCountFlags::TYPE_1)
-            // LINEAR so the rows are addressable by a CPU, and so
-            // PREINITIALIZED is legal — which is what lets this write pixels
-            // by mapping instead of submitting a command buffer.
+            // LINEAR so the rows are addressable by a CPU — which is what
+            // lets this write pixels by mapping instead of submitting a
+            // command buffer.
             .tiling(vk::ImageTiling::LINEAR)
             .usage(vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::TRANSFER_DST)
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
-            .initial_layout(vk::ImageLayout::PREINITIALIZED);
+            // ★ UNDEFINED, NOT PREINITIALIZED — AND THIS WAS A REAL BUG, found
+            // by the validation gate on the day it was added.
+            //
+            // PREINITIALIZED is the reflex for a linear image filled by the
+            // CPU, and it is what this said for as long as M0 has existed. It
+            // is ILLEGAL here: `VUID-VkImageCreateInfo-pNext-01443` requires
+            // `UNDEFINED` whenever the pNext chain carries
+            // `VkExternalMemoryImageCreateInfo` with a non-zero `handleTypes`,
+            // which this one does. Both drivers we have accepted it anyway, so
+            // no test could see it and it would have shipped.
+            //
+            // Correct because the memory is written through a HOST mapping and
+            // read back through one — the image object's layout never governs
+            // those accesses. Proven by the M0 round-trip still recovering its
+            // pixel, which is a stronger check than the layout enum.
+            .initial_layout(vk::ImageLayout::UNDEFINED);
         // SAFETY: `ici` and the struct it chains are locals outliving the call.
         let image = unsafe { self.device.create_image(&ici, None) }
             .map_err(|e| driver("create_image(export)", e))?;
@@ -480,7 +727,10 @@ impl Gpu {
             .tiling(vk::ImageTiling::LINEAR)
             .usage(vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::TRANSFER_DST)
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
-            .initial_layout(vk::ImageLayout::PREINITIALIZED);
+            // ★ Same VUID-VkImageCreateInfo-pNext-01443 as the export side —
+            // this image also chains `VkExternalMemoryImageCreateInfo`. See
+            // the note there.
+            .initial_layout(vk::ImageLayout::UNDEFINED);
         // SAFETY: locals outlive the call.
         let image = unsafe { self.device.create_image(&ici, None) }
             .map_err(|e| driver("create_image(import)", e))?;
@@ -606,7 +856,766 @@ impl Drop for Gpu {
             // are not on in production.
             self.device.destroy_command_pool(self.command_pool, None);
             self.device.destroy_device(None);
+            // Before the instance: the messenger is the instance's child, and
+            // it must also stop being called before the instance goes — a
+            // callback firing during `destroy_instance` would read freed
+            // state.
+            if let Some((loader, messenger)) = self.debug.take() {
+                loader.destroy_debug_utils_messenger(messenger, None);
+            }
             self.instance.destroy_instance(None);
+        }
+    }
+}
+
+/// The one part of [`Params`] that needs the seam: its bytes.
+///
+/// The struct itself is safe and lives at the crate root so its geometry is
+/// tested on every platform — see its header. Only this needs `unsafe`, so
+/// only this is here.
+impl crate::Params {
+    /// The bytes, for `cmd_push_constants`.
+    pub(crate) fn bytes(&self) -> &[u8] {
+        // SAFETY: `Self` is `repr(C)` and entirely `f32`, so every byte is
+        // initialised and there is no padding to expose. The slice borrows
+        // `self` and cannot outlive it.
+        unsafe {
+            std::slice::from_raw_parts(
+                std::ptr::from_ref(self).cast::<u8>(),
+                std::mem::size_of::<Self>(),
+            )
+        }
+    }
+}
+
+/// How a texture is sampled when the source and destination sizes differ.
+///
+/// A closed pair rather than a `bool`, so a call site reads as what it means
+/// and a third policy (were one ever wanted) is a compile error at every
+/// `match` rather than a silently-wrong branch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Filter {
+    /// Nearest-neighbour. The right choice at 1:1, where LINEAR would blur a
+    /// pixel-exact surface by sampling between texels.
+    Nearest,
+    /// Bilinear, for genuine scaling.
+    Linear,
+}
+
+/// Everything needed to draw, created once and reused for every frame.
+///
+/// ── ★ WHY THIS IS BUILT PER FORMAT ───────────────────────────────────────
+/// A graphics pipeline is compiled against its colour attachment's format, so
+/// this takes the format it will render into. A compositor has one output
+/// format at a time, so that is one `Pipelines` rather than a cache — and if a
+/// second format ever appears, it is a second `Pipelines`, not an invalidation
+/// rule.
+///
+/// Borrows the [`Gpu`], so it cannot outlive the device that must destroy it.
+/// The compiler enforces the ordering; no comment has to.
+pub struct Pipelines<'g> {
+    gpu: &'g Gpu,
+    module: vk::ShaderModule,
+    set_layout: vk::DescriptorSetLayout,
+    /// The pipeline layout, public because recording a draw needs it to push
+    /// constants and bind the descriptor set.
+    pub(crate) layout: vk::PipelineLayout,
+    /// Samples a client surface.
+    pub(crate) textured: vk::Pipeline,
+    /// Fills a rectangle with a flat colour.
+    pub(crate) solid: vk::Pipeline,
+    sampler_nearest: vk::Sampler,
+    sampler_linear: vk::Sampler,
+    /// The colour format these were compiled against, so a caller cannot bind
+    /// them to a mismatched attachment without the check being possible.
+    pub format: vk::Format,
+}
+
+impl<'g> Pipelines<'g> {
+    /// Compile the compositor's two pipelines for `format`.
+    ///
+    /// # Errors
+    /// [`KasaneError::Vulkan`] if the driver refuses any object. Every failure
+    /// here is a driver verdict rather than a state — the SPIR-V was validated
+    /// at build time and the layouts are constants.
+    pub fn new(gpu: &'g Gpu, format: vk::Format) -> Result<Self, KasaneError> {
+        let module = gpu.shader_module()?;
+
+        // Built incrementally so that a failure part-way through still
+        // destroys what was already made. Without this, an error between the
+        // sampler and the pipeline leaks a sampler on every retry — and a
+        // compositor retries.
+        let mut built = Self {
+            gpu,
+            module,
+            set_layout: vk::DescriptorSetLayout::null(),
+            layout: vk::PipelineLayout::null(),
+            textured: vk::Pipeline::null(),
+            solid: vk::Pipeline::null(),
+            sampler_nearest: vk::Sampler::null(),
+            sampler_linear: vk::Sampler::null(),
+            format,
+        };
+        match built.finish_building() {
+            Ok(()) => Ok(built),
+            // `built`'s `Drop` runs here and destroys the partial set — the
+            // reason the struct is constructed before it is complete.
+            Err(e) => Err(e),
+        }
+    }
+
+    fn finish_building(&mut self) -> Result<(), KasaneError> {
+        let dev = &self.gpu.device;
+
+        // ★ SEPARATE IMAGE AND SAMPLER, not COMBINED_IMAGE_SAMPLER. This
+        // mirrors what the WGSL declares — `var tex: texture_2d<f32>` at
+        // binding 0 and `var samp: sampler` at binding 1 — and naga lowers
+        // those to two descriptors. Declaring a combined one here compiles and
+        // then fails at descriptor-write time with a type mismatch that reads
+        // as a binding-number problem.
+        let bindings = [
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(0)
+                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(1)
+                .descriptor_type(vk::DescriptorType::SAMPLER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+        ];
+        let set_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+        // SAFETY: `bindings` outlives the call; the device is live.
+        self.set_layout = unsafe { dev.create_descriptor_set_layout(&set_info, None) }
+            .map_err(|e| driver("descriptor set layout", e))?;
+
+        // ★ THE RANGE COVERS BOTH STAGES. The vertex shader reads `dst`/`src`
+        // and the fragment shader reads `tint`, and naga emits ONE push
+        // constant block shared by both. A range naming only FRAGMENT would
+        // leave the vertex stage reading undefined memory — every surface
+        // drawn somewhere arbitrary, with no error.
+        let ranges = [vk::PushConstantRange::default()
+            .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
+            .offset(0)
+            .size(crate::Params::SIZE)];
+        let set_layouts = [self.set_layout];
+        let layout_info = vk::PipelineLayoutCreateInfo::default()
+            .set_layouts(&set_layouts)
+            .push_constant_ranges(&ranges);
+        // SAFETY: both slices outlive the call.
+        self.layout = unsafe { dev.create_pipeline_layout(&layout_info, None) }
+            .map_err(|e| driver("pipeline layout", e))?;
+
+        self.sampler_nearest = self.sampler(vk::Filter::NEAREST)?;
+        self.sampler_linear = self.sampler(vk::Filter::LINEAR)?;
+
+        self.textured = self.pipeline(crate::entry::FRAGMENT_TEXTURE)?;
+        self.solid = self.pipeline(crate::entry::FRAGMENT_SOLID)?;
+        Ok(())
+    }
+
+    fn sampler(&self, filter: vk::Filter) -> Result<vk::Sampler, KasaneError> {
+        // ★ CLAMP_TO_EDGE on both axes. A compositor samples a surface's own
+        // rectangle; REPEAT would wrap the opposite edge into any half-texel
+        // the sampler reaches past the border, drawing a one-pixel line of the
+        // far side of the window along each edge.
+        let info = vk::SamplerCreateInfo::default()
+            .mag_filter(filter)
+            .min_filter(filter)
+            .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
+            .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+            .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+            .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE);
+        // SAFETY: `info` borrows nothing that does not outlive the call.
+        unsafe { self.gpu.device.create_sampler(&info, None) }.map_err(|e| driver("sampler", e))
+    }
+
+    fn pipeline(&self, fragment_entry: &[u8]) -> Result<vk::Pipeline, KasaneError> {
+        let vs_name = std::ffi::CStr::from_bytes_with_nul(crate::entry::VERTEX)
+            .expect("the entry-point constants carry their NUL");
+        let fs_name = std::ffi::CStr::from_bytes_with_nul(fragment_entry)
+            .expect("the entry-point constants carry their NUL");
+        let stages = [
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::VERTEX)
+                .module(self.module)
+                .name(vs_name),
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::FRAGMENT)
+                .module(self.module)
+                .name(fs_name),
+        ];
+
+        // ★ NO VERTEX INPUT AT ALL. The quad comes from `vertex_index`, so
+        // there is no buffer to bind, nothing to upload per frame, and no
+        // vertex-attribute description to keep in step with the shader.
+        let vertex_input = vk::PipelineVertexInputStateCreateInfo::default();
+        let assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
+            .topology(vk::PrimitiveTopology::TRIANGLE_STRIP);
+
+        // Viewport and scissor are DYNAMIC, so one pipeline serves every
+        // output size. Baking them in would mean recompiling both pipelines on
+        // a mode change — a visible stall, to avoid two `cmd_set_*` calls.
+        let viewport_state = vk::PipelineViewportStateCreateInfo::default()
+            .viewport_count(1)
+            .scissor_count(1);
+        let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+        let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
+
+        let raster = vk::PipelineRasterizationStateCreateInfo::default()
+            // ★ NO CULLING. The quad's winding depends on whether `dst` has a
+            // negative extent, which is how a caller expresses a flip. Culling
+            // would make a flipped surface silently vanish.
+            .cull_mode(vk::CullModeFlags::NONE)
+            .polygon_mode(vk::PolygonMode::FILL)
+            .line_width(1.0);
+        let multisample = vk::PipelineMultisampleStateCreateInfo::default()
+            .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+
+        // ★★ PREMULTIPLIED ALPHA — the single most consequential constant here.
+        // wl_shm and zwp_linux_dmabuf_v1 both deliver premultiplied buffers, so
+        // the source factor is ONE. Using SRC_ALPHA (the reflex, and what every
+        // tutorial shows) multiplies alpha a second time and darkens every
+        // translucent edge on the seat — a defect that looks like a theme
+        // problem rather than a blend-state one.
+        let blend_attachment = [vk::PipelineColorBlendAttachmentState::default()
+            .blend_enable(true)
+            .src_color_blend_factor(vk::BlendFactor::ONE)
+            .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+            .color_blend_op(vk::BlendOp::ADD)
+            .src_alpha_blend_factor(vk::BlendFactor::ONE)
+            .dst_alpha_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+            .alpha_blend_op(vk::BlendOp::ADD)
+            .color_write_mask(vk::ColorComponentFlags::RGBA)];
+        let blend = vk::PipelineColorBlendStateCreateInfo::default().attachments(&blend_attachment);
+
+        // Dynamic rendering: the attachment format is declared on the pipeline
+        // instead of through a `VkRenderPass` object.
+        let formats = [self.format];
+        let mut rendering =
+            vk::PipelineRenderingCreateInfo::default().color_attachment_formats(&formats);
+
+        let info = vk::GraphicsPipelineCreateInfo::default()
+            .stages(&stages)
+            .vertex_input_state(&vertex_input)
+            .input_assembly_state(&assembly)
+            .viewport_state(&viewport_state)
+            .rasterization_state(&raster)
+            .multisample_state(&multisample)
+            .color_blend_state(&blend)
+            .dynamic_state(&dynamic)
+            .layout(self.layout)
+            .push_next(&mut rendering);
+
+        // SAFETY: every borrowed structure is a local outliving the call.
+        // `create_graphics_pipelines` returns the partial vector alongside the
+        // error, which is why the error arm destructures a tuple.
+        let pipelines = unsafe {
+            self.gpu
+                .device
+                .create_graphics_pipelines(vk::PipelineCache::null(), &[info], None)
+        }
+        .map_err(|(_, e)| driver("graphics pipeline", e))?;
+
+        pipelines
+            .first()
+            .copied()
+            .ok_or_else(|| KasaneError::Vulkan {
+                call: "create_graphics_pipelines",
+                result: "reported success and returned no pipeline".to_owned(),
+            })
+    }
+
+    /// The sampler for a filter choice.
+    pub(crate) fn sampler_for(&self, filter: Filter) -> vk::Sampler {
+        match filter {
+            Filter::Nearest => self.sampler_nearest,
+            Filter::Linear => self.sampler_linear,
+        }
+    }
+}
+
+impl Drop for Pipelines<'_> {
+    fn drop(&mut self) {
+        let dev = &self.gpu.device;
+        // SAFETY: every handle came from this device, and each is destroyed
+        // once. Null handles are explicitly legal to pass to `destroy_*`,
+        // which is what makes the partially-built case safe.
+        unsafe {
+            dev.destroy_pipeline(self.textured, None);
+            dev.destroy_pipeline(self.solid, None);
+            dev.destroy_sampler(self.sampler_linear, None);
+            dev.destroy_sampler(self.sampler_nearest, None);
+            dev.destroy_pipeline_layout(self.layout, None);
+            dev.destroy_descriptor_set_layout(self.set_layout, None);
+            // Destroyed LAST of the children but before the device: pipelines
+            // reference it at creation time only, so this order is safe and
+            // the reverse would be too — stated because the next reader will
+            // wonder.
+            dev.destroy_shader_module(self.module, None);
+        }
+    }
+}
+
+/// One rectangle to draw, as a closed set.
+///
+/// ★ A CLOSED ENUM rather than a method per shape, so adding a third kind is a
+/// compile error at every `match` instead of a branch someone forgets. It is
+/// also the routing vocabulary's unit: whatever decides GPU-vs-CPU decides it
+/// per `Draw`, and a variant that has no GPU form simply has no arm here.
+#[derive(Clone, Copy, Debug)]
+pub enum Draw {
+    /// A flat premultiplied colour — a bar background, a border, an overlay.
+    Solid(crate::Params),
+}
+
+/// An off-screen render target, plus the path to read it back.
+///
+/// ── ★ OPTIMAL TILING AND A COPY, NOT A LINEAR ATTACHMENT ─────────────────
+/// Rendering straight into a LINEAR host-visible image and mapping it would be
+/// shorter, and it works on lavapipe. It does NOT work on the hardware this
+/// exists for: NVIDIA does not advertise `COLOR_ATTACHMENT` in
+/// `linearTilingFeatures`, so the image creation fails on plo's 3070 and
+/// succeeds in CI — the worst possible split, since the test machine would
+/// prove a path the real machine cannot take.
+pub struct Target<'g> {
+    gpu: &'g Gpu,
+    image: vk::Image,
+    view: vk::ImageView,
+    image_memory: vk::DeviceMemory,
+    readback: vk::Buffer,
+    readback_memory: vk::DeviceMemory,
+    /// Size in pixels.
+    pub extent: vk::Extent2D,
+    /// Colour format — must match the [`Pipelines`] used to draw into it.
+    pub format: vk::Format,
+}
+
+impl<'g> Target<'g> {
+    /// Create a `width` x `height` target in `format`.
+    ///
+    /// # Errors
+    /// [`KasaneError::Vulkan`] for any driver refusal; every one names the
+    /// call that failed, because "could not create target" is not actionable.
+    pub fn new(
+        gpu: &'g Gpu,
+        width: u32,
+        height: u32,
+        format: vk::Format,
+    ) -> Result<Self, KasaneError> {
+        let extent = vk::Extent2D { width, height };
+        let mut t = Self {
+            gpu,
+            image: vk::Image::null(),
+            view: vk::ImageView::null(),
+            image_memory: vk::DeviceMemory::null(),
+            readback: vk::Buffer::null(),
+            readback_memory: vk::DeviceMemory::null(),
+            extent,
+            format,
+        };
+        // Same incremental shape as `Pipelines`: `Drop` cleans up a failure
+        // part-way through, which matters because a compositor retries.
+        t.build(width, height, format)?;
+        Ok(t)
+    }
+
+    fn build(&mut self, width: u32, height: u32, format: vk::Format) -> Result<(), KasaneError> {
+        let dev = &self.gpu.device;
+
+        let image_info = vk::ImageCreateInfo::default()
+            .image_type(vk::ImageType::TYPE_2D)
+            .format(format)
+            .extent(vk::Extent3D {
+                width,
+                height,
+                depth: 1,
+            })
+            .mip_levels(1)
+            .array_layers(1)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            // TRANSFER_SRC is what makes the result readable at all — see the
+            // struct header for why the copy is not optional.
+            .usage(vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_SRC)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .initial_layout(vk::ImageLayout::UNDEFINED);
+        // SAFETY: `image_info` and everything it borrows are locals.
+        self.image = unsafe { dev.create_image(&image_info, None) }
+            .map_err(|e| driver("create_image(target)", e))?;
+
+        // SAFETY: the image was just created on this device.
+        let reqs = unsafe { dev.get_image_memory_requirements(self.image) };
+        let idx = self.gpu.memory_type(
+            reqs.memory_type_bits,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            "DEVICE_LOCAL",
+        )?;
+        let alloc = vk::MemoryAllocateInfo::default()
+            .allocation_size(reqs.size)
+            .memory_type_index(idx);
+        // SAFETY: `alloc` is a local; `idx` came from this device's properties.
+        self.image_memory = unsafe { dev.allocate_memory(&alloc, None) }
+            .map_err(|e| driver("allocate_memory(target)", e))?;
+        // SAFETY: image and memory are both from this device, bound once.
+        unsafe { dev.bind_image_memory(self.image, self.image_memory, 0) }
+            .map_err(|e| driver("bind_image_memory(target)", e))?;
+
+        let view_info = vk::ImageViewCreateInfo::default()
+            .image(self.image)
+            .view_type(vk::ImageViewType::TYPE_2D)
+            .format(format)
+            .subresource_range(
+                vk::ImageSubresourceRange::default()
+                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                    .level_count(1)
+                    .layer_count(1),
+            );
+        // SAFETY: `view_info` is a local naming a live image.
+        self.view = unsafe { dev.create_image_view(&view_info, None) }
+            .map_err(|e| driver("create_image_view(target)", e))?;
+
+        // ★ TIGHTLY PACKED, deliberately. `cmd_copy_image_to_buffer` with
+        // `buffer_row_length: 0` means "rows are `width` texels", so the
+        // readback has no stride of its own to get wrong — unlike the imported
+        // side, where the DRIVER picks the stride and it must be asked for.
+        let size = u64::from(width) * u64::from(height) * 4;
+        let buf_info = vk::BufferCreateInfo::default()
+            .size(size)
+            .usage(vk::BufferUsageFlags::TRANSFER_DST)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+        // SAFETY: `buf_info` is a local.
+        self.readback = unsafe { dev.create_buffer(&buf_info, None) }
+            .map_err(|e| driver("create_buffer(readback)", e))?;
+        // SAFETY: the buffer was just created on this device.
+        let breqs = unsafe { dev.get_buffer_memory_requirements(self.readback) };
+        let bidx = self.gpu.memory_type(
+            breqs.memory_type_bits,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            "HOST_VISIBLE | HOST_COHERENT",
+        )?;
+        let balloc = vk::MemoryAllocateInfo::default()
+            .allocation_size(breqs.size)
+            .memory_type_index(bidx);
+        // SAFETY: `balloc` is a local; `bidx` came from this device.
+        self.readback_memory = unsafe { dev.allocate_memory(&balloc, None) }
+            .map_err(|e| driver("allocate_memory(readback)", e))?;
+        // SAFETY: buffer and memory both from this device, bound once.
+        unsafe { dev.bind_buffer_memory(self.readback, self.readback_memory, 0) }
+            .map_err(|e| driver("bind_buffer_memory", e))?;
+        Ok(())
+    }
+
+    /// Clear to `clear`, run `draws`, copy the result back, and wait for it.
+    ///
+    /// ── ★ ONE SUBMIT, ONE FENCE, SYNCHRONOUS ─────────────────────────────
+    /// A compositor wants a pipelined ring of command buffers and no CPU wait.
+    /// This is not that, and deliberately: the ring is a correctness question
+    /// about frame N-1's resources still being alive, and answering it before
+    /// there is a single proven correct frame would mean debugging both at
+    /// once. The ring is the next stage; the seam it plugs into is here.
+    ///
+    /// # Errors
+    /// [`KasaneError::Vulkan`] naming the failing call.
+    pub fn draw(
+        &self,
+        pipes: &Pipelines<'_>,
+        clear: [f32; 4],
+        draws: &[Draw],
+    ) -> Result<(), KasaneError> {
+        // ★ The pipelines were COMPILED against a format. Drawing with a
+        // mismatched one is undefined behaviour that a driver may or may not
+        // report, so it is refused here where the two are both in scope.
+        if pipes.format != self.format {
+            return Err(KasaneError::Vulkan {
+                call: "Target::draw",
+                result: format!(
+                    "pipelines were compiled for format {:#x} but the target \
+                     is {:#x}; a mismatched attachment format is undefined \
+                     behaviour the driver need not report",
+                    pipes.format.as_raw(),
+                    self.format.as_raw()
+                ),
+            });
+        }
+
+        let dev = &self.gpu.device;
+        let alloc = vk::CommandBufferAllocateInfo::default()
+            .command_pool(self.gpu.command_pool)
+            .level(vk::CommandBufferLevel::PRIMARY)
+            .command_buffer_count(1);
+        // SAFETY: the pool is live and owned by this device.
+        let cmds = unsafe { dev.allocate_command_buffers(&alloc) }
+            .map_err(|e| driver("allocate_command_buffers", e))?;
+        let cmd = cmds[0];
+
+        let result = self.record_and_submit(cmd, pipes, clear, draws);
+        // Freed whether or not recording worked — the pool is reset per frame
+        // in the shipping path, but a test that leaks one buffer per call
+        // exhausts the pool and fails somewhere unrelated.
+        // SAFETY: `cmd` came from this pool and is not in flight (the submit
+        // below waits on its fence before returning).
+        unsafe { dev.free_command_buffers(self.gpu.command_pool, &cmds) };
+        result
+    }
+
+    fn record_and_submit(
+        &self,
+        cmd: vk::CommandBuffer,
+        pipes: &Pipelines<'_>,
+        clear: [f32; 4],
+        draws: &[Draw],
+    ) -> Result<(), KasaneError> {
+        let dev = &self.gpu.device;
+        let begin = vk::CommandBufferBeginInfo::default()
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+        // SAFETY: `cmd` is a fresh primary buffer from this device's pool.
+        unsafe { dev.begin_command_buffer(cmd, &begin) }
+            .map_err(|e| driver("begin_command_buffer", e))?;
+
+        let whole = vk::ImageSubresourceRange::default()
+            .aspect_mask(vk::ImageAspectFlags::COLOR)
+            .level_count(1)
+            .layer_count(1);
+
+        // UNDEFINED → COLOR_ATTACHMENT_OPTIMAL. The old contents are discarded,
+        // which is correct: the render pass clears.
+        self.barrier(
+            cmd,
+            vk::ImageLayout::UNDEFINED,
+            vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+            vk::AccessFlags::empty(),
+            vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+            vk::PipelineStageFlags::TOP_OF_PIPE,
+            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+            whole,
+        );
+
+        let attachment = vk::RenderingAttachmentInfo::default()
+            .image_view(self.view)
+            .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+            .load_op(vk::AttachmentLoadOp::CLEAR)
+            .store_op(vk::AttachmentStoreOp::STORE)
+            .clear_value(vk::ClearValue {
+                color: vk::ClearColorValue { float32: clear },
+            });
+        let attachments = [attachment];
+        let rendering = vk::RenderingInfo::default()
+            .render_area(vk::Rect2D {
+                offset: vk::Offset2D { x: 0, y: 0 },
+                extent: self.extent,
+            })
+            .layer_count(1)
+            .color_attachments(&attachments);
+
+        // SAFETY: every borrowed structure is a local; the view is live and in
+        // the layout just transitioned to.
+        unsafe { self.gpu.dyn_render.cmd_begin_rendering(cmd, &rendering) };
+
+        // Viewport and scissor are dynamic so one pipeline serves any size.
+        let viewport = vk::Viewport {
+            x: 0.0,
+            y: 0.0,
+            width: self.extent.width as f32,
+            height: self.extent.height as f32,
+            min_depth: 0.0,
+            max_depth: 1.0,
+        };
+        let scissor = vk::Rect2D {
+            offset: vk::Offset2D { x: 0, y: 0 },
+            extent: self.extent,
+        };
+        // SAFETY: recording into a live buffer inside a rendering scope.
+        unsafe {
+            dev.cmd_set_viewport(cmd, 0, &[viewport]);
+            dev.cmd_set_scissor(cmd, 0, &[scissor]);
+        }
+
+        for d in draws {
+            match *d {
+                Draw::Solid(params) => {
+                    // SAFETY: the pipeline was compiled for this attachment
+                    // format (checked in `draw`), the push-constant range
+                    // covers both stages, and the quad needs no vertex buffer.
+                    unsafe {
+                        dev.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipes.solid);
+                        dev.cmd_push_constants(
+                            cmd,
+                            pipes.layout,
+                            vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                            0,
+                            params.bytes(),
+                        );
+                        // Four vertices, one instance: the triangle strip the
+                        // vertex shader builds from `vertex_index`.
+                        dev.cmd_draw(cmd, 4, 1, 0, 0);
+                    }
+                }
+            }
+        }
+
+        // SAFETY: inside the scope opened above.
+        unsafe { self.gpu.dyn_render.cmd_end_rendering(cmd) };
+
+        self.barrier(
+            cmd,
+            vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+            vk::AccessFlags::TRANSFER_READ,
+            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+            vk::PipelineStageFlags::TRANSFER,
+            whole,
+        );
+
+        let region = vk::BufferImageCopy::default()
+            // 0 means "tightly packed at the image's width" — see `build`.
+            .buffer_row_length(0)
+            .buffer_image_height(0)
+            .image_subresource(
+                vk::ImageSubresourceLayers::default()
+                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                    .layer_count(1),
+            )
+            .image_extent(vk::Extent3D {
+                width: self.extent.width,
+                height: self.extent.height,
+                depth: 1,
+            });
+        // SAFETY: image is in TRANSFER_SRC_OPTIMAL, buffer is large enough
+        // (allocated as width*height*4 in `build`), region is a local.
+        unsafe {
+            dev.cmd_copy_image_to_buffer(
+                cmd,
+                self.image,
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                self.readback,
+                &[region],
+            );
+        }
+
+        // SAFETY: recording is complete and balanced.
+        unsafe { dev.end_command_buffer(cmd) }.map_err(|e| driver("end_command_buffer", e))?;
+
+        // ★ A FENCE, NOT `device_wait_idle`. Waiting on the whole device would
+        // also wait on any other work in flight, which in a compositor means
+        // one slow client stalls every output.
+        let fence_info = vk::FenceCreateInfo::default();
+        // SAFETY: `fence_info` is a local.
+        let fence = unsafe { dev.create_fence(&fence_info, None) }
+            .map_err(|e| driver("create_fence", e))?;
+        let cmd_bufs = [cmd];
+        let submit = vk::SubmitInfo::default().command_buffers(&cmd_bufs);
+
+        // SAFETY: the queue and fence are from this device; `submit` borrows
+        // `cmd_bufs`, a local that outlives the wait below.
+        let submitted = unsafe { dev.queue_submit(self.gpu.queue, &[submit], fence) };
+        let waited = submitted.and_then(|()| {
+            // SAFETY: the fence was just submitted with.
+            unsafe { dev.wait_for_fences(&[fence], true, u64::MAX) }
+        });
+        // SAFETY: the wait above returned, so the fence is no longer in use.
+        // Destroyed on the error path too — a leaked fence per failed frame is
+        // a slow exhaustion that presents far from its cause.
+        unsafe { dev.destroy_fence(fence, None) };
+        waited.map_err(|e| driver("submit/wait", e))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn barrier(
+        &self,
+        cmd: vk::CommandBuffer,
+        from: vk::ImageLayout,
+        to: vk::ImageLayout,
+        src_access: vk::AccessFlags,
+        dst_access: vk::AccessFlags,
+        src_stage: vk::PipelineStageFlags,
+        dst_stage: vk::PipelineStageFlags,
+        range: vk::ImageSubresourceRange,
+    ) {
+        let b = vk::ImageMemoryBarrier::default()
+            .old_layout(from)
+            .new_layout(to)
+            .src_access_mask(src_access)
+            .dst_access_mask(dst_access)
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .image(self.image)
+            .subresource_range(range);
+        // SAFETY: recording into a live buffer; `b` is a local naming a live
+        // image owned by this target.
+        unsafe {
+            self.gpu.device.cmd_pipeline_barrier(
+                cmd,
+                src_stage,
+                dst_stage,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[b],
+            );
+        }
+    }
+
+    /// The pixel at `(x, y)` from the last [`Target::draw`], as the format's
+    /// own byte order.
+    ///
+    /// # Errors
+    /// [`KasaneError::Vulkan`] if the memory cannot be mapped, or the
+    /// coordinate is outside the target.
+    pub fn read_pixel(&self, x: u32, y: u32) -> Result<[u8; 4], KasaneError> {
+        if x >= self.extent.width || y >= self.extent.height {
+            return Err(KasaneError::Vulkan {
+                call: "Target::read_pixel",
+                result: format!(
+                    "({x}, {y}) is outside a {}x{} target",
+                    self.extent.width, self.extent.height
+                ),
+            });
+        }
+        let size = u64::from(self.extent.width) * u64::from(self.extent.height) * 4;
+        // SAFETY: the memory is HOST_VISIBLE (selected in `build`), the range
+        // is the whole allocation, and it is unmapped before returning.
+        let ptr = unsafe {
+            self.gpu
+                .device
+                .map_memory(self.readback_memory, 0, size, vk::MemoryMapFlags::empty())
+        }
+        .map_err(|e| driver("map_memory(readback)", e))?;
+
+        let offset = (y as usize * self.extent.width as usize + x as usize) * 4;
+        // SAFETY: `offset + 4 <= size` because x and y were bounds-checked
+        // above and the buffer is tightly packed at 4 bytes per texel.
+        let px = unsafe {
+            let base = ptr.cast::<u8>().add(offset);
+            [
+                base.read(),
+                base.add(1).read(),
+                base.add(2).read(),
+                base.add(3).read(),
+            ]
+        };
+        // SAFETY: mapped on the line above, and nothing holds a reference into
+        // it — `px` is a copy.
+        unsafe { self.gpu.device.unmap_memory(self.readback_memory) };
+        Ok(px)
+    }
+}
+
+impl Drop for Target<'_> {
+    fn drop(&mut self) {
+        let dev = &self.gpu.device;
+        // SAFETY: every handle came from this device and is destroyed once.
+        // Null handles are legal to pass, which is what makes a partially
+        // built target safe to drop. Memory is freed AFTER the object bound to
+        // it, which is the ordering Vulkan requires.
+        unsafe {
+            dev.destroy_image_view(self.view, None);
+            dev.destroy_image(self.image, None);
+            dev.free_memory(self.image_memory, None);
+            dev.destroy_buffer(self.readback, None);
+            dev.free_memory(self.readback_memory, None);
         }
     }
 }
@@ -1385,5 +2394,273 @@ mod tests {
         );
         // SAFETY: created by this device on the line above, destroyed once.
         unsafe { gpu.destroy_shader_module(module) };
+    }
+
+    /// ★ THE PIPELINES COMPILE ON A REAL DRIVER — and that is ALL this proves.
+    ///
+    /// ── ★ CORRECTED BY ITS OWN RED RUN ───────────────────────────────────
+    /// The first version of this comment claimed the interface mistakes are
+    /// "refused HERE, at pipeline creation". TWO RED RUNS REFUTED IT, both
+    /// measured on lavapipe:
+    ///
+    ///   A. descriptor type `SAMPLED_IMAGE` → `COMBINED_IMAGE_SAMPLER`
+    ///      (disagreeing with what naga lowered the WGSL to) — **PASSED**
+    ///   B. push-constant range `VERTEX | FRAGMENT` → `FRAGMENT` only
+    ///      (leaving the vertex stage reading nothing) — **PASSED**
+    ///
+    /// Vulkan does not validate a pipeline's layout against its shader's
+    /// interface without the validation layers, so a wrong layout compiles
+    /// and then draws wrong. Both of those would have shipped.
+    ///
+    /// So: this test is worth keeping — it catches a malformed shader, an
+    /// unsupported blend state, a format the driver cannot render to — but it
+    /// is NOT an interface check, and a reader must not take it for one. The
+    /// interface is checked by drawing and looking at the result, which is
+    /// what `a_solid_draw_lands_the_colour_it_was_given` does.
+    #[test]
+    fn the_compositor_pipelines_compile_on_this_driver() {
+        let gpu = match Gpu::open() {
+            Ok(g) => g,
+            Err(e) => {
+                skip_or_panic("pipelines", &e);
+                return;
+            }
+        };
+
+        // B8G8R8A8_UNORM is what ARGB8888 — the format every Wayland client
+        // and every scanout buffer on this fleet uses — is called in Vulkan.
+        let pipes = Pipelines::new(&gpu, vk::Format::B8G8R8A8_UNORM)
+            .expect("the driver refused the compositor pipelines");
+
+        assert_ne!(pipes.textured, vk::Pipeline::null(), "textured pipeline");
+        assert_ne!(pipes.solid, vk::Pipeline::null(), "solid pipeline");
+        assert_ne!(pipes.layout, vk::PipelineLayout::null(), "pipeline layout");
+        assert_ne!(
+            pipes.sampler_for(Filter::Linear),
+            pipes.sampler_for(Filter::Nearest),
+            "the two filters must be two samplers — one sampler reused would \
+             silently blur pixel-exact surfaces or alias scaled ones, \
+             depending on which survived"
+        );
+
+        eprintln!(
+            "kasane S2b: {:?} compiled both pipelines for format {:#x}",
+            gpu.device_name,
+            pipes.format.as_raw()
+        );
+    }
+
+    /// ★ A PARTIAL BUILD DESTROYS WHAT IT MADE.
+    ///
+    /// `Pipelines::new` constructs the struct BEFORE it is complete precisely
+    /// so that `Drop` can clean up a failure part-way through. That is unusual
+    /// enough to be worth pinning: the null handles a partial build leaves
+    /// must be safe to pass to `destroy_*`, which Vulkan guarantees and this
+    /// asserts by actually dropping one.
+    #[test]
+    fn dropping_a_partially_built_pipeline_set_is_safe() {
+        let gpu = match Gpu::open() {
+            Ok(g) => g,
+            Err(e) => {
+                skip_or_panic("partial pipelines", &e);
+                return;
+            }
+        };
+        // A format no driver can use as a colour attachment, so `finish_building`
+        // fails after the layout and samplers exist. If a driver ever accepts
+        // it the test still passes — it is the DROP being exercised, and an
+        // Ok here drops a complete set instead of a partial one.
+        let _ = Pipelines::new(&gpu, vk::Format::UNDEFINED);
+        // Reaching here without a double-free or a leak-report is the result.
+    }
+
+    /// ★★ THE FIRST PIXEL kasane HAS EVER DRAWN — and the gate that catches
+    /// what pipeline creation cannot.
+    ///
+    /// Two red runs proved `the_compositor_pipelines_compile_on_this_driver`
+    /// blind to a wrong descriptor type AND a wrong push-constant range: both
+    /// compiled clean. This is the test that sees them, because a vertex stage
+    /// reading nothing does not put the rectangle where it was asked to, and
+    /// that shows up as the wrong pixel.
+    ///
+    /// Red is drawn over the LEFT HALF of a blue clear, so the test pins
+    /// position as well as colour — a draw that covered everything, or
+    /// nothing, would pass a colour-only assertion.
+    #[test]
+    fn a_solid_draw_lands_the_colour_and_the_place_it_was_given() {
+        let gpu = match Gpu::open() {
+            Ok(g) => g,
+            Err(e) => {
+                skip_or_panic("solid draw", &e);
+                return;
+            }
+        };
+        const W: u32 = 64;
+        const H: u32 = 32;
+        const FMT: vk::Format = vk::Format::B8G8R8A8_UNORM;
+
+        let pipes = Pipelines::new(&gpu, FMT).expect("pipelines");
+        let target = Target::new(&gpu, W, H, FMT).expect("target");
+
+        let red = crate::Params {
+            dst: crate::Params::dst_from_pixels(
+                [0.0, 0.0, f32::from(W as u16) / 2.0, f32::from(H as u16)],
+                (f32::from(W as u16), f32::from(H as u16)),
+            ),
+            src: [0.0, 0.0, 1.0, 1.0],
+            tint: [1.0, 0.0, 0.0, 1.0],
+        };
+        // Clear blue, draw opaque red over the left half.
+        target
+            .draw(&pipes, [0.0, 0.0, 1.0, 1.0], &[Draw::Solid(red)])
+            .expect("draw");
+
+        // ★ B8G8R8A8_UNORM is BLUE FIRST in memory. Writing the expectation
+        // as RGBA here is the classic way to get a test that passes on a
+        // channel swap.
+        let left = target.read_pixel(W / 4, H / 2).expect("read left");
+        let right = target.read_pixel(3 * W / 4, H / 2).expect("read right");
+
+        assert_eq!(
+            left,
+            [0, 0, 255, 255],
+            "the left half must be the RED that was drawn (BGRA); got {left:?}"
+        );
+        assert_eq!(
+            right,
+            [255, 0, 0, 255],
+            "the right half must still be the BLUE clear (BGRA) — a draw that \
+             covered the whole target would pass a colour-only check; got {right:?}"
+        );
+        eprintln!(
+            "kasane S2c: {:?} drew {W}x{H}, left={left:?} right={right:?}",
+            gpu.device_name
+        );
+    }
+
+    /// ★★ THE BLEND EQUATION IS PREMULTIPLIED — the single constant most
+    /// likely to be wrong, and invisible until someone looks at a translucent
+    /// window.
+    ///
+    /// A half-transparent white over OPAQUE RED gives a different answer
+    /// under the two candidate equations, which is what makes this a test
+    /// rather than a restatement of the code. The destination has to be opaque
+    /// in the measured channel or the equations agree and the test is
+    /// vacuous — see the note at the clear below, where that mistake was
+    /// made and caught:
+    ///
+    ///   premultiplied (ONE, ONE_MINUS_SRC_ALPHA):  0.5 + 1.0*0.5 = 1.00 → 255
+    ///   straight      (SRC_ALPHA, ONE_MINUS_SRC):  0.25 + 0.5    = 0.75 → 191
+    ///
+    /// So a red channel of 255 proves the premultiplied path and 191 proves
+    /// the reflex mistake. Every Wayland buffer is premultiplied, so 191 would
+    /// darken every translucent edge on the seat — a defect that reads as a
+    /// theme problem, not a blend-state one.
+    #[test]
+    fn blending_treats_the_source_as_premultiplied() {
+        let gpu = match Gpu::open() {
+            Ok(g) => g,
+            Err(e) => {
+                skip_or_panic("blend", &e);
+                return;
+            }
+        };
+        const N: u32 = 16;
+        const FMT: vk::Format = vk::Format::B8G8R8A8_UNORM;
+        let pipes = Pipelines::new(&gpu, FMT).expect("pipelines");
+        let target = Target::new(&gpu, N, N, FMT).expect("target");
+
+        // Premultiplied 50% white: every channel already scaled by alpha.
+        let half_white = crate::Params {
+            dst: [-1.0, -1.0, 2.0, 2.0],
+            src: [0.0, 0.0, 1.0, 1.0],
+            tint: [0.5, 0.5, 0.5, 0.5],
+        };
+        // ★ CLEARED TO RED, and the choice is the whole test. Over BLUE the
+        // two equations both give 0.5 in the red channel and the test proves
+        // nothing — which is exactly what the first draft did: it cleared blue
+        // while its comment reasoned about red, and the driver's correct
+        // answer (128) read as a failure. The destination must be OPAQUE in
+        // the channel being measured for the two equations to differ.
+        target
+            .draw(&pipes, [1.0, 0.0, 0.0, 1.0], &[Draw::Solid(half_white)])
+            .expect("draw");
+
+        let px = target.read_pixel(N / 2, N / 2).expect("read");
+        // BGRA: index 2 is red — the channel the two equations disagree on.
+        let red = px[2];
+        assert!(
+            red >= 253,
+            "expected the premultiplied result (255) in the red channel; got \
+             {red}. 191 means the blend is SRC_ALPHA * ONE_MINUS_SRC_ALPHA, \
+             which multiplies alpha twice. Full pixel (BGRA): {px:?}"
+        );
+        eprintln!("kasane S2c: blend over red gave BGRA {px:?}");
+    }
+
+    /// ★★ VALIDATION ERRORS FAIL THE BUILD — the gate that closes the class
+    /// two red runs proved nothing else could see.
+    ///
+    /// Measured: a push-constant range naming only FRAGMENT compiles clean,
+    /// draws clean, and produces the right pixel on lavapipe — so
+    /// `the_compositor_pipelines_compile_on_this_driver` AND
+    /// `a_solid_draw_lands_the_colour_and_the_place_it_was_given` both stay
+    /// green. Under validation it is named exactly:
+    /// `VUID-VkGraphicsPipelineCreateInfo-layout-07987`. A driver is not
+    /// obliged to report any of this; the layer is.
+    ///
+    /// ── ★ THE ANTI-VACUITY HALF ──────────────────────────────────────────
+    /// `validation_errors() == 0` is trivially true on a machine where the
+    /// layer was never loaded, so this asserts `validation_active()` FIRST.
+    /// Without that, the gate reports success everywhere while checking
+    /// nothing — which is the exact failure shape it exists to catch.
+    #[test]
+    fn a_full_frame_provokes_no_validation_error() {
+        if std::env::var_os("KASANE_VALIDATION").is_none() {
+            eprintln!(
+                "kasane: skipping the validation gate — set KASANE_VALIDATION=1 \
+                 and VK_LAYER_PATH to run it"
+            );
+            return;
+        }
+        let gpu = match Gpu::open() {
+            Ok(g) => g,
+            Err(e) => {
+                skip_or_panic("validation", &e);
+                return;
+            }
+        };
+        assert!(
+            validation_active(),
+            "KASANE_VALIDATION=1 was set but no messenger is installed, so a \
+             zero error count would prove nothing. Point VK_LAYER_PATH at the \
+             validation layer's explicit_layer.d."
+        );
+
+        const N: u32 = 32;
+        const FMT: vk::Format = vk::Format::B8G8R8A8_UNORM;
+        let pipes = Pipelines::new(&gpu, FMT).expect("pipelines");
+        let target = Target::new(&gpu, N, N, FMT).expect("target");
+        let p = crate::Params {
+            dst: crate::Params::dst_from_pixels([4.0, 4.0, 16.0, 16.0], (32.0, 32.0)),
+            src: [0.0, 0.0, 1.0, 1.0],
+            tint: [0.0, 1.0, 0.0, 1.0],
+        };
+        target
+            .draw(&pipes, [0.0, 0.0, 0.0, 1.0], &[Draw::Solid(p)])
+            .expect("draw");
+        let _ = target.read_pixel(8, 8).expect("read");
+        drop(target);
+        drop(pipes);
+
+        // The count is process-global, so this fails if ANY test in this run
+        // provoked an error. That is deliberate: a race can only turn a
+        // passing test red, never let a real error through.
+        assert_eq!(
+            validation_errors(),
+            0,
+            "the Vulkan validation layer reported errors — see the \
+             `kasane VALIDATION ERROR:` lines above for the VUIDs"
+        );
     }
 }
