@@ -420,76 +420,6 @@ impl crate::state::Omoya {
         // counts the bar and four focus-ring edges among "windows". Sharing the
         // walk is what makes the row's app_id and rect refer to the same thing
         // -- the property the three legacy lists never had.
-        {
-            use smithay::reexports::wayland_server::Resource as _;
-            let focused = self
-                .introspect
-                .focus_rect
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            let sent = self
-                .introspect
-                .decoration_sent
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            // Resolved once: the id of whatever currently holds focus.
-            let focused_id = self
-                .space
-                .elements()
-                .find(|w| {
-                    self.space
-                        .element_geometry(w)
-                        .map(|g| (g.loc.x, g.loc.y, g.size.w, g.size.h))
-                        == *focused
-                })
-                .and_then(crate::layout::surface_id_of);
-            let rows: Vec<crate::introspect::ToplevelRow> = seen
-                .iter()
-                .enumerate()
-                .map(|(i, (w, app))| {
-                    let rect = self
-                        .space
-                        .element_geometry(w)
-                        .map(|g| (g.loc.x, g.loc.y, g.size.w, g.size.h));
-                    let key = w.toplevel().map(|t| format!("{:?}", t.wl_surface().id()));
-                    // ★ FOCUS BY IDENTITY, NOT BY RECTANGLE.
-                    //
-                    // This compared the window's rect against the focused
-                    // rect, so two windows sharing a rect BOTH reported
-                    // `focused: true` — observed live, and easy to reach
-                    // because every floating window gets the same
-                    // float_width/float_height. A window id answers the
-                    // question that was being asked.
-                    let is_focused = crate::layout::surface_id_of(w)
-                        .zip(focused_id)
-                        .is_some_and(|(a, b)| a == b);
-                    crate::introspect::ToplevelRow {
-                        id: i as u64,
-                        app_id: app.clone(),
-                        decoration_mode_sent: key.and_then(|k| sent.get(&k).cloned()),
-                        rect,
-                        // ★ NAMED FOR WHAT IT COUNTS. This is the four
-                        // focus-RING edges, drawn only for the focused window.
-                        // It was called `decoration_elements_drawn`, which
-                        // reads as "all chrome" — so `chrome_verdict` reported
-                        // "none drawn" for every unfocused window whose
-                        // titlebar was demonstrably on screen, and pointed the
-                        // investigation at the renderer, which was correct.
-                        // The titlebar is counted separately below.
-                        decoration_elements_drawn: u32::from(is_focused) * 4,
-                        focused: is_focused,
-                        tiled: false,
-                    }
-                })
-                .collect();
-            drop(sent);
-            drop(focused);
-            *self
-                .introspect
-                .toplevels
-                .lock()
-                .unwrap_or_else(|e| e.into_inner()) = rows;
-        }
         // ★ THE MODE DECIDES FIRST, THE PER-APP LIST SECOND.
         //
         // In `Floating` every window floats and `floating_app_ids` becomes
@@ -762,6 +692,85 @@ impl crate::state::Omoya {
             // launcher you have to click before you can type into, which
             // defeats summoning it from the keyboard.
             self.space.map_element(w.clone(), rect.loc, true);
+        }
+
+        // ── ★ PUBLISHED AFTER THE PASS, NOT BEFORE IT (2026-09-03) ────
+        //
+        // This block used to sit at the TOP of `apply_layout`, before the
+        // loops below apply any placement — so every rect it reported was
+        // one full pass old. Measured immediately after a maximize deed:
+        // `toplevels` still said [518,304,883,523] while `geometry` in the
+        // same snapshot correctly said 0,28. It is the field a placement
+        // bug is diagnosed from, and it was contradicting its neighbour.
+        {
+            use smithay::reexports::wayland_server::Resource as _;
+            let focused = self
+                .introspect
+                .focus_rect
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let sent = self
+                .introspect
+                .decoration_sent
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            // Resolved once: the id of whatever currently holds focus.
+            let focused_id = self
+                .space
+                .elements()
+                .find(|w| {
+                    self.space
+                        .element_geometry(w)
+                        .map(|g| (g.loc.x, g.loc.y, g.size.w, g.size.h))
+                        == *focused
+                })
+                .and_then(crate::layout::surface_id_of);
+            let rows: Vec<crate::introspect::ToplevelRow> = seen
+                .iter()
+                .enumerate()
+                .map(|(i, (w, app))| {
+                    let rect = self
+                        .space
+                        .element_geometry(w)
+                        .map(|g| (g.loc.x, g.loc.y, g.size.w, g.size.h));
+                    let key = w.toplevel().map(|t| format!("{:?}", t.wl_surface().id()));
+                    // ★ FOCUS BY IDENTITY, NOT BY RECTANGLE.
+                    //
+                    // This compared the window's rect against the focused
+                    // rect, so two windows sharing a rect BOTH reported
+                    // `focused: true` — observed live, and easy to reach
+                    // because every floating window gets the same
+                    // float_width/float_height. A window id answers the
+                    // question that was being asked.
+                    let is_focused = crate::layout::surface_id_of(w)
+                        .zip(focused_id)
+                        .is_some_and(|(a, b)| a == b);
+                    crate::introspect::ToplevelRow {
+                        id: i as u64,
+                        app_id: app.clone(),
+                        decoration_mode_sent: key.and_then(|k| sent.get(&k).cloned()),
+                        rect,
+                        // ★ NAMED FOR WHAT IT COUNTS. This is the four
+                        // focus-RING edges, drawn only for the focused window.
+                        // It was called `decoration_elements_drawn`, which
+                        // reads as "all chrome" — so `chrome_verdict` reported
+                        // "none drawn" for every unfocused window whose
+                        // titlebar was demonstrably on screen, and pointed the
+                        // investigation at the renderer, which was correct.
+                        // The titlebar is counted separately below.
+                        decoration_elements_drawn: u32::from(is_focused) * 4,
+                        focused: is_focused,
+                        tiled: false,
+                    }
+                })
+                .collect();
+            drop(sent);
+            drop(focused);
+            *self
+                .introspect
+                .toplevels
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = rows;
         }
 
         // Where focus is, for the border the render loop draws and for anyone

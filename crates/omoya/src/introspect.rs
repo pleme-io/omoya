@@ -584,6 +584,15 @@ pub struct OmoyaIntrospect {
     /// caller can see WHY the region starts where it does. A boolean would hide
     /// the derivation, and the derivation is the part worth checking.
     pub bar_height: std::sync::atomic::AtomicU64,
+    /// The pointer's UNCLAMPED logical position, as `"x,y"`.
+    ///
+    /// ★ Today the pointer is recoverable only by string-splitting element 0
+    /// of `geometry` — and THAT value is clamped to the output before it is
+    /// drawn, so near an edge it is silently wrong by up to the cursor's own
+    /// size. A diagnostic that disagrees with reality by a bounded-but-unstated
+    /// amount is worse than none, because nothing marks where it stops being
+    /// true. This is the seat's actual `pointer_location`.
+    pub pointer_pos: std::sync::Mutex<Option<String>>,
     /// Present intervals in microseconds, bucketed.
     ///
     /// ── ★ WHY A DISTRIBUTION AND NOT A COUNTER ──────────────────────────
@@ -1049,6 +1058,9 @@ impl Introspect for OmoyaIntrospect {
                 }))
             }
             "bar_height" => Ok(n(&self.bar_height)),
+            "pointer_pos" => Ok(serde_json::json!(
+                *self.pointer_pos.lock().unwrap_or_else(|e| e.into_inner())
+            )),
             "present_intervals" => {
                 // Bucket edges in microseconds. 2778us is one frame at 360Hz,
                 // so the first bucket is "kept up" and the last is "a human
@@ -1455,6 +1467,7 @@ impl Introspect for OmoyaIntrospect {
             "toplevels",
             "layout_mode",
             "bar_height",
+            "pointer_pos",
             "present_intervals",
             "atomic",
             // ★ THESE WERE ANSWERED AND UNLISTED. `schema()` is how an agent

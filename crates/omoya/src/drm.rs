@@ -1036,6 +1036,20 @@ where
 
             let mut elements: Vec<SeatElements<R, _>> =
                 Vec::with_capacity(space_elements.len() + 6);
+            // ★ PUBLISHED FROM THE UNCLAMPED VALUE, before the cursor's own
+            // position is clipped to the output below. A leaf that nobody
+            // writes reports null forever — the shape `route_label` was in —
+            // so it is written here, next to the only reader of the truth.
+            {
+                let p = data.state.pointer_location;
+                #[allow(clippy::cast_possible_truncation)]
+                let text = format!("{},{}", p.x as i32, p.y as i32);
+                *introspect
+                    .pointer_pos
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = Some(text);
+            }
+
             // ★ A CLIENT MAY ASK FOR NO POINTER AT ALL, and until now that
             // request was discarded by an empty `cursor_image` stub. A
             // terminal hides the pointer while you type; drawing the arrow
