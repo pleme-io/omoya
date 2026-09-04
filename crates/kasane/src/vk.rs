@@ -112,38 +112,56 @@ pub fn validation_exempt() -> usize {
     VALIDATION_EXEMPT.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-/// The one validation error this crate has measured to be wrong about us.
+/// Validation errors this crate has MEASURED to be wrong about it.
 ///
-/// ── ★ AN EXEMPTION IS THE DANGEROUS DIRECTION, so this one carries its
-/// receipt and is matched on the VUID ALONE — never on a substring of the
-/// message prose, which would silence a whole family of unrelated errors.
+/// ── ★ AN EXEMPTION IS THE DANGEROUS DIRECTION ────────────────────────────
+/// Silencing a gate is how a gate stops being a gate, so each entry carries
+/// its own reason, is matched on the **VUID alone** (never on message prose,
+/// which would silence an entire family), and is COUNTED and printed on every
+/// run. An exemption nobody sees is an exemption nobody re-examines.
 ///
-/// **`VUID-VkImageViewCreateInfo-None-02273`** — "the format features of the
-/// resultant image view must contain at least one bit". Fires when a view is
-/// created on a `DRM_FORMAT_MODIFIER_EXT`-tiled image.
+/// ── ★ BOTH ENTRIES ARE ONE ROOT, NOT TWO ─────────────────────────────────
+/// The validation layer cannot work out the format features of an image
+/// tiled with `DRM_FORMAT_MODIFIER_EXT` on lavapipe, so it concludes there are
+/// none — and then complains at every call site that needs one. Two VUIDs,
+/// one cause; listing them separately would suggest two independent problems.
 ///
-/// Measured on lavapipe 2026-09-03, and the measurement refutes the layer:
+/// **The measurement that refutes the layer**, taken 2026-09-03:
 ///
 ///   * `vkGetImageDrmFormatModifierPropertiesEXT` on the actual image reports
 ///     modifier **`0x0`** — exactly the one requested, so the explicit create
-///     info was honoured and it is not a case of the driver substituting one.
+///     info was honoured and the driver did not substitute another.
 ///   * `vkGetPhysicalDeviceFormatProperties2` reports modifier `0x0` with
-///     features **`0xdd83`** — that is `SAMPLED_IMAGE`, `STORAGE_IMAGE`,
+///     features **`0xdd83`** — `SAMPLED_IMAGE`, `STORAGE_IMAGE`,
 ///     `COLOR_ATTACHMENT`, `COLOR_ATTACHMENT_BLEND`, `BLIT_SRC`, `BLIT_DST`,
 ///     `SAMPLED_IMAGE_FILTER_LINEAR`, `TRANSFER_SRC` and `TRANSFER_DST`. Very
-///     far from "no supported format features".
-///   * The frame renders correctly and an INDEPENDENT import of the same
-///     dmabuf reads back the drawn pixel.
+///     far from "no supported format features", and it includes both of the
+///     bits the two VUIDs below say are missing.
+///   * The frame renders correctly, an INDEPENDENT import of the same dmabuf
+///     reads back the drawn pixel, and the capture path returns those pixels.
 ///
-/// So the image is right, its modifier is right, and its features are right;
-/// the layer is reading something else. Both alternatives were checked before
-/// exempting — this is not a shrug.
+/// So the image is right, its modifier is right, and its features are right.
 ///
-/// ★ **RE-MEASURE ON REAL HARDWARE.** This is justified on lavapipe. If the
-/// same VUID fires on plo's RTX 3070, that is a DIFFERENT observation and must
-/// be diagnosed rather than inheriting this exemption.
-/// `pending-kasane: re-measure VUID-02273 on the 3070`
-const EXEMPT_VUIDS: &[&str] = &["VUID-VkImageViewCreateInfo-None-02273"];
+/// ★ **THIS COST A REAL BUG ONCE.** Reading the two VUIDs as two causes led to
+/// dropping `TRANSFER_SRC` from `ImportUse::RenderTarget`, which silenced one
+/// message and broke `Target::capture` — the screenshot path `drm.rs` requires.
+/// The bit was always supported; only the layer's lookup was not.
+///
+/// ★ **RE-MEASURE ON REAL HARDWARE.** Justified on lavapipe. The same VUIDs on
+/// plo's RTX 3070 are a DIFFERENT observation and must be diagnosed, not
+/// inherited. `pending-kasane: re-measure the modifier VUIDs on the 3070`
+const EXEMPT_VUIDS: &[(&str, &str)] = &[
+    (
+        "VUID-VkImageViewCreateInfo-None-02273",
+        "a view over a modifier-tiled image; the driver reports the modifier \
+         with full features",
+    ),
+    (
+        "VUID-vkCmdCopyImageToBuffer-srcImage-01998",
+        "the capture copy from a modifier-tiled image; the driver reports \
+         TRANSFER_SRC on that modifier",
+    ),
+];
 
 /// The layer's callback. Records errors and prints everything it is given.
 ///
@@ -173,7 +191,7 @@ unsafe extern "system" fn debug_callback(
     if severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::ERROR) {
         // Matched on the VUID identifier alone. Matching prose would make one
         // exemption silence every error that happens to share a phrase.
-        if EXEMPT_VUIDS.iter().any(|v| message.contains(v)) {
+        if EXEMPT_VUIDS.iter().any(|(vuid, _)| message.contains(vuid)) {
             VALIDATION_EXEMPT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             eprintln!("kasane validation (KNOWN, exempt): {message}");
             return vk::FALSE;
@@ -896,6 +914,218 @@ impl Gpu {
 }
 
 impl Gpu {
+    /// Record one command buffer, submit it, and wait for it.
+    ///
+    /// ── ★ ONE SUBMIT SHAPE FOR THE WHOLE CRATE ───────────────────────────
+    /// Allocating a buffer, beginning it, ending it, making a fence, waiting
+    /// on it and freeing everything — on every path, including the error
+    /// paths — is six chances to leak a fence or a command buffer, repeated
+    /// per caller. It appears three times already (a frame, an upload, a
+    /// capture), so it is one function.
+    ///
+    /// ★ A FENCE, NOT `device_wait_idle`. Waiting on the whole device would
+    /// also wait on any other work in flight, which in a compositor means one
+    /// slow client stalls every output.
+    ///
+    /// # Errors
+    /// [`KasaneError::Vulkan`] naming the failing call, or whatever `record`
+    /// returns — in which case nothing is submitted and the buffer is still
+    /// freed.
+    pub(crate) fn submit_once<F>(&self, record: F) -> Result<(), KasaneError>
+    where
+        F: FnOnce(vk::CommandBuffer) -> Result<(), KasaneError>,
+    {
+        let alloc = vk::CommandBufferAllocateInfo::default()
+            .command_pool(self.command_pool)
+            .level(vk::CommandBufferLevel::PRIMARY)
+            .command_buffer_count(1);
+        // SAFETY: the pool is live and owned by this device.
+        let cmds = unsafe { self.device.allocate_command_buffers(&alloc) }
+            .map_err(|e| driver("allocate_command_buffers", e))?;
+        let cmd = cmds[0];
+
+        let result = self.record_submit_wait(cmd, record);
+
+        // Freed on every path. A test that leaks one buffer per call exhausts
+        // the pool and then fails somewhere unrelated.
+        // SAFETY: `cmd` came from this pool, and the wait inside has returned
+        // so it is not in flight.
+        unsafe { self.device.free_command_buffers(self.command_pool, &cmds) };
+        result
+    }
+
+    fn record_submit_wait<F>(&self, cmd: vk::CommandBuffer, record: F) -> Result<(), KasaneError>
+    where
+        F: FnOnce(vk::CommandBuffer) -> Result<(), KasaneError>,
+    {
+        let begin = vk::CommandBufferBeginInfo::default()
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+        // SAFETY: `cmd` is a fresh primary buffer from this device's pool.
+        unsafe { self.device.begin_command_buffer(cmd, &begin) }
+            .map_err(|e| driver("begin_command_buffer", e))?;
+
+        record(cmd)?;
+
+        // SAFETY: recording is complete and balanced.
+        unsafe { self.device.end_command_buffer(cmd) }
+            .map_err(|e| driver("end_command_buffer", e))?;
+
+        let fence_info = vk::FenceCreateInfo::default();
+        // SAFETY: `fence_info` is a local.
+        let fence = unsafe { self.device.create_fence(&fence_info, None) }
+            .map_err(|e| driver("create_fence", e))?;
+        let bufs = [cmd];
+        let submit = vk::SubmitInfo::default().command_buffers(&bufs);
+        // SAFETY: queue and fence are from this device; `submit` borrows
+        // `bufs`, a local that outlives the wait below.
+        let submitted = unsafe { self.device.queue_submit(self.queue, &[submit], fence) };
+        let waited = submitted.and_then(|()| {
+            // SAFETY: the fence was just submitted with.
+            unsafe { self.device.wait_for_fences(&[fence], true, u64::MAX) }
+        });
+        // SAFETY: the wait returned, so the fence is no longer in use.
+        // Destroyed on the error path too — a leaked fence per failed frame is
+        // a slow exhaustion that presents far from its cause.
+        unsafe { self.device.destroy_fence(fence, None) };
+        waited.map_err(|e| driver("submit/wait", e))
+    }
+
+    /// Upload host bytes into a new device-local sampled texture.
+    ///
+    /// `data` is tightly-packed BGRA — `width * 4` bytes per row.
+    ///
+    /// ★ For `wl_shm` clients, which hand over shared memory rather than a
+    /// dmabuf. See [`Uploaded`] for why the copy here is not the copy this
+    /// crate exists to remove.
+    ///
+    /// # Errors
+    /// [`KasaneError::Vulkan`] naming the failing call, or
+    /// [`KasaneError::NoMemoryType`] if the device offers no suitable memory.
+    pub fn upload_texture(
+        self: &std::sync::Arc<Self>,
+        width: u32,
+        height: u32,
+        data: &[u8],
+    ) -> Result<Uploaded, KasaneError> {
+        let dev = &self.device;
+        let image_info = vk::ImageCreateInfo::default()
+            .image_type(vk::ImageType::TYPE_2D)
+            .format(FORMAT)
+            .extent(vk::Extent3D {
+                width,
+                height,
+                depth: 1,
+            })
+            .mip_levels(1)
+            .array_layers(1)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            // OPTIMAL because nothing external reads this — unlike an imported
+            // dmabuf, whose layout is dictated by the exporter.
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .usage(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .initial_layout(vk::ImageLayout::UNDEFINED);
+        // SAFETY: `image_info` and everything it borrows are locals.
+        let image = unsafe { dev.create_image(&image_info, None) }
+            .map_err(|e| driver("create_image(upload)", e))?;
+
+        // Built inside a closure so one error path cleans up everything made
+        // so far, rather than five nested matches.
+        let build = || -> Result<(vk::DeviceMemory, vk::ImageView, vk::Buffer, vk::DeviceMemory), KasaneError>
+        {
+            // SAFETY: the image was just created on this device.
+            let reqs = unsafe { dev.get_image_memory_requirements(image) };
+            let idx = self.memory_type(
+                reqs.memory_type_bits,
+                vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                "DEVICE_LOCAL",
+            )?;
+            let alloc = vk::MemoryAllocateInfo::default()
+                .allocation_size(reqs.size)
+                .memory_type_index(idx);
+            // SAFETY: `alloc` is a local; `idx` came from this device.
+            let memory = unsafe { dev.allocate_memory(&alloc, None) }
+                .map_err(|e| driver("allocate_memory(upload)", e))?;
+            // SAFETY: image and memory both from this device, bound once.
+            unsafe { dev.bind_image_memory(image, memory, 0) }
+                .map_err(|e| driver("bind_image_memory(upload)", e))?;
+
+            let view_info = vk::ImageViewCreateInfo::default()
+                .image(image)
+                .view_type(vk::ImageViewType::TYPE_2D)
+                .format(FORMAT)
+                .subresource_range(
+                    vk::ImageSubresourceRange::default()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .level_count(1)
+                        .layer_count(1),
+                );
+            // SAFETY: names an image with memory bound above.
+            let view = unsafe { dev.create_image_view(&view_info, None) }
+                .map_err(|e| driver("create_image_view(upload)", e))?;
+
+            // Sized for the WHOLE texture even though an update may be a small
+            // region: a client that damages a different rectangle each frame
+            // would otherwise reallocate constantly.
+            let size = u64::from(width) * u64::from(height) * 4;
+            let buf_info = vk::BufferCreateInfo::default()
+                .size(size)
+                .usage(vk::BufferUsageFlags::TRANSFER_SRC)
+                .sharing_mode(vk::SharingMode::EXCLUSIVE);
+            // SAFETY: `buf_info` is a local.
+            let staging = unsafe { dev.create_buffer(&buf_info, None) }
+                .map_err(|e| driver("create_buffer(staging)", e))?;
+            // SAFETY: the buffer was just created on this device.
+            let breqs = unsafe { dev.get_buffer_memory_requirements(staging) };
+            let bidx = self.memory_type(
+                breqs.memory_type_bits,
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+                "HOST_VISIBLE | HOST_COHERENT",
+            )?;
+            let balloc = vk::MemoryAllocateInfo::default()
+                .allocation_size(breqs.size)
+                .memory_type_index(bidx);
+            // SAFETY: `balloc` is a local; `bidx` came from this device.
+            let staging_memory = unsafe { dev.allocate_memory(&balloc, None) }
+                .map_err(|e| driver("allocate_memory(staging)", e))?;
+            // SAFETY: buffer and memory both from this device, bound once.
+            unsafe { dev.bind_buffer_memory(staging, staging_memory, 0) }
+                .map_err(|e| driver("bind_buffer_memory(staging)", e))?;
+            Ok((memory, view, staging, staging_memory))
+        };
+
+        match build() {
+            Ok((memory, view, staging, staging_memory)) => {
+                let up = Uploaded {
+                    gpu: std::sync::Arc::clone(self),
+                    image,
+                    view,
+                    memory,
+                    staging,
+                    staging_memory,
+                    geometry: Geometry {
+                        width,
+                        height,
+                        // Tightly packed: this image is ours, so nobody else's
+                        // stride applies.
+                        stride: u64::from(width) * 4,
+                        offset: 0,
+                    },
+                };
+                // The first write puts the pixels in AND leaves the image in
+                // SHADER_READ_ONLY_OPTIMAL, so a freshly uploaded texture is
+                // immediately drawable.
+                up.write(0, 0, width, height, data)?;
+                Ok(up)
+            }
+            Err(e) => {
+                // SAFETY: live image; nothing else references it.
+                unsafe { dev.destroy_image(image, None) };
+                Err(e)
+            }
+        }
+    }
+
     /// Create the compositor's shader module on this device.
     ///
     /// One module holds all three entry points, so a pipeline names the stage
@@ -1050,7 +1280,22 @@ impl ImportUse {
     fn usage(self) -> vk::ImageUsageFlags {
         match self {
             Self::Surface => vk::ImageUsageFlags::SAMPLED,
-            Self::RenderTarget => vk::ImageUsageFlags::COLOR_ATTACHMENT,
+            // ★ TRANSFER_SRC IS NOT OPTIONAL ON A SCANOUT TARGET. `drm.rs`'s
+            // renderer bound demands `ExportMem` — a seat whose output cannot
+            // be read back can only be debugged by walking to the machine —
+            // and `Target::capture` is a `vkCmdCopyImageToBuffer`, which
+            // requires it.
+            //
+            // ★ IT WAS REMOVED ONCE, ON A MISDIAGNOSIS. The layer reported
+            // both a missing TRANSFER_SRC and a view with no format features,
+            // and dropping the bit silenced the first. The raw modifier
+            // features say otherwise: lavapipe reports modifier 0 as `0xdd83`,
+            // which INCLUDES TRANSFER_SRC. The view complaint was a separate,
+            // measured layer disagreement — see `EXEMPT_VUIDS` — and treating
+            // the two as one cause broke capture.
+            Self::RenderTarget => {
+                vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_SRC
+            }
         }
     }
 
@@ -1064,7 +1309,12 @@ impl ImportUse {
     fn required_feature(self) -> vk::FormatFeatureFlags {
         match self {
             Self::Surface => vk::FormatFeatureFlags::SAMPLED_IMAGE,
-            Self::RenderTarget => vk::FormatFeatureFlags::COLOR_ATTACHMENT,
+            // The mirror of `usage`: a modifier offered as a render target
+            // must support BOTH, or `Target::capture` fails on a buffer the
+            // filter said was fine.
+            Self::RenderTarget => {
+                vk::FormatFeatureFlags::COLOR_ATTACHMENT | vk::FormatFeatureFlags::TRANSFER_SRC
+            }
         }
     }
 }
@@ -1402,10 +1652,42 @@ impl Drop for Pipelines {
 /// does not name its image. Passing only the view compiles and then samples an
 /// image in the wrong layout — undefined, and on a real driver it reads as
 /// garbage rather than an error.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 pub struct TextureRef {
     pub(crate) image: vk::Image,
     pub(crate) view: vk::ImageView,
+    /// The layout this image is ALREADY in.
+    ///
+    /// ── ★★ THIS FIELD IS A BUG FIX, AND THE BUG WAS SILENT ───────────────
+    /// The recorder used to transition every texture from `UNDEFINED`, which
+    /// is convenient because it needs no tracking — and `UNDEFINED` is defined
+    /// to DISCARD THE CONTENTS. For an imported dmabuf that is harmless: the
+    /// pixels live in memory another process wrote and this image is only a
+    /// view onto it.
+    ///
+    /// For an UPLOADED texture it throws away the pixels that were just
+    /// uploaded, immediately before sampling them. Measured: a partial update
+    /// of a `wl_shm` texture read back as the ORIGINAL contents, because the
+    /// draw discarded the update. lavapipe kept enough state that the first,
+    /// simpler upload test still passed — which is exactly why this needed a
+    /// second test with two different values in one texture to surface.
+    ///
+    /// Carrying the real layout means the barrier transitions FROM the truth,
+    /// and can be skipped entirely when the texture is already where it needs
+    /// to be.
+    pub(crate) layout: vk::ImageLayout,
+}
+
+impl std::fmt::Debug for TextureRef {
+    // ★ HAND-WRITTEN because `#[derive(Debug)]` cannot cover a struct holding
+    // an ash type: this crate builds ash with `default-features = false`, so
+    // `ImageLayout` has no `Debug`. Fourth time this rule has cost a build —
+    // see the note at the top of this file. Layouts are printed raw.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TextureRef")
+            .field("layout", &self.layout.as_raw())
+            .finish_non_exhaustive()
+    }
 }
 
 /// One rectangle to draw, as a closed set.
@@ -1845,19 +2127,24 @@ impl Target {
             .level_count(1)
             .layer_count(1);
 
-        // ★ EVERY SAMPLED IMAGE MOVES TO SHADER_READ_ONLY_OPTIMAL FIRST, and
+        // ★ EVERY SAMPLED IMAGE REACHES SHADER_READ_ONLY_OPTIMAL FIRST, and
         // this must happen OUTSIDE the rendering scope — layout transitions
         // are illegal between `cmd_begin_rendering` and `cmd_end_rendering`.
         //
-        // The source layout is UNDEFINED, which discards the image's previous
-        // CONTENTS in general — but not here: an imported dmabuf's pixels live
-        // in memory the exporter wrote and this image is only a view onto it.
-        // Naming the real previous layout is impossible anyway, because the
-        // buffer came from another process that never told us.
+        // ★ FROM THE LAYOUT THE TEXTURE SAYS IT IS IN, not from `UNDEFINED`.
+        // See `TextureRef::layout`: transitioning an uploaded texture from
+        // UNDEFINED discards the pixels that were just uploaded, and lavapipe
+        // hid it well enough that a single-colour upload test still passed.
         for d in draws {
             if let Draw::Texture { texture, .. } = *d {
+                // Already where it needs to be — an uploaded texture, which
+                // `write` leaves in SHADER_READ_ONLY_OPTIMAL. Issuing a
+                // barrier from UNDEFINED here would DISCARD its pixels.
+                if texture.layout == vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL {
+                    continue;
+                }
                 let b = vk::ImageMemoryBarrier::default()
-                    .old_layout(vk::ImageLayout::UNDEFINED)
+                    .old_layout(texture.layout)
                     .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                     .src_access_mask(vk::AccessFlags::empty())
                     .dst_access_mask(vk::AccessFlags::SHADER_READ)
@@ -2181,6 +2468,140 @@ impl Target {
         }
     }
 
+    /// Copy a rectangle of this target into host memory, on demand.
+    ///
+    /// ── ★ WHY THIS EXISTS SEPARATELY FROM THE READBACK BUFFER ────────────
+    /// An OWNED target keeps a readback buffer filled by every `draw`, because
+    /// it is off-screen and that is the only way to observe it. An IMPORTED
+    /// target has none — copying a scanout buffer every frame is exactly the
+    /// cost this crate removes. But a screenshot still has to work, so this
+    /// pays for the copy EXPLICITLY, once, when somebody asks.
+    ///
+    /// Works on either backing, so a caller does not need to know which it
+    /// has.
+    ///
+    /// # Errors
+    /// [`KasaneError::OutOfBounds`] if the region leaves the target, or
+    /// [`KasaneError::Vulkan`] naming a failing call.
+    pub fn capture(&self, x: u32, y: u32, w: u32, h: u32) -> Result<Vec<u8>, KasaneError> {
+        if x + w > self.extent.width || y + h > self.extent.height {
+            return Err(KasaneError::OutOfBounds {
+                x: x + w,
+                y: y + h,
+                width: self.extent.width,
+                height: self.extent.height,
+            });
+        }
+        let size = u64::from(w) * u64::from(h) * 4;
+        let (buffer, memory) = Self::readback_buffer(
+            &self.gpu,
+            vk::Extent2D {
+                width: w,
+                height: h,
+            },
+        )?;
+
+        let range = vk::ImageSubresourceRange::default()
+            .aspect_mask(vk::ImageAspectFlags::COLOR)
+            .level_count(1)
+            .layer_count(1);
+
+        let recorded = self.gpu.submit_once(|cmd| {
+            // ★ THE SOURCE LAYOUT IS `GENERAL`, not UNDEFINED. `Target::draw`
+            // leaves an imported target in GENERAL and an owned one in
+            // TRANSFER_SRC_OPTIMAL; UNDEFINED here would DISCARD the frame
+            // that was just drawn, and the capture would come back as
+            // whatever the driver felt like — which on a fast path is often
+            // the right pixels, so the bug would look intermittent.
+            let from = if self.readback.is_some() {
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL
+            } else {
+                vk::ImageLayout::GENERAL
+            };
+            self.barrier(
+                cmd,
+                from,
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                vk::AccessFlags::MEMORY_WRITE,
+                vk::AccessFlags::TRANSFER_READ,
+                vk::PipelineStageFlags::ALL_COMMANDS,
+                vk::PipelineStageFlags::TRANSFER,
+                range,
+            );
+
+            let region = vk::BufferImageCopy::default()
+                .buffer_row_length(0)
+                .buffer_image_height(0)
+                .image_subresource(
+                    vk::ImageSubresourceLayers::default()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .layer_count(1),
+                )
+                .image_offset(vk::Offset3D {
+                    x: x.cast_signed(),
+                    y: y.cast_signed(),
+                    z: 0,
+                })
+                .image_extent(vk::Extent3D {
+                    width: w,
+                    height: h,
+                    depth: 1,
+                });
+            // SAFETY: the image is in TRANSFER_SRC_OPTIMAL, the buffer holds
+            // w*h*4 bytes, and `region` is a local.
+            unsafe {
+                self.gpu.device.cmd_copy_image_to_buffer(
+                    cmd,
+                    self.backing.image(),
+                    vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                    buffer,
+                    &[region],
+                );
+            }
+
+            // Put an imported target back where the display expects it.
+            if self.readback.is_none() {
+                self.barrier(
+                    cmd,
+                    vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                    vk::ImageLayout::GENERAL,
+                    vk::AccessFlags::TRANSFER_READ,
+                    vk::AccessFlags::MEMORY_READ,
+                    vk::PipelineStageFlags::TRANSFER,
+                    vk::PipelineStageFlags::BOTTOM_OF_PIPE,
+                    range,
+                );
+            }
+            Ok(())
+        });
+
+        let out = recorded.and_then(|()| {
+            // SAFETY: HOST_VISIBLE by construction, the whole range, unmapped
+            // before returning.
+            let ptr = unsafe {
+                self.gpu
+                    .device
+                    .map_memory(memory, 0, size, vk::MemoryMapFlags::empty())
+            }
+            .map_err(|e| driver("map_memory(capture)", e))?;
+            let len = usize::try_from(size).unwrap_or(0);
+            // SAFETY: `len` bytes were allocated and just written by the copy.
+            let v = unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), len) }.to_vec();
+            // SAFETY: mapped above; `v` is a copy, so nothing points into it.
+            unsafe { self.gpu.device.unmap_memory(memory) };
+            Ok(v)
+        });
+
+        // Freed on every path — this buffer is per-capture, unlike the owned
+        // target's permanent one.
+        // SAFETY: the submit waited, so nothing references it.
+        unsafe {
+            self.gpu.device.destroy_buffer(buffer, None);
+            self.gpu.device.free_memory(memory, None);
+        }
+        out
+    }
+
     /// The pixel at `(x, y)` from the last [`Target::draw`], as the format's
     /// own byte order.
     ///
@@ -2252,6 +2673,230 @@ impl Drop for Target {
                 dev.destroy_buffer(buffer, None);
                 dev.free_memory(memory, None);
             }
+        }
+    }
+}
+
+/// A texture uploaded from host memory — an `wl_shm` client surface.
+///
+/// ── ★ WHY THIS EXISTS ALONGSIDE `Imported` ───────────────────────────────
+/// Not every client hands over a dmabuf. `wl_shm` clients — which is most
+/// simple toolkits, and every client at all before it negotiates dmabuf —
+/// deliver a shared-memory buffer, and the compositor must get those bytes
+/// onto the GPU itself. That is a genuinely different operation from importing
+/// a dmabuf: the memory is DEVICE_LOCAL and written through a staging buffer,
+/// rather than shared and never copied.
+///
+/// ★ THE COPY HERE IS NOT THE COPY kasane EXISTS TO REMOVE. That one is the
+/// per-frame scanout flush, paid for every pixel of the output on every frame.
+/// This is paid once per client BUFFER UPDATE, for that client's damage only,
+/// and there is no way around it — the bytes start in host memory.
+pub struct Uploaded {
+    gpu: std::sync::Arc<Gpu>,
+    image: vk::Image,
+    view: vk::ImageView,
+    memory: vk::DeviceMemory,
+    /// Reused across updates rather than reallocated per frame — a client
+    /// that redraws at 60 Hz would otherwise allocate and free a staging
+    /// buffer 60 times a second.
+    staging: vk::Buffer,
+    staging_memory: vk::DeviceMemory,
+    /// Size in pixels.
+    pub geometry: Geometry,
+}
+
+impl Uploaded {
+    /// This texture as something a [`Draw::Texture`] can sample.
+    #[must_use]
+    pub fn texture(&self) -> TextureRef {
+        TextureRef {
+            image: self.image,
+            view: self.view,
+            // `write` leaves the image here, so the recorder needs no barrier
+            // at all — and must not issue one from `UNDEFINED`, which would
+            // discard the pixels it just uploaded.
+            layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        }
+    }
+
+    /// Replace a rectangle of this texture with `data`.
+    ///
+    /// `data` is the rectangle's own tightly-packed BGRA rows — `region.w * 4`
+    /// bytes per row — not a window into a larger buffer.
+    ///
+    /// # Errors
+    /// [`KasaneError::OutOfBounds`] if the region leaves the texture,
+    /// [`KasaneError::Vulkan`] naming a failing call, or a size mismatch
+    /// reported as its own message.
+    pub fn write(&self, x: u32, y: u32, w: u32, h: u32, data: &[u8]) -> Result<(), KasaneError> {
+        if x + w > self.geometry.width || y + h > self.geometry.height {
+            return Err(KasaneError::OutOfBounds {
+                x: x + w,
+                y: y + h,
+                width: self.geometry.width,
+                height: self.geometry.height,
+            });
+        }
+        let needed = w as usize * h as usize * 4;
+        if data.len() < needed {
+            // ★ REFUSED, NOT PADDED. Uploading a short buffer would put
+            // whatever the staging memory held last into the client's window —
+            // the previous frame, or another client's pixels.
+            return Err(KasaneError::Vulkan {
+                call: "Uploaded::write",
+                result: format!(
+                    "{w}x{h} needs {needed} bytes and only {} were given; \
+                     uploading anyway would show stale staging memory",
+                    data.len()
+                ),
+            });
+        }
+
+        let dev = &self.gpu.device;
+        // SAFETY: the staging memory is HOST_VISIBLE | HOST_COHERENT (chosen
+        // in `Gpu::upload_texture`), the range is within it, and it is
+        // unmapped before returning.
+        let ptr = unsafe {
+            dev.map_memory(
+                self.staging_memory,
+                0,
+                needed as u64,
+                vk::MemoryMapFlags::empty(),
+            )
+        }
+        .map_err(|e| driver("map_memory(staging)", e))?
+        .cast::<u8>();
+        // SAFETY: `needed` bytes were allocated for the whole texture, which
+        // is at least this region, and `data` holds at least `needed`.
+        unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), ptr, needed) };
+        // HOST_COHERENT, so no explicit flush before unmapping.
+        // SAFETY: mapped on the line above; nothing holds a reference into it.
+        unsafe { dev.unmap_memory(self.staging_memory) };
+
+        let range = vk::ImageSubresourceRange::default()
+            .aspect_mask(vk::ImageAspectFlags::COLOR)
+            .level_count(1)
+            .layer_count(1);
+
+        self.gpu.submit_once(|cmd| {
+            // ★ UNDEFINED → TRANSFER_DST. The old contents of the REGION are
+            // about to be overwritten, so discarding them is correct — and
+            // naming the previous layout would mean tracking it across every
+            // frame for no gain, since the whole region is written.
+            Self::layout(
+                &self.gpu,
+                cmd,
+                self.image,
+                vk::ImageLayout::UNDEFINED,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                vk::AccessFlags::empty(),
+                vk::AccessFlags::TRANSFER_WRITE,
+                vk::PipelineStageFlags::TOP_OF_PIPE,
+                vk::PipelineStageFlags::TRANSFER,
+                range,
+            );
+
+            let region = vk::BufferImageCopy::default()
+                // 0 means "rows are `imageExtent.width` texels", which is what
+                // the caller's contract says `data` is.
+                .buffer_row_length(0)
+                .buffer_image_height(0)
+                .image_subresource(
+                    vk::ImageSubresourceLayers::default()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .layer_count(1),
+                )
+                .image_offset(vk::Offset3D {
+                    x: x.cast_signed(),
+                    y: y.cast_signed(),
+                    z: 0,
+                })
+                .image_extent(vk::Extent3D {
+                    width: w,
+                    height: h,
+                    depth: 1,
+                });
+            // SAFETY: the image is in TRANSFER_DST_OPTIMAL, the staging buffer
+            // holds `needed` bytes, and `region` is a local.
+            unsafe {
+                dev.cmd_copy_buffer_to_image(
+                    cmd,
+                    self.staging,
+                    self.image,
+                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    &[region],
+                );
+            }
+
+            // ★ AND BACK TO SHADER_READ_ONLY, here rather than at draw time.
+            // A texture left in TRANSFER_DST would be sampled in the wrong
+            // layout — undefined, and on real hardware it reads as garbage
+            // rather than an error.
+            Self::layout(
+                &self.gpu,
+                cmd,
+                self.image,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                vk::AccessFlags::TRANSFER_WRITE,
+                vk::AccessFlags::SHADER_READ,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::PipelineStageFlags::FRAGMENT_SHADER,
+                range,
+            );
+            Ok(())
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn layout(
+        gpu: &Gpu,
+        cmd: vk::CommandBuffer,
+        image: vk::Image,
+        from: vk::ImageLayout,
+        to: vk::ImageLayout,
+        src_access: vk::AccessFlags,
+        dst_access: vk::AccessFlags,
+        src_stage: vk::PipelineStageFlags,
+        dst_stage: vk::PipelineStageFlags,
+        range: vk::ImageSubresourceRange,
+    ) {
+        let b = vk::ImageMemoryBarrier::default()
+            .old_layout(from)
+            .new_layout(to)
+            .src_access_mask(src_access)
+            .dst_access_mask(dst_access)
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .image(image)
+            .subresource_range(range);
+        // SAFETY: recording into a live buffer; `b` is a local naming a live
+        // image this type owns.
+        unsafe {
+            gpu.device.cmd_pipeline_barrier(
+                cmd,
+                src_stage,
+                dst_stage,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[b],
+            );
+        }
+    }
+}
+
+impl Drop for Uploaded {
+    fn drop(&mut self) {
+        let dev = &self.gpu.device;
+        // SAFETY: every handle came from this device and is destroyed once.
+        // View before image, memory after what was bound to it.
+        unsafe {
+            dev.destroy_image_view(self.view, None);
+            dev.destroy_image(self.image, None);
+            dev.free_memory(self.memory, None);
+            dev.destroy_buffer(self.staging, None);
+            dev.free_memory(self.staging_memory, None);
         }
     }
 }
@@ -2410,6 +3055,13 @@ impl Imported {
         TextureRef {
             image: self.image,
             view: self.view,
+            // ★ UNDEFINED IS CORRECT HERE, unlike for an uploaded texture.
+            // The pixels live in memory the EXPORTER wrote; this image is a
+            // view onto it and has never been rendered to by us, so there is
+            // nothing of ours to discard. Naming the real previous layout is
+            // impossible anyway — the buffer came from another process that
+            // never told us.
+            layout: vk::ImageLayout::UNDEFINED,
         }
     }
 
@@ -3794,8 +4446,8 @@ mod tests {
             ),
             (
                 ImportUse::RenderTarget,
-                vk::ImageUsageFlags::COLOR_ATTACHMENT,
-                vk::FormatFeatureFlags::COLOR_ATTACHMENT,
+                vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_SRC,
+                vk::FormatFeatureFlags::COLOR_ATTACHMENT | vk::FormatFeatureFlags::TRANSFER_SRC,
             ),
         ];
         for (purpose, usage, feature) in pairs {
@@ -3834,5 +4486,277 @@ mod tests {
              would be an alias for `importable_modifiers` and the distinction \
              this whole enum exists for would be gone"
         );
+    }
+
+    /// ★★ AN `wl_shm` CLIENT'S PIXELS REACH THE SCREEN — the other half of
+    /// compositing, and the one most clients actually use.
+    ///
+    /// Not every client negotiates dmabuf; most simple toolkits hand over
+    /// shared memory, and every client does before it negotiates anything. So
+    /// `upload_texture` is not a fallback, it is the common path.
+    ///
+    /// Uploaded, sampled, composited, read back — the same journey as the
+    /// dmabuf test, from the other kind of buffer.
+    #[test]
+    fn host_memory_becomes_a_texture_the_gpu_can_composite() {
+        let gpu = match Gpu::open() {
+            Ok(g) => std::sync::Arc::new(g),
+            Err(e) => {
+                skip_or_panic("upload", &e);
+                return;
+            }
+        };
+        // Asymmetric across all four channels so a channel swap cannot pass.
+        const PIXEL: [u8; 4] = [0x12, 0x34, 0x56, 0xff];
+        const N: u32 = 8;
+
+        let data: Vec<u8> = PIXEL
+            .iter()
+            .copied()
+            .cycle()
+            .take((N * N * 4) as usize)
+            .collect();
+        let uploaded = gpu.upload_texture(N, N, &data).expect("upload");
+
+        let pipes = Pipelines::new(&gpu, FORMAT).expect("pipelines");
+        let target = Target::new(&gpu, 16, 16, FORMAT).expect("target");
+        target
+            .draw(
+                &pipes,
+                // Cleared to a colour the upload is not, so a draw that did
+                // nothing fails rather than coincidentally matching.
+                [1.0, 0.0, 1.0, 1.0],
+                &[Draw::Texture {
+                    params: crate::Params {
+                        dst: [-1.0, -1.0, 2.0, 2.0],
+                        src: [0.0, 0.0, 1.0, 1.0],
+                        tint: [1.0, 1.0, 1.0, 1.0],
+                    },
+                    texture: uploaded.texture(),
+                    filter: Filter::Nearest,
+                }],
+            )
+            .expect("draw");
+
+        let px = target.read_pixel(8, 8).expect("read");
+        assert_eq!(
+            px, PIXEL,
+            "the composited pixel must be the uploaded one; [255,0,255,255] \
+             means the draw did not happen and this is the clear"
+        );
+        eprintln!("kasane S2f: an uploaded shm texture composited as {px:?}");
+    }
+
+    /// ★ A PARTIAL UPDATE TOUCHES ONLY ITS OWN RECTANGLE.
+    ///
+    /// `update_memory` is how a client's damage reaches the GPU, and a version
+    /// that rewrote the whole texture would be correct-looking and slow, while
+    /// one that wrote to the wrong offset would corrupt a neighbouring region.
+    /// Both are invisible to a test that only checks the updated pixel, so
+    /// this checks a pixel OUTSIDE the region too.
+    #[test]
+    fn a_partial_upload_leaves_the_rest_of_the_texture_alone() {
+        let gpu = match Gpu::open() {
+            Ok(g) => std::sync::Arc::new(g),
+            Err(e) => {
+                skip_or_panic("partial upload", &e);
+                return;
+            }
+        };
+        const BASE: [u8; 4] = [0x11, 0x22, 0x33, 0xff];
+        const PATCH: [u8; 4] = [0xaa, 0xbb, 0xcc, 0xff];
+        const N: u32 = 8;
+
+        let base: Vec<u8> = BASE
+            .iter()
+            .copied()
+            .cycle()
+            .take((N * N * 4) as usize)
+            .collect();
+        let uploaded = gpu.upload_texture(N, N, &base).expect("upload");
+
+        // Repaint only the top-left 4x4.
+        let patch: Vec<u8> = PATCH.iter().copied().cycle().take(4 * 4 * 4).collect();
+        uploaded.write(0, 0, 4, 4, &patch).expect("partial write");
+
+        let pipes = Pipelines::new(&gpu, FORMAT).expect("pipelines");
+        let target = Target::new(&gpu, N, N, FORMAT).expect("target");
+        target
+            .draw(
+                &pipes,
+                [0.0, 0.0, 0.0, 1.0],
+                &[Draw::Texture {
+                    params: crate::Params {
+                        dst: [-1.0, -1.0, 2.0, 2.0],
+                        src: [0.0, 0.0, 1.0, 1.0],
+                        tint: [1.0, 1.0, 1.0, 1.0],
+                    },
+                    texture: uploaded.texture(),
+                    filter: Filter::Nearest,
+                }],
+            )
+            .expect("draw");
+
+        let inside = target.read_pixel(1, 1).expect("read inside");
+        let outside = target.read_pixel(6, 6).expect("read outside");
+        // ★ Print the four corners. If the patch appears at the BOTTOM-left
+        // instead of the top-left, the UV mapping has a vertical flip — which
+        // no earlier test could have caught: the solid-draw test checks `dst`
+        // positioning, and the source-rectangle test only varies `src.x`.
+        let tl = target.read_pixel(1, 1).expect("tl");
+        let tr = target.read_pixel(6, 1).expect("tr");
+        let bl = target.read_pixel(1, 6).expect("bl");
+        let br = target.read_pixel(6, 6).expect("br");
+        let tag = |p: [u8; 4]| if p == PATCH { "PATCH" } else { "base " };
+        eprintln!(
+            "kasane S2f: corners  tl={} tr={}\n             bl={} br={}",
+            tag(tl),
+            tag(tr),
+            tag(bl),
+            tag(br)
+        );
+        assert_eq!(inside, PATCH, "the updated region must show the new pixels");
+        assert_eq!(
+            outside, BASE,
+            "a pixel OUTSIDE the updated rectangle must be untouched — getting \
+             the patch here means the update ignored its offset and rewrote \
+             the whole texture"
+        );
+    }
+
+    /// ★ A SHORT UPLOAD IS REFUSED, not padded.
+    ///
+    /// Uploading fewer bytes than the region needs would put whatever the
+    /// staging memory held last into the client's window — the previous
+    /// frame, or another client's pixels. That is a disclosure bug, not a
+    /// rendering one, so it is a refusal rather than a best effort.
+    #[test]
+    fn an_undersized_upload_is_refused_rather_than_showing_stale_memory() {
+        let gpu = match Gpu::open() {
+            Ok(g) => std::sync::Arc::new(g),
+            Err(e) => {
+                skip_or_panic("short upload", &e);
+                return;
+            }
+        };
+        let full = vec![0u8; 8 * 8 * 4];
+        let uploaded = gpu.upload_texture(8, 8, &full).expect("upload");
+        // Half the bytes an 8x8 region needs.
+        let short = vec![0u8; 8 * 8 * 2];
+        let err = uploaded
+            .write(0, 0, 8, 8, &short)
+            .expect_err("a short buffer must be refused");
+        let text = err.to_string();
+        assert!(
+            text.contains("stale staging memory"),
+            "the refusal must say WHY, or someone will pad it: {text}"
+        );
+    }
+
+    /// ★★ A SCANOUT TARGET CAN STILL BE SCREENSHOT — on demand, not per frame.
+    ///
+    /// An imported target has no readback buffer, deliberately: copying it
+    /// every frame is the cost kasane exists to remove. But "the screen is
+    /// blank" has to remain answerable from another machine, which is the
+    /// whole reason `ExportMem` is in `drm.rs`'s renderer bound.
+    ///
+    /// So this asserts the explicit path works on BOTH backings — the caller
+    /// must not need to know which it has.
+    #[test]
+    fn a_finished_frame_can_be_captured_from_either_backing() {
+        let gpu = match Gpu::open() {
+            Ok(g) => std::sync::Arc::new(g),
+            Err(e) => {
+                skip_or_panic("capture", &e);
+                return;
+            }
+        };
+        const N: u32 = 8;
+        let pipes = Pipelines::new(&gpu, FORMAT).expect("pipelines");
+
+        // (a) an owned target
+        let owned = Target::new(&gpu, N, N, FORMAT).expect("owned target");
+        owned.draw(&pipes, [0.0, 0.0, 1.0, 1.0], &[]).expect("draw");
+        let shot = owned.capture(0, 0, N, N).expect("capture owned");
+        assert_eq!(
+            shot.len(),
+            (N * N * 4) as usize,
+            "capture must be w*h*4 bytes"
+        );
+        assert_eq!(
+            &shot[0..4],
+            &[255, 0, 0, 255],
+            "the captured pixel must be the blue that was cleared (BGRA)"
+        );
+
+        // (b) an imported target, which has NO readback buffer at all
+        if !gpu.renderable_modifiers().contains(&0) {
+            eprintln!("kasane S2f: no LINEAR render target on this device; owned arm only");
+            return;
+        }
+        let mut exported = gpu.export_linear(N, N, [0, 0, 0, 0xff]).expect("export");
+        let geometry = exported.geometry;
+        let fd = exported.take_fd().expect("fd");
+        let imported = Target::from_dmabuf(&gpu, fd, geometry, 0).expect("dmabuf target");
+        imported
+            .draw(&pipes, [0.0, 1.0, 0.0, 1.0], &[])
+            .expect("draw");
+        assert!(
+            imported.read_pixel(0, 0).is_err(),
+            "an imported target must have NO per-frame readback — if this \
+             succeeds, every scanout frame is paying for a host copy"
+        );
+        let shot = imported.capture(0, 0, N, N).expect("capture imported");
+        assert_eq!(
+            &shot[0..4],
+            &[0, 255, 0, 255],
+            "the explicit capture must see the green this frame drew (BGRA)"
+        );
+        eprintln!("kasane S2f: captured both backings on demand");
+    }
+
+    /// ★ WHICH END OF THE SCREEN DOES PIXEL y=0 LAND ON?
+    ///
+    /// `a_fullscreen_rect_covers_exactly_the_clip_volume` pins the ARITHMETIC
+    /// of `dst_from_pixels`, and `a_solid_draw_lands_the_colour_and_the_place
+    /// _it_was_given` pins horizontal placement. Neither pins VERTICAL
+    /// placement on real hardware — a full-height quad looks identical either
+    /// way, which is exactly how a vertical flip survives a test suite.
+    ///
+    /// This draws the TOP HALF in pixels and asks where it came out.
+    #[test]
+    fn a_rect_at_pixel_y_zero_is_drawn_at_the_top_of_the_framebuffer() {
+        let gpu = match Gpu::open() {
+            Ok(g) => std::sync::Arc::new(g),
+            Err(e) => {
+                skip_or_panic("y direction", &e);
+                return;
+            }
+        };
+        const N: u32 = 16;
+        let pipes = Pipelines::new(&gpu, FORMAT).expect("pipelines");
+        let target = Target::new(&gpu, N, N, FORMAT).expect("target");
+
+        // The top half in PIXEL coordinates: y from 0 to 8 of 16.
+        let top_half = crate::Params {
+            dst: crate::Params::dst_from_pixels([0.0, 0.0, 16.0, 8.0], (16.0, 16.0)),
+            src: [0.0, 0.0, 1.0, 1.0],
+            tint: [1.0, 0.0, 0.0, 1.0],
+        };
+        target
+            .draw(&pipes, [0.0, 0.0, 1.0, 1.0], &[Draw::Solid(top_half)])
+            .expect("draw");
+
+        let near_top = target.read_pixel(8, 2).expect("top");
+        let near_bottom = target.read_pixel(8, 13).expect("bottom");
+        const RED: [u8; 4] = [0, 0, 255, 255];
+        const BLUE: [u8; 4] = [255, 0, 0, 255];
+        assert_eq!(
+            near_top, RED,
+            "a rect at pixel y=0 must be drawn at the TOP; finding the clear \
+             here and red at the bottom means clip y=-1 lands at the bottom \
+             and every surface is drawn upside down"
+        );
+        assert_eq!(near_bottom, BLUE, "the bottom must still be the clear");
     }
 }

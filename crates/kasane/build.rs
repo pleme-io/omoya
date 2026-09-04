@@ -82,7 +82,7 @@ fn main() {
     // driver to expect.
     let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
 
-    let out = Path::new(&std::env::var("OUT_DIR").expect("cargo sets OUT_DIR"))
-        .join("composite.spv");
+    let out =
+        Path::new(&std::env::var("OUT_DIR").expect("cargo sets OUT_DIR")).join("composite.spv");
     std::fs::write(&out, bytes).unwrap_or_else(|e| panic!("writing {}: {e}", out.display()));
 }

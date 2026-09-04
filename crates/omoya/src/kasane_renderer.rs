@@ -46,25 +46,23 @@
 //! type system refuses a half-built renderer rather than letting it produce a
 //! black screen at runtime.
 
-// ★ UNREACHABLE TODAY, AND THE ALLOW SAYS WHEN IT GOES.
+// ★ REACHABLE BUT NOT REACHED, and the allow says exactly what is missing.
 //
-// Nothing constructs a `KasaneRenderer` because nothing CAN: `drm.rs`'s bound
-// demands `Bind<Dmabuf>`, `ImportMem` and `ExportMem`, and those three bodies
-// are not built (see the header). The type system is refusing a half-built
-// renderer, which is the correct outcome — the alternative is a renderer that
-// compiles, gets selected, and composes a black screen.
+// `drm.rs`'s bound is now satisfied — `drm::run` WOULD take this renderer. It
+// is dead only because nothing constructs one: the seat still builds a
+// `NuriRenderer`, and changing that decides what a live desktop runs on, which
+// is a separate change with its own risk.
 //
 // This is NOT the "primitive with zero consumers" that `theory/RENDERING.md`
-// warns is the fleet's real duplication problem. That warning is about
-// primitives nobody reached for; this one has a named consumer (`drm.rs`) and
-// three named, specific blockers. **Done-predicate for deleting this allow:**
-// the three impls land, `drm.rs` accepts `KasaneRenderer`, and the seat can
-// select it — at which point every item here is reachable and the attribute
-// stops compiling clean.
+// warns is the fleet's real problem. That warning is about primitives nobody
+// reached for; this one has a named consumer whose bound it already meets.
+//
+// **Done-predicate for deleting this allow:** the seat selects a renderer by
+// config with a typed fallback to nuri, and this one is a legal choice.
 #![allow(
     dead_code,
-    reason = "blocked on Bind<Dmabuf>/ImportMem/ExportMem; see above for the \
-              done-predicate that removes this"
+    reason = "the drm.rs bound is met; nothing constructs one until renderer \
+              selection is wired — see the header"
 )]
 
 use std::sync::Arc;
@@ -77,7 +75,7 @@ use smithay::backend::renderer::{
 };
 use smithay::utils::{Buffer as BufferCoord, Physical, Rectangle, Size, Transform};
 
-use kasane::vk::{Draw, Filter, Gpu, Imported, Pipelines, Target};
+use kasane::vk::{Draw, Filter, Gpu, Imported, Pipelines, Target, Uploaded};
 
 /// Why a kasane-backed render failed.
 ///
@@ -115,15 +113,47 @@ pub enum Error {
 // (`renderer/mod.rs:15` imports it from `std`), which `thiserror` already
 // derives — writing one produces E0119, a conflicting implementation.
 
+/// Where a [`KasaneTexture`]'s pixels came from.
+///
+/// ★ A CLOSED CHOICE because the two are not interchangeable. A dmabuf is
+/// SHARED — the client writes it and the compositor never copies — so it
+/// cannot be updated by us. An uploaded `wl_shm` texture is OURS, and
+/// `update_memory` writes into it. Modelling both as one opaque handle would
+/// make "update a buffer we do not own" expressible, and its failure would be
+/// a silently ignored damage region.
+#[derive(Clone)]
+enum Pixels {
+    /// A dmabuf the client allocated. Never written by us.
+    Shared(Arc<Imported>),
+    /// A `wl_shm` buffer uploaded into device memory. Updatable.
+    Owned(Arc<Uploaded>),
+}
+
 /// A client buffer living in GPU memory, ready to be sampled.
 ///
-/// ★ `Arc<Imported>` because `drm.rs` demands `R::TextureId: Clone + Send`.
-/// The underlying import owns Vulkan objects that must be destroyed exactly
-/// once, so it is shared rather than copied — cloning the handles would give
-/// two owners of one image and a double free.
+/// ★ `Arc` inside because `drm.rs` demands `R::TextureId: Clone + Send`. Both
+/// variants own Vulkan objects that must be destroyed exactly once, so they
+/// are shared rather than copied — cloning the handles would give two owners
+/// of one image and a double free.
 #[derive(Clone)]
 pub struct KasaneTexture {
-    inner: Arc<Imported>,
+    inner: Pixels,
+}
+
+impl KasaneTexture {
+    fn geometry(&self) -> kasane::Geometry {
+        match &self.inner {
+            Pixels::Shared(i) => i.geometry,
+            Pixels::Owned(u) => u.geometry,
+        }
+    }
+
+    fn as_ref(&self) -> kasane::vk::TextureRef {
+        match &self.inner {
+            Pixels::Shared(i) => i.texture(),
+            Pixels::Owned(u) => u.texture(),
+        }
+    }
 }
 
 impl std::fmt::Debug for KasaneTexture {
@@ -131,20 +161,27 @@ impl std::fmt::Debug for KasaneTexture {
     // integers, so the useful thing to print is the geometry.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("KasaneTexture")
-            .field("width", &self.inner.geometry.width)
-            .field("height", &self.inner.geometry.height)
-            .field("stride", &self.inner.geometry.stride)
+            .field("width", &self.geometry().width)
+            .field("height", &self.geometry().height)
+            .field("stride", &self.geometry().stride)
+            .field(
+                "source",
+                &match self.inner {
+                    Pixels::Shared(_) => "dmabuf",
+                    Pixels::Owned(_) => "shm-upload",
+                },
+            )
             .finish()
     }
 }
 
 impl Texture for KasaneTexture {
     fn width(&self) -> u32 {
-        self.inner.geometry.width
+        self.geometry().width
     }
 
     fn height(&self) -> u32 {
-        self.inner.geometry.height
+        self.geometry().height
     }
 
     fn format(&self) -> Option<Fourcc> {
@@ -214,6 +251,14 @@ impl KasaneRenderer {
     pub fn is_cpu(&self) -> bool {
         self.gpu.is_cpu
     }
+
+    /// The `wl_shm` formats this renderer accepts.
+    ///
+    /// ★ `Xrgb8888` is included and treated identically to `Argb8888`: the
+    /// bytes are the same and the alpha channel is simply ignored by an opaque
+    /// surface. Refusing it would turn away a large share of real clients for
+    /// no technical reason.
+    const MEM_FORMATS: [Fourcc; 2] = [Fourcc::Argb8888, Fourcc::Xrgb8888];
 
     /// Turn smithay's filter choice into kasane's.
     fn filter(f: TextureFilter) -> Filter {
@@ -413,8 +458,8 @@ impl Frame for KasaneFrame<'_, '_> {
             reason = "buffer dimensions are far below 2^24"
         )]
         let (bw, bh) = (
-            f64::from(texture.inner.geometry.width),
-            f64::from(texture.inner.geometry.height),
+            f64::from(texture.geometry().width),
+            f64::from(texture.geometry().height),
         );
         #[allow(
             clippy::cast_possible_truncation,
@@ -451,7 +496,7 @@ impl Frame for KasaneFrame<'_, '_> {
                 // premultiplied. See `shaders/composite.wgsl`.
                 tint: [alpha, alpha, alpha, alpha],
             },
-            texture: texture.inner.texture(),
+            texture: texture.as_ref(),
             filter,
         });
         // Held so the import outlives the handle inside the `Draw`.
@@ -690,10 +735,337 @@ impl smithay::backend::renderer::ImportDma for KasaneRenderer {
         let modifier: u64 = dmabuf.format().modifier.into();
         let imported = self.gpu.import_tiled(owned, geometry, modifier)?;
         Ok(KasaneTexture {
-            inner: Arc::new(imported),
+            inner: Pixels::Shared(Arc::new(imported)),
         })
     }
 }
+
+/// A frame or texture copied into host memory.
+///
+/// ★ THE COPY HAS ALREADY HAPPENED by the time this exists. smithay's
+/// `TextureMapping` allows a deferred map, but a `Vec` is simpler and the
+/// capture had to read the bytes anyway — deferring would mean holding a
+/// mapped allocation across an unknown span of caller code, which is how a
+/// mapping outlives the device that owns it.
+pub struct KasaneMapping {
+    data: Vec<u8>,
+    width: u32,
+    height: u32,
+}
+
+impl std::fmt::Debug for KasaneMapping {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KasaneMapping")
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("bytes", &self.data.len())
+            .finish()
+    }
+}
+
+impl Texture for KasaneMapping {
+    fn width(&self) -> u32 {
+        self.width
+    }
+
+    fn height(&self) -> u32 {
+        self.height
+    }
+
+    fn format(&self) -> Option<Fourcc> {
+        Some(Fourcc::Argb8888)
+    }
+}
+
+impl smithay::backend::renderer::TextureMapping for KasaneMapping {
+    fn flipped(&self) -> bool {
+        // ★ NOT FLIPPED, and this is a claim the Y-negation in
+        // `shaders/composite.wgsl` makes true. The capture copies image rows
+        // in order and row 0 is the top of the framebuffer; saying `true` here
+        // would make every screenshot come out upside down while the screen
+        // itself was correct — the hardest kind of disagreement to notice,
+        // because each surface looks right on its own.
+        false
+    }
+}
+
+impl smithay::backend::renderer::ImportMem for KasaneRenderer {
+    fn import_memory(
+        &mut self,
+        data: &[u8],
+        format: Fourcc,
+        size: Size<i32, BufferCoord>,
+        flipped: bool,
+    ) -> Result<Self::TextureId, Self::Error> {
+        if flipped {
+            // ★ REFUSED RATHER THAN DRAWN WRONG. A flipped upload needs either
+            // a reversed row copy or a negated V, and doing neither would put
+            // the client's window upside down — which reads as a client bug.
+            return Err(Error::NotBuilt {
+                what: "upload a vertically flipped buffer",
+                why: "the upload copies rows in order; a flip needs a reversed \
+                      row copy or a negated V in the source rectangle",
+            });
+        }
+        if !Self::MEM_FORMATS.contains(&format) {
+            return Err(Error::Unsupported(
+                "shm format; kasane uploads ARGB8888 and XRGB8888",
+            ));
+        }
+        #[allow(
+            clippy::cast_sign_loss,
+            reason = "a negative buffer dimension is not a buffer; the upload \
+                      refuses a short slice below regardless"
+        )]
+        let (w, h) = (size.w.max(0) as u32, size.h.max(0) as u32);
+        let uploaded = self.gpu.upload_texture(w, h, data)?;
+        Ok(KasaneTexture {
+            inner: Pixels::Owned(Arc::new(uploaded)),
+        })
+    }
+
+    fn update_memory(
+        &mut self,
+        texture: &Self::TextureId,
+        data: &[u8],
+        region: Rectangle<i32, BufferCoord>,
+    ) -> Result<(), Self::Error> {
+        // ★ A SHARED BUFFER CANNOT BE UPDATED BY US, and saying so is the
+        // point of `Pixels` being a closed choice. A dmabuf belongs to the
+        // client; writing into it would race whatever the client is drawing.
+        // Silently succeeding here would drop the damage and show a stale
+        // window.
+        let Pixels::Owned(uploaded) = &texture.inner else {
+            return Err(Error::Unsupported(
+                "update of a dmabuf-backed texture; the client owns those \
+                 pixels and re-imports rather than asking us to write them",
+            ));
+        };
+        #[allow(
+            clippy::cast_sign_loss,
+            reason = "a negative damage origin is not a region; `write` \
+                      bounds-checks against the texture regardless"
+        )]
+        uploaded
+            .write(
+                region.loc.x.max(0) as u32,
+                region.loc.y.max(0) as u32,
+                region.size.w.max(0) as u32,
+                region.size.h.max(0) as u32,
+                data,
+            )
+            .map_err(Error::Kasane)
+    }
+
+    fn mem_formats(&self) -> Box<dyn Iterator<Item = Fourcc>> {
+        Box::new(Self::MEM_FORMATS.iter().copied())
+    }
+}
+
+impl smithay::backend::renderer::ExportMem for KasaneRenderer {
+    type TextureMapping = KasaneMapping;
+
+    fn copy_framebuffer(
+        &mut self,
+        target: &Self::Framebuffer<'_>,
+        region: Rectangle<i32, BufferCoord>,
+        format: Fourcc,
+    ) -> Result<Self::TextureMapping, Self::Error> {
+        if format != Fourcc::Argb8888 {
+            return Err(Error::Unsupported(
+                "capture format; kasane captures ARGB8888",
+            ));
+        }
+        #[allow(
+            clippy::cast_sign_loss,
+            reason = "`capture` bounds-checks the region against the target"
+        )]
+        let (x, y, w, h) = (
+            region.loc.x.max(0) as u32,
+            region.loc.y.max(0) as u32,
+            region.size.w.max(0) as u32,
+            region.size.h.max(0) as u32,
+        );
+        // ★ AN EXPLICIT COPY, PAID ONCE. An imported target keeps no readback
+        // buffer — that per-frame copy is what this renderer exists to remove
+        // — so a screenshot pays for its own submit, when somebody asks.
+        let data = target.target.capture(x, y, w, h)?;
+        Ok(KasaneMapping {
+            data,
+            width: w,
+            height: h,
+        })
+    }
+
+    fn copy_texture(
+        &mut self,
+        texture: &Self::TextureId,
+        region: Rectangle<i32, BufferCoord>,
+        format: Fourcc,
+    ) -> Result<Self::TextureMapping, Self::Error> {
+        if format != Fourcc::Argb8888 {
+            return Err(Error::Unsupported(
+                "capture format; kasane captures ARGB8888",
+            ));
+        }
+        #[allow(
+            clippy::cast_sign_loss,
+            reason = "negative extents are clamped; `Target::new` refuses zero"
+        )]
+        let (w, h) = (region.size.w.max(0) as u32, region.size.h.max(0) as u32);
+
+        // ★ RENDERED, NOT COPIED IMAGE-TO-IMAGE. A client's texture may be
+        // tiled with a modifier this device cannot `vkCmdCopyImage` from,
+        // while it can certainly SAMPLE it — that is the whole premise of
+        // importing it. Drawing it into a scratch target and capturing that
+        // goes through the path already known to work for every importable
+        // layout, at the cost of one extra frame's worth of work on a path
+        // that runs when a human asks for a screenshot.
+        let scratch = Target::new(&self.gpu, w, h, kasane::vk::FORMAT)?;
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "buffer dimensions are far below 2^24"
+        )]
+        let uv = {
+            let (bw, bh) = (
+                f64::from(texture.geometry().width),
+                f64::from(texture.geometry().height),
+            );
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "UVs are 0..1 ratios; f32 is the shader's precision"
+            )]
+            [
+                (f64::from(region.loc.x) / bw) as f32,
+                (f64::from(region.loc.y) / bh) as f32,
+                (f64::from(region.size.w) / bw) as f32,
+                (f64::from(region.size.h) / bh) as f32,
+            ]
+        };
+        scratch.draw(
+            &self.pipelines,
+            [0.0, 0.0, 0.0, 0.0],
+            &[Draw::Texture {
+                params: kasane::Params {
+                    dst: [-1.0, -1.0, 2.0, 2.0],
+                    src: uv,
+                    tint: [1.0, 1.0, 1.0, 1.0],
+                },
+                texture: texture.as_ref(),
+                // 1:1 by construction — the scratch target is the region's
+                // own size — so NEAREST is exact and LINEAR would blur it.
+                filter: Filter::Nearest,
+            }],
+        )?;
+        let data = scratch.capture(0, 0, w, h)?;
+        Ok(KasaneMapping {
+            data,
+            width: w,
+            height: h,
+        })
+    }
+
+    fn can_read_texture(&mut self, _texture: &Self::TextureId) -> Result<bool, Self::Error> {
+        // Every texture this renderer holds can be sampled, and `copy_texture`
+        // reads by sampling — so the answer is unconditionally yes rather than
+        // a guess about layouts.
+        Ok(true)
+    }
+
+    fn map_texture<'a>(
+        &mut self,
+        texture_mapping: &'a Self::TextureMapping,
+    ) -> Result<&'a [u8], Self::Error> {
+        // The copy already happened; this is the borrow of its result.
+        Ok(&texture_mapping.data)
+    }
+}
+
+// ★ THE TWO WAYLAND MARKER TRAITS, both taking their default bodies.
+//
+// `ImportAll` — which `drm.rs` requires — has a blanket impl for
+// `Renderer + ImportMemWl + ImportEgl + ImportDmaWl`. `ImportEgl` is
+// `#[cfg(feature = "use_system_lib")]` and omoya does not enable it, which is
+// the whole point: EGL is the C surface kasane exists to avoid. So these two
+// are what remains, and their defaults route straight to `import_memory` and
+// `import_dmabuf` above.
+impl smithay::backend::renderer::ImportMemWl for KasaneRenderer {
+    fn import_shm_buffer(
+        &mut self,
+        buffer: &smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer,
+        _surface: Option<&smithay::wayland::compositor::SurfaceData>,
+        _damage: &[Rectangle<i32, BufferCoord>],
+    ) -> Result<Self::TextureId, Self::Error> {
+        use smithay::wayland::shm;
+
+        // ★ DAMAGE IS IGNORED ON IMPORT, deliberately: this call CREATES the
+        // texture, so every pixel is new and there is no undamaged region to
+        // preserve. Damage belongs to `update_memory`, which is the path a
+        // client's subsequent frames take.
+        shm::with_buffer_contents(buffer, |ptr, len, data| {
+            let fourcc = shm::shm_format_to_fourcc(data.format)
+                .ok_or(Error::Unsupported("shm format with no fourcc"))?;
+            if !Self::MEM_FORMATS.contains(&fourcc) {
+                return Err(Error::Unsupported(
+                    "shm format; kasane uploads ARGB8888 and XRGB8888",
+                ));
+            }
+            #[allow(
+                clippy::cast_sign_loss,
+                reason = "wl_shm dimensions and offsets are non-negative by protocol"
+            )]
+            let (offset, stride, width, height) = (
+                data.offset as usize,
+                data.stride as usize,
+                data.width as usize,
+                data.height as usize,
+            );
+            let tight = width * 4;
+            if stride < tight || offset + stride * height > len {
+                // ★ REFUSED, NOT CLAMPED. Reading past the client's mapping is
+                // a disclosure bug, not a rendering one.
+                return Err(Error::Unsupported(
+                    "shm buffer whose stride and offset do not fit its mapping",
+                ));
+            }
+
+            // SAFETY: `with_buffer_contents` guarantees `ptr` is valid for
+            // `len` bytes for the length of this closure, and the bounds check
+            // above keeps every read inside it.
+            let all = unsafe { std::slice::from_raw_parts(ptr, len) };
+
+            // ★ THE FAST PATH IS THE COMMON ONE. Most toolkits allocate
+            // tightly-packed buffers, so the rows are already what the upload
+            // wants and nothing is copied here at all. A padded stride is
+            // repacked row by row — `vkCmdCopyBufferToImage`'s
+            // `bufferRowLength` could do this on the GPU instead, which is the
+            // better answer if a real client ever turns out to pad.
+            let packed: std::borrow::Cow<'_, [u8]> = if stride == tight {
+                std::borrow::Cow::Borrowed(&all[offset..offset + tight * height])
+            } else {
+                let mut v = Vec::with_capacity(tight * height);
+                for row in 0..height {
+                    let start = offset + row * stride;
+                    v.extend_from_slice(&all[start..start + tight]);
+                }
+                std::borrow::Cow::Owned(v)
+            };
+
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "wl_shm dimensions are i32 by protocol and far below u32::MAX"
+            )]
+            let uploaded = self
+                .gpu
+                .upload_texture(width as u32, height as u32, &packed)?;
+            Ok(KasaneTexture {
+                inner: Pixels::Owned(Arc::new(uploaded)),
+            })
+        })
+        .map_err(|_| Error::Unsupported("wl_buffer is not an shm buffer"))?
+    }
+}
+impl smithay::backend::renderer::ImportDmaWl for KasaneRenderer {}
 
 #[cfg(test)]
 mod tests {
@@ -725,6 +1097,33 @@ mod tests {
         fn assert_scanout<F: crate::nuri_renderer::ScanoutFlush>() {}
 
         fn assert_bind<R: smithay::backend::renderer::Bind<Dmabuf>>() {}
+
+        // ★★ THE COMPLETE `drm.rs` BOUND, restated verbatim. This is M2's
+        // done-predicate expressed as a compile-time fact: if
+        // `KasaneRenderer` satisfies this, the seat can be driven by it, and
+        // if it cannot, the error names the missing trait HERE rather than at
+        // the generic instantiation where it names a type parameter.
+        //
+        // Copied rather than referenced because `drm::run` cannot be called
+        // without a real DRM device — the bound is the part that can be
+        // checked without one.
+        fn assert_drm_run_bound<R>()
+        where
+            R: Renderer
+                + smithay::backend::renderer::ImportAll
+                + smithay::backend::renderer::ImportDma
+                + smithay::backend::renderer::ImportMem
+                + smithay::backend::renderer::Bind<Dmabuf>
+                + crate::nuri_renderer::ArmFlush
+                + crate::nuri_renderer::AdvertisesDmabuf
+                + smithay::backend::renderer::ExportMem
+                + 'static,
+            R::TextureId: Clone + Send + Texture + 'static,
+            R::Error: Send + Sync + 'static,
+            for<'fb> R::Framebuffer<'fb>: crate::nuri_renderer::ScanoutFlush,
+        {
+        }
+        assert_drm_run_bound::<KasaneRenderer>();
 
         assert_renderer::<KasaneRenderer>();
         assert_import_dma::<KasaneRenderer>();

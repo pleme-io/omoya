@@ -45,11 +45,36 @@ struct VsOut {
 
 // Corners of a triangle strip, in the order Vulkan issues them for a 4-vertex
 // non-indexed draw: (0,0) (1,0) (0,1) (1,1).
+// ── ★★ THE Y NEGATION IS LOAD-BEARING, AND IT WAS MEASURED ──────────────
+// WGSL's normalised device coordinates put +Y UP, following WebGPU. Vulkan's
+// put +Y DOWN. naga emits the shader as written and does not reconcile the
+// two — wgpu, its usual host, compensates by setting a NEGATIVE-HEIGHT
+// viewport, and kasane does not.
+//
+// So without this negation a rectangle at pixel y=0 is drawn at the BOTTOM of
+// the framebuffer, and every surface on the seat is upside down.
+//
+// ★ IT SURVIVED FOUR TESTS. A full-screen quad looks identical either way; the
+// solid-placement test only varied X; the source-rectangle test only varied
+// `src.x`; and the dmabuf and upload tests used single-colour textures. It was
+// found by a partial texture update landing in the wrong corner, and
+// `a_rect_at_pixel_y_zero_is_drawn_at_the_top_of_the_framebuffer` now pins it
+// directly.
+//
+// ★ ONE NEGATION FIXES BOTH position AND uv, because they share `corner`: the
+// vertex with `v = 0` (the texture's first row) is the one that moves to the
+// top of the screen.
+//
+// The alternative is a negative-height viewport, which is the idiomatic Vulkan
+// fix and what wgpu does. It is rejected here because it is action at a
+// distance — a reader of this shader would have no way to know — and because
+// it also changes how scissor rectangles are interpreted.
 @vertex
 fn vs_quad(@builtin(vertex_index) idx: u32) -> VsOut {
     let corner = vec2<f32>(f32(idx & 1u), f32((idx >> 1u) & 1u));
+    let ndc = params.dst.xy + corner * params.dst.zw;
     var out: VsOut;
-    out.pos = vec4<f32>(params.dst.xy + corner * params.dst.zw, 0.0, 1.0);
+    out.pos = vec4<f32>(ndc.x, -ndc.y, 0.0, 1.0);
     out.uv = params.src.xy + corner * params.src.zw;
     return out;
 }
