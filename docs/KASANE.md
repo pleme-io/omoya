@@ -237,12 +237,37 @@ under lavapipe with the Vulkan validation layer on (23 tests, `--test-threads=1`
 | a render target + submit + fence + readback | shipped |
 | `Draw` as a closed enum (`Solid` today) | shipped |
 | the validation gate — a `VK_EXT_debug_utils` messenger that FAILS the build | shipped |
-| `ImportDma`/`ImportMem`/`Bind<Dmabuf>`/`ExportMem`/`ArmFlush` impls | **not built** |
-| the texture draw (descriptor sets for a client surface) | **not built** |
+| the texture draw — a client dmabuf sampled and composited | shipped |
+| the smithay adapter's SHAPE — `Renderer`/`Frame`/`ImportDma` + the three omoya-local traits | shipped |
+| `Bind<Dmabuf>` — a dmabuf imported as a COLOR_ATTACHMENT | **not built** |
+| `ImportMem` — a staging buffer and a host→device upload | **not built** |
+| `ExportMem` — the readback exists; smithay's `TextureMapping` does not | **not built** |
 | a pipelined command-buffer ring (this waits on a fence per frame) | **not built** |
 
 **First pixel:** opaque red over the left half of a blue clear reads back
 `left=[0,0,255,255] right=[255,0,0,255]` (BGRA) — colour and position.
+
+**First composited client buffer:** a real kernel dmabuf, imported as a sampled
+image and drawn by the fragment shader — `[64, 128, 192, 255]`, the client's own
+pixel. This is the first test in which the GPU *looks at* a client buffer; M0's
+round-trip reads one back with the CPU, which is the very path that put the seat
+on llvmpipe.
+
+★ **The adapter's LIFETIME RISK is retired, which was M2's real design question.**
+smithay's `Frame<'frame, 'buffer>` is a stateful recorder borrowing both the
+renderer and the framebuffer; kasane's `Target::draw` is one-shot. They reconcile
+because the frame ACCUMULATES `Draw`s and `finish()` makes the single call —
+`crates/omoya/src/kasane_renderer.rs` compiling against smithay's own definitions
+is the proof. Everything left in M2 is fill-in-the-body work with no design risk.
+
+★ **`drm.rs` is byte-unchanged**, which is M2's stated done-predicate, and it
+holds by construction: the seam is a generic bound, so satisfying it IS the
+integration.
+
+★ **Nothing constructs a `KasaneRenderer` yet, and that is the type system
+working.** `drm.rs`'s bound demands the three unbuilt impls, so a half-built
+renderer cannot be selected — the alternative compiles, gets chosen, and
+composes a black screen.
 
 ★★ **The validation gate is the load-bearing part, and its justification is a
 measurement.** Two red runs proved a pipeline-creation test blind to a wrong
