@@ -41,6 +41,9 @@ thiserror.workspace = true
 # `default-features = false` so `linked` can never arrive by default on some
 # future version bump, then `loaded` named explicitly.
 [target.'cfg(target_os = "linux")'.dependencies]
+#  on the DRM fd — M4 matches the GPU to the display by device
+# number, and libc is the pure-Rust binding to that one syscall.
+libc = "0.2"
 ash = { version = "0.38", default-features = false, features = ["loaded", "std"] }
 
 [lints.clippy]

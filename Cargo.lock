@@ -1213,6 +1213,7 @@ name = "kasane"
 version = "0.1.99"
 dependencies = [
  "ash",
+ "libc",
  "thiserror 2.0.20",
 ]
 

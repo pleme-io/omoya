@@ -170,6 +170,10 @@ impl Gpu {
             // only importable layout is linear — the CPU-readback path this
             // crate exists to remove.
             ash::ext::image_drm_format_modifier::NAME.as_ptr(),
+            // ★ M4. Reports this device's DRM major:minor, which is how the
+            // GPU that drives the display is identified — by the node the
+            // kernel keyed it on, not by a vendor string.
+            ash::ext::physical_device_drm::NAME.as_ptr(),
         ];
         let dci = vk::DeviceCreateInfo::default()
             .queue_create_infos(&queues)
@@ -783,6 +787,90 @@ impl Gpu {
     }
 }
 
+// ── ★ M4: SELECT THE GPU THAT DRIVES THE DISPLAY ────────────────────────────
+//
+// `Gpu::open` takes the first device that can import a dmabuf, preferring a
+// non-CPU one. On a single-GPU machine that is right by luck. On a machine
+// with two — a laptop with integrated plus discrete, or plo where llvmpipe
+// enumerates alongside the RTX 3070 — "first" is not an answer: compositing
+// must happen on the device that owns the KMS node the seat scans out through,
+// or every frame crosses the PCIe bus twice for no reason.
+//
+// `VK_EXT_physical_device_drm` reports each device's DRM major:minor, which is
+// exactly what `fstat` on the compositor's `DrmDeviceFd` gives. Matching the
+// two is the only way to say "this GPU, the one the display is on" without
+// guessing from a vendor string.
+
+/// A DRM device node, as a major:minor pair.
+///
+/// ★ From `st_rdev`, not from a path. `/dev/dri/card1` is a name that can
+/// change between boots; 226:1 is what the kernel actually keyed it on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DrmNode {
+    pub major: i64,
+    pub minor: i64,
+}
+
+impl DrmNode {
+    /// The node a raw device fd refers to.
+    ///
+    /// # Errors
+    /// Returns `None` if the fd cannot be stat'd — a closed or invalid fd.
+    #[must_use]
+    pub fn of_fd(fd: std::os::fd::RawFd) -> Option<Self> {
+        // SAFETY: `fstat` writes into a fully-owned zeroed struct and reads
+        // only the fd. A bad fd is reported by the return value, not by
+        // undefined behaviour.
+        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        if unsafe { libc::fstat(fd, &raw mut st) } != 0 {
+            return None;
+        }
+        let rdev = st.st_rdev;
+        Some(Self {
+            major: i64::from(libc::major(rdev)),
+            minor: i64::from(libc::minor(rdev)),
+        })
+    }
+}
+
+impl Gpu {
+    /// This device's DRM nodes, if it reports any.
+    ///
+    /// Returns `(primary, render)`. A device with no DRM node — llvmpipe, or a
+    /// GPU with no display attached — reports `None` for both, which is a
+    /// legitimate answer and not an error.
+    #[must_use]
+    pub fn drm_nodes(&self) -> (Option<DrmNode>, Option<DrmNode>) {
+        let mut drm = vk::PhysicalDeviceDrmPropertiesEXT::default();
+        let mut props = vk::PhysicalDeviceProperties2::default().push_next(&mut drm);
+        // SAFETY: live instance and physical device; `props` and the struct it
+        // chains are locals outliving the call.
+        unsafe {
+            self.instance
+                .get_physical_device_properties2(self.physical, &mut props);
+        }
+        let primary = drm.has_primary.eq(&vk::TRUE).then(|| DrmNode {
+            major: drm.primary_major,
+            minor: drm.primary_minor,
+        });
+        let render = drm.has_render.eq(&vk::TRUE).then(|| DrmNode {
+            major: drm.render_major,
+            minor: drm.render_minor,
+        });
+        (primary, render)
+    }
+
+    /// Does this device drive `node`?
+    ///
+    /// Either DRM node counts: a compositor may hold the primary node for KMS
+    /// or the render node for offscreen work, and both name the same GPU.
+    #[must_use]
+    pub fn drives(&self, node: DrmNode) -> bool {
+        let (primary, render) = self.drm_nodes();
+        primary == Some(node) || render == Some(node)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -959,6 +1047,64 @@ mod tests {
             "an unknown modifier was ACCEPTED. The import would sample a \
              layout nobody agreed on, and the result is noise on screen rather \
              than an error anyone can act on."
+        );
+    }
+
+    /// ★ M4: THE DEVICE REPORTS THE DRM NODE IT DRIVES.
+    ///
+    /// On plo that is 226:1 (`/dev/dri/card1`) for the RTX 3070 and nothing at
+    /// all for llvmpipe — software rendering owns no display. This asserts the
+    /// query works and that a hardware GPU names a node; it does NOT assert a
+    /// particular number, which would make it a test of one machine.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn a_hardware_device_names_the_drm_node_it_drives() {
+        let gpu = match Gpu::open() {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!("SKIP: no GPU pipe — {e}");
+                return;
+            }
+        };
+        let (primary, render) = gpu.drm_nodes();
+        eprintln!(
+            "kasane M4: {:?} primary={primary:?} render={render:?}",
+            gpu.device_name
+        );
+
+        if gpu.is_cpu {
+            // llvmpipe drives no display, and saying so is the correct answer
+            // rather than a missing one.
+            assert!(
+                primary.is_none() && render.is_none(),
+                "a software rasteriser claimed a DRM node: {primary:?}/{render:?}"
+            );
+            return;
+        }
+
+        assert!(
+            primary.is_some() || render.is_some(),
+            "a hardware GPU reported no DRM node at all. Without one there is \
+             no way to tell which device drives the display, and compositing \
+             would land on whichever enumerated first."
+        );
+        // ★ AND `drives` AGREES WITH ITSELF — a matcher that disagreed with
+        // the value it matches on would send compositing to the wrong GPU
+        // while reporting the right one.
+        if let Some(n) = primary.or(render) {
+            assert!(
+                gpu.drives(n),
+                "the device does not match its own node {n:?}"
+            );
+        }
+        // A node it does not drive must be refused, or `drives` is a
+        // constant-true that would accept any GPU.
+        assert!(
+            !gpu.drives(DrmNode {
+                major: 226,
+                minor: 999
+            }),
+            "drives() accepted a node this device does not have"
         );
     }
 }

@@ -1339,6 +1339,50 @@ impl ImportMemWl for NuriRenderer {
 /// a renderer with no shadow — one that composites straight into the scanout —
 /// satisfies this by ignoring it rather than by implementing a policy it has no
 /// use for.
+
+/// Whether this renderer can take a client's GPU buffer WITHOUT copying it.
+///
+/// ── ★ M3: A CAPABILITY, NOT AN ENVIRONMENT VARIABLE ──────────────────────
+/// `zwp_linux_dmabuf_v1` used to be advertised only when
+/// `OMOYA_ADVERTISE_DMABUF` was set — a shell variable deciding a protocol
+/// promise. That is the wrong shape twice over.
+///
+/// It is wrong because the answer is a property of the RENDERER, not of the
+/// environment: whether a client's GPU buffer can be taken without copying it
+/// depends entirely on what is compositing. And it is wrong because it hid the
+/// real state of the seat behind something no one thinks to check — measured
+/// on plo, `wayland-info` listed 11 globals with `zwp_linux_dmabuf_v1` absent
+/// and the journal saying WITHHELD, while the investigation spent its time on
+/// modifiers and driver support that were never involved.
+///
+/// The consequence is exact: NVIDIA's Wayland WSI needs this global, so with
+/// it withheld `vulkaninfo` run as a client of the seat lists only llvmpipe
+/// under Presentable Surfaces. Every GPU client on plo renders on the CPU
+/// because of this one boolean.
+///
+/// ★ WITHHOLDING IT IS STILL CORRECT FOR nuri. Its `import_dmabuf` maps the
+/// client buffer and copies it — `gather_us 693 952` against `frame_us 3 825`.
+/// Advertising a capability served that badly is worse than not advertising
+/// it. The point of typing it is that the answer now comes from the thing
+/// that knows, and flips by itself when a renderer that can do it arrives.
+pub trait AdvertisesDmabuf {
+    /// True when a client's dmabuf is textured IN PLACE, with no CPU copy.
+    ///
+    /// ★ REQUIRED, NOT DEFAULTED, for the reason `ArmFlush` learned: a default
+    /// here would silently answer for a renderer nobody asked, and the failure
+    /// — a protocol promise this compositor cannot keep — lands in the CLIENT
+    /// as a black window rather than in us as an error.
+    fn advertises_dmabuf(&self) -> bool;
+}
+
+impl AdvertisesDmabuf for NuriRenderer {
+    fn advertises_dmabuf(&self) -> bool {
+        // nuri MAPS AND COPIES. See the trait docs: this is a measurement of
+        // what nuri does, not a policy that could be flipped by config.
+        false
+    }
+}
+
 pub trait ArmFlush {
     /// Arm the next `bind` with a flush policy and the destination slot's
     /// generation.

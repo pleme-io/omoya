@@ -565,6 +565,9 @@ where
         // a baseline to preserve and would then have taken a full copy per
         // frame with nothing reported.
         + crate::nuri_renderer::ArmFlush
+        // ★ M3. Whether the dmabuf global is advertised is a property of the
+        // renderer, so the loop cannot be driven by one that has no answer.
+        + crate::nuri_renderer::AdvertisesDmabuf
         // ★ `ExportMem` so the seat can be SCREENSHOT. This is a real
         // constraint on what may drive this loop, and it is the right one: a
         // renderer whose output cannot be read back produces a seat that can
@@ -788,7 +791,22 @@ where
     // `pending-omoya-planes` are the rows, and `docs/SMOOTHNESS.md` is the
     // plan. The DmabufState and handler stay wired (MODULARIZE, DON'T
     // DELETE); only the global is withheld.
-    if std::env::var_os("OMOYA_ADVERTISE_DMABUF").is_some() {
+    // ★ M3: THE RENDERER DECIDES, NOT THE ENVIRONMENT.
+    //
+    // This was `if std::env::var_os("OMOYA_ADVERTISE_DMABUF").is_some()` — a
+    // shell variable deciding a protocol promise. Whether a client's GPU
+    // buffer can be taken without copying it is a property of what is
+    // compositing, so it is asked of the renderer.
+    //
+    // The env var survives as an explicit OVERRIDE for deliberately exercising
+    // the withheld path (MODULARIZE, DON'T DELETE), but it is no longer how
+    // the seat decides: with it unset, nuri withholds and a zero-copy renderer
+    // advertises, each because of what it actually does.
+    let renderer_advertises = {
+        use crate::nuri_renderer::AdvertisesDmabuf as _;
+        renderer.advertises_dmabuf()
+    };
+    if renderer_advertises || std::env::var_os("OMOYA_ADVERTISE_DMABUF").is_some() {
         let formats = renderer.dmabuf_formats();
         let count = formats.iter().count();
         let global = data

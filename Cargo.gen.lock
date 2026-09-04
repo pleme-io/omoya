@@ -1,10 +1,10 @@
 {
   "schema_version": 2,
-  "cargo_lock_sha256": "d3d74714b10971449c30a06f407f2f6380baaeb415978ad69abae8d37d449e66",
+  "cargo_lock_sha256": "150e2b517c988e03adfdb4084bcbce706871ac28a809215a29c53a7185424d6c",
   "manifest_sha256": {
     "Cargo.toml": "7124f2085655c8a0a0d00f1e5213fb8284448c035e44592937300b3d19898cb0",
     "crates/hairetsu/Cargo.toml": "67a784b3f0dc716e74f9257bed09bef7c637618269586ecf20b1ff223114b0da",
-    "crates/kasane/Cargo.toml": "8e9b4a6c47173676d9a9558405ec4b1451fdc4a242ea70f0f1fbca356daf12ec",
+    "crates/kasane/Cargo.toml": "a8722afb4145cec28a10b9583835a7f70f1e11699b6e6ddf7c8c6b9a0ce67af6",
     "crates/nuri/Cargo.toml": "3116435ecbd4619097d2879f5a26924834f5550aa4c732e667c3617e28d2865d",
     "crates/omoya-spec/Cargo.toml": "75cd6d31f2ef617df89556610445abab8cf9cddb49d7bbf04c28ac5b7fc89031",
     "crates/omoya/Cargo.toml": "b8595973c6e5988e622ce24636bebb4acedc2f85b2ba5017b0fa1063b9d8a26d",
@@ -7704,6 +7704,16 @@
                 "tree": "target"
               },
               {
+                "name": "libc",
+                "package_key": "libc-0.2.189",
+                "kind": "normal",
+                "features": [],
+                "uses_default_features": true,
+                "optional": false,
+                "target": "cfg(target_os = \"linux\")",
+                "tree": "target"
+              },
+              {
                 "name": "thiserror",
                 "package_key": "thiserror-2.0.20",
                 "kind": "normal",
@@ -8276,6 +8286,16 @@
                   "std"
                 ],
                 "uses_default_features": false,
+                "optional": false,
+                "target": "cfg(target_os = \"linux\")",
+                "tree": "target"
+              },
+              {
+                "name": "libc",
+                "package_key": "libc-0.2.189",
+                "kind": "normal",
+                "features": [],
+                "uses_default_features": true,
                 "optional": false,
                 "target": "cfg(target_os = \"linux\")",
                 "tree": "target"
@@ -9203,6 +9223,16 @@
                 "tree": "target"
               },
               {
+                "name": "libc",
+                "package_key": "libc-0.2.189",
+                "kind": "normal",
+                "features": [],
+                "uses_default_features": true,
+                "optional": false,
+                "target": "cfg(target_os = \"linux\")",
+                "tree": "target"
+              },
+              {
                 "name": "thiserror",
                 "package_key": "thiserror-2.0.20",
                 "kind": "normal",
@@ -9749,6 +9779,16 @@
                   "std"
                 ],
                 "uses_default_features": false,
+                "optional": false,
+                "target": "cfg(target_os = \"linux\")",
+                "tree": "target"
+              },
+              {
+                "name": "libc",
+                "package_key": "libc-0.2.189",
+                "kind": "normal",
+                "features": [],
+                "uses_default_features": true,
                 "optional": false,
                 "target": "cfg(target_os = \"linux\")",
                 "tree": "target"
