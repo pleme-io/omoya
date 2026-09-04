@@ -219,9 +219,25 @@ renderer-gated — so "select a GPU renderer and NVIDIA can present" was false.
 | **M1a** ✅ | tiled dmabuf imported as a SAMPLED image; modifiers queried from the driver | shipped and **verified on plo's RTX 3070**: 7 importable modifiers (6 NVIDIA vendor layouts + LINEAR). ★ The hardware refuted an assumption — the 3070 ACCEPTS `DRM_FORMAT_MOD_INVALID` at `vkCreateImage`, so the refusal had to become ours at the import boundary. llvmpipe would have passed either way. |
 | **M1** | Import a real client dmabuf — tiled, device-local — as a **sampled** `VkImage`, composite from it, never touch it with the CPU | With a GPU client on plo: `gather_us < 5 000` (baseline **693 952**) **and** `Cost::cpu_bytes_per_frame == 0`. Not a pixel. |
 | **M2** | `impl Renderer + Frame + ImportDma + ImportMem + Bind<Dmabuf> + ExportMem + ArmFlush` for `Kasane` | `git show --stat <commit> -- crates/omoya/src/drm.rs` is **empty**. If drm.rs needs editing the seam was wrong. |
-| **M3** | The dmabuf global becomes a typed capability on the renderer bound, not a shell variable | `wayland-info` lists `zwp_linux_dmabuf_v1` under kasane and does **not** under nuri, with `OMOYA_ADVERTISE_DMABUF` unset in both runs. `vulkaninfo` then names the RTX 3070 under Presentable Surfaces. |
-| **M4** | Device selection by DRM node + typed fallback | kasane binds the physical device whose `VkPhysicalDeviceDrmPropertiesEXT` major:minor matches the `DrmDeviceFd`'s `st_rdev` (226:1 / 226:128 on plo). Red run: hide the loader → nuri, fallback proven rather than inferred. |
+| **M3** ✅ | The dmabuf global becomes a typed capability on the renderer bound, not a shell variable | `wayland-info` lists `zwp_linux_dmabuf_v1` under kasane and does **not** under nuri, with `OMOYA_ADVERTISE_DMABUF` unset in both runs. `vulkaninfo` then names the RTX 3070 under Presentable Surfaces. |
+| **M4** ✅ | Device selection by DRM node + typed fallback | kasane binds the physical device whose `VkPhysicalDeviceDrmPropertiesEXT` major:minor matches the `DrmDeviceFd`'s `st_rdev` (226:1 / 226:128 on plo). Red run: hide the loader → nuri, fallback proven rather than inferred. |
 | **M5** | Scanout | page-flip from a GPU-composited buffer; `Cost::is_zero_copy()` true for a client surface. |
+
+★ **Shipped as of 2026-09-04: M0, M1a, M3, M4.** `AdvertisesDmabuf` is on the
+renderer bound and nuri answers `false` because it maps and copies; kasane
+identifies the GPU by DRM node, verified on plo as `primary=226:1
+render=226:128`, matching `/dev/dri/card1` and `renderD128` exactly, with
+llvmpipe correctly reporting none.
+
+★ **M2 and M5 are NOT shipped, and M1's done-predicate is unmeasurable until
+they are.** M2 is the full smithay `Renderer`/`Frame`/`ImportDma`
+implementation — `nuri`, its CPU counterpart, is an entire crate — and M5's
+scanout depends on it. `gather_us < 5000` and `cpu_bytes_per_frame == 0`
+cannot be measured while nothing composites through kasane, so M1 stays
+**M1a: the import half**. Marking it done would be exactly the round-up this
+ledger exists to prevent, and the whole reason the milestones were reordered
+was that the old M0/M1 predicates could go green while the desktop stayed on
+llvmpipe.
 
 ★ **What M0 actually proves, restated honestly.** It proves the external-memory
 machinery works end to end in pure Rust: a real kernel dmabuf fd, a real
