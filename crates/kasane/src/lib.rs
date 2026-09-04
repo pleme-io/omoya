@@ -170,6 +170,19 @@ pub enum KasaneError {
          — this is a capability answer, not a bug"
     )]
     NoMemoryType { wanted: &'static str, mask: u32 },
+    /// A dmabuf arrived describing a layout this device did not offer.
+    ///
+    /// ★ MEASURED, NOT ASSUMED. The RTX 3070 **accepts**
+    /// `DRM_FORMAT_MOD_INVALID` at `vkCreateImage` — the test that expected a
+    /// refusal failed on real hardware. So the driver will not catch an
+    /// exporter/importer disagreement for us; it will sample whatever layout
+    /// it was told and paint structured noise. The check has to be ours, at
+    /// the import boundary, which is the only place that still knows which
+    /// buffer it was.
+    #[error(
+        "modifier {modifier:#x} is not one this device can sample; it offers          {offered:x?}. Importing anyway would read a layout nobody agreed on."
+    )]
+    ModifierNotSupported { modifier: u64, offered: Vec<u64> },
     /// A pixel was asked for outside the buffer.
     #[error("pixel ({x}, {y}) is outside a {width}x{height} buffer")]
     OutOfBounds {
@@ -199,7 +212,18 @@ mod tests {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut offenders = Vec::new();
         let mut scanned = 0usize;
-        let entries = std::fs::read_dir(&dir).expect("read src/");
+        // ★ SKIP OFF-TREE RATHER THAN FAIL. This binary is deliberately run
+        // on plo — the machine with the GPU — where the source it scans does
+        // not exist. A source test that fails for want of source would make
+        // every hardware run report a defect that is not there, and the real
+        // GPU failures would be lost in it.
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            eprintln!(
+                "SKIP: {} is not present — source scan needs the source tree",
+                dir.display()
+            );
+            return;
+        };
         for e in entries.flatten() {
             let path = e.path();
             if path.extension().is_none_or(|x| x != "rs") {
