@@ -216,6 +216,7 @@ renderer-gated — so "select a GPU renderer and NVIDIA can present" was false.
 | | milestone | done-predicate (a MEASUREMENT) |
 |---|---|---|
 | **M0** ✅ | dmabuf round-trips through Vulkan in pure Rust | shipped — but see the note below on what it does and does not prove |
+| **M1a** ✅ | tiled dmabuf imported as a SAMPLED image; modifiers queried from the driver | shipped and **verified on plo's RTX 3070**: 7 importable modifiers (6 NVIDIA vendor layouts + LINEAR). ★ The hardware refuted an assumption — the 3070 ACCEPTS `DRM_FORMAT_MOD_INVALID` at `vkCreateImage`, so the refusal had to become ours at the import boundary. llvmpipe would have passed either way. |
 | **M1** | Import a real client dmabuf — tiled, device-local — as a **sampled** `VkImage`, composite from it, never touch it with the CPU | With a GPU client on plo: `gather_us < 5 000` (baseline **693 952**) **and** `Cost::cpu_bytes_per_frame == 0`. Not a pixel. |
 | **M2** | `impl Renderer + Frame + ImportDma + ImportMem + Bind<Dmabuf> + ExportMem + ArmFlush` for `Kasane` | `git show --stat <commit> -- crates/omoya/src/drm.rs` is **empty**. If drm.rs needs editing the seam was wrong. |
 | **M3** | The dmabuf global becomes a typed capability on the renderer bound, not a shell variable | `wayland-info` lists `zwp_linux_dmabuf_v1` under kasane and does **not** under nuri, with `OMOYA_ADVERTISE_DMABUF` unset in both runs. `vulkaninfo` then names the RTX 3070 under Presentable Surfaces. |
