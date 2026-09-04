@@ -46,5 +46,15 @@ thiserror.workspace = true
 libc = "0.2"
 ash = { version = "0.38", default-features = false, features = ["loaded", "std"] }
 
+# ★ BUILD-TIME ONLY — see `build.rs`'s header. naga compiles the compositor's
+# WGSL to SPIR-V during the build and is absent from the shipped binary, so
+# this buys a pure-Rust shader toolchain at zero runtime cost. The alternative
+# (`shaderc-sys` / glslang) is the C linkage this crate exists to refuse.
+#
+# 25.x is the version wgpu 25 pins, which garasu and engawa already build —
+# so this is a version the fleet resolves anyway rather than a new one.
+[build-dependencies]
+naga = { version = "25", default-features = false, features = ["wgsl-in", "spv-out"] }
+
 [lints.clippy]
 pedantic = "warn"

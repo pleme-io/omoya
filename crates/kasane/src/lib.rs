@@ -65,6 +65,45 @@
 #[allow(unsafe_code)] // THE seam. The only `#[allow(unsafe_code)]` in the crate.
 pub mod vk;
 
+/// The compositor's shader module, compiled from WGSL at build time.
+///
+/// ── ★ WHERE THIS COMES FROM ──────────────────────────────────────────────
+/// `build.rs` runs `naga` over `shaders/composite.wgsl` and writes the SPIR-V
+/// here. naga is pure Rust and a BUILD dependency only, so the seat ships no
+/// shader compiler and links no C — see `build.rs`'s header for why every
+/// ordinary route to SPIR-V (shaderc, glslang) is a C library this crate
+/// refuses.
+///
+/// `OUT_DIR` is used rather than a path under the manifest because
+/// substrate's crate2nix builds set `CARGO_MANIFEST_DIR` to the WORKSPACE
+/// ROOT; `OUT_DIR` is correct under every builder.
+///
+/// ── ★ WHY THIS IS AT THE CRATE ROOT AND NOT IN `vk` ──────────────────────
+/// `mod vk` is `#[cfg(target_os = "linux")]`, and a constant placed there is
+/// invisible everywhere else — including on the darwin workstation where most
+/// of this crate is actually edited. The bytes are not part of the unsafe
+/// seam: `build.rs` produces them on every platform and only
+/// `vkCreateShaderModule` needs a driver. Keeping them here is what lets the
+/// header gate below run where no GPU exists, which is the only place it adds
+/// anything.
+pub(crate) const COMPOSITE_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/composite.spv"));
+
+/// The entry point names inside [`COMPOSITE_SPV`], as the pipeline asks for them.
+///
+/// ★ These are `\0`-terminated because `VkPipelineShaderStageCreateInfo.pName`
+/// is a C string and Vulkan reads past the Rust length. Writing them with the
+/// terminator in the literal makes that impossible to forget at the call site,
+/// where the mistake would be a driver reading arbitrary bytes rather than a
+/// compile error.
+pub(crate) mod entry {
+    /// The shared vertex stage: builds a quad from `vertex_index`.
+    pub const VERTEX: &[u8] = b"vs_quad\0";
+    /// Samples a client surface, premultiplied.
+    pub const FRAGMENT_TEXTURE: &[u8] = b"fs_texture\0";
+    /// Fills a rectangle with a premultiplied colour.
+    pub const FRAGMENT_SOLID: &[u8] = b"fs_solid\0";
+}
+
 use std::fmt;
 
 /// Why the GPU pipe is not available.
@@ -415,5 +454,92 @@ mod tests {
         assert!(none.contains('0'), "{none}");
         assert!(some.contains('4'), "{some}");
         assert_ne!(none, some);
+    }
+    /// ★ THE SPIR-V IS REAL, checked without a GPU.
+    ///
+    /// `build.rs` could write an empty file, or a file in the wrong byte
+    /// order, and every GPU test would then skip on a machine with no loader
+    /// and report green. This reads the blob's own header, so it fails on
+    /// CI, on darwin, and anywhere else — the half of the shader path that
+    /// does not need a driver is checked where a driver is not available.
+    #[test]
+    fn the_compiled_shader_is_a_spirv_module_with_the_three_entry_points() {
+        assert!(
+            COMPOSITE_SPV.len() >= 20 && COMPOSITE_SPV.len() % 4 == 0,
+            "SPIR-V is a stream of 32-bit words with a 5-word header; got {} bytes",
+            COMPOSITE_SPV.len()
+        );
+
+        let word = |i: usize| {
+            u32::from_le_bytes([
+                COMPOSITE_SPV[i * 4],
+                COMPOSITE_SPV[i * 4 + 1],
+                COMPOSITE_SPV[i * 4 + 2],
+                COMPOSITE_SPV[i * 4 + 3],
+            ])
+        };
+
+        // The magic number is also the ENDIANNESS check: a big-endian file
+        // reads as 0x03022307 here, and a driver handed one rejects the whole
+        // module for a reason that looks nothing like byte order.
+        assert_eq!(
+            word(0),
+            0x0723_0203,
+            "not SPIR-V, or written big-endian (0x03022307 is the byte-swapped magic)"
+        );
+
+        // ★ THE ENTRY POINTS ARE THE PART THAT CAN SILENTLY DRIFT. Renaming a
+        // function in the WGSL still compiles and still emits a valid module;
+        // the failure lands much later, at pipeline creation, as a driver
+        // error naming a string. Tying the names here means a rename is
+        // caught in the crate that depends on them.
+        let names = spirv_entry_point_names(COMPOSITE_SPV);
+        for expected in [
+            entry::VERTEX,
+            entry::FRAGMENT_TEXTURE,
+            entry::FRAGMENT_SOLID,
+        ] {
+            // The constants carry their NUL because Vulkan needs it; the
+            // SPIR-V name does not, so compare the Rust-visible part.
+            let want = std::str::from_utf8(&expected[..expected.len() - 1]).unwrap();
+            assert!(
+                names.iter().any(|n| n == want),
+                "composite.wgsl no longer exports `{want}` — found {names:?}"
+            );
+        }
+    }
+
+    /// Walk a SPIR-V module's instruction stream and collect `OpEntryPoint`
+    /// names. Small enough to be worth having in-tree rather than taking a
+    /// SPIR-V parsing dependency for one assertion.
+    fn spirv_entry_point_names(blob: &[u8]) -> Vec<String> {
+        const OP_ENTRY_POINT: u32 = 15;
+        let words: Vec<u32> = blob
+            .chunks_exact(4)
+            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
+        let mut names = Vec::new();
+        // Word 5 is the first instruction; 0..4 are the header.
+        let mut i = 5;
+        while i < words.len() {
+            let len = (words[i] >> 16) as usize;
+            let op = words[i] & 0xffff;
+            if len == 0 {
+                break; // malformed; the header test above is the real guard
+            }
+            if op == OP_ENTRY_POINT && i + 3 < words.len() {
+                // Layout: [op] [execution model] [entry id] [name...]
+                let bytes: Vec<u8> = words[i + 3..(i + len).min(words.len())]
+                    .iter()
+                    .flat_map(|w| w.to_le_bytes())
+                    .collect();
+                let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+                if let Ok(s) = std::str::from_utf8(&bytes[..end]) {
+                    names.push(s.to_owned());
+                }
+            }
+            i += len;
+        }
+        names
     }
 }

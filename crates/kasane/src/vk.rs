@@ -532,6 +532,68 @@ impl Gpu {
     }
 }
 
+impl Gpu {
+    /// Create the compositor's shader module on this device.
+    ///
+    /// One module holds all three entry points, so a pipeline names the stage
+    /// it wants rather than each stage owning a module. The caller destroys it
+    /// with [`Gpu::destroy_shader_module`] — the pipelines that reference it
+    /// keep working after it is gone, which is why it is not held on `Gpu`.
+    ///
+    /// # Errors
+    /// [`Unavailable::Device`] if the driver refuses the module. In practice
+    /// that means the SPIR-V is malformed, which `build.rs`'s validation pass
+    /// is there to make impossible before this is ever reached.
+    pub(crate) fn shader_module(&self) -> Result<vk::ShaderModule, Unavailable> {
+        // Vulkan takes SPIR-V as 32-bit words, and the pointer must be
+        // 4-byte aligned. `include_bytes!` gives a `&[u8]` with only 1-byte
+        // guaranteed alignment, so the bytes are copied into a `Vec<u32>`
+        // rather than transmuted — a misaligned read here is UB that happens
+        // to work on x86 and faults elsewhere.
+        // ★ NOT REDUNDANT WITH `chunks_exact`. `chunks_exact(4)` SILENTLY
+        // DISCARDS a trailing partial chunk, so a blob of 2814 bytes would
+        // become 703 whole words and reach the driver as a complete module —
+        // which either fails much later with a message about the shader body,
+        // or is accepted and renders wrong. The refusal has to happen here,
+        // while the length is still known.
+        //
+        // The message names OUR blob rather than the driver, because the
+        // `Driver` arm otherwise reads as a hardware problem and sends the
+        // reader to the wrong machine.
+        if crate::COMPOSITE_SPV.len() % 4 != 0 {
+            return Err(Unavailable::Driver(format!(
+                "the compiled shader is {} bytes, not a whole number of 32-bit \
+                 SPIR-V words — build.rs emitted a short blob; this is not a \
+                 driver fault",
+                crate::COMPOSITE_SPV.len()
+            )));
+        }
+        let words: Vec<u32> = crate::COMPOSITE_SPV
+            .chunks_exact(4)
+            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
+
+        let info = vk::ShaderModuleCreateInfo::default().code(&words);
+        // SAFETY: `words` outlives the call, its length is a whole number of
+        // words, and `info` borrows it for exactly that scope.
+        unsafe { self.device.create_shader_module(&info, None) }.map_err(|e| {
+            Unavailable::Driver(format!(
+                "vkCreateShaderModule refused the compositor shader: {e:?}"
+            ))
+        })
+    }
+
+    /// Destroy a module created by [`Gpu::shader_module`].
+    ///
+    /// # Safety
+    /// The module must have come from this device and must not be destroyed
+    /// twice. Pipelines created from it stay valid — Vulkan copies what it
+    /// needs at pipeline-creation time.
+    pub(crate) unsafe fn destroy_shader_module(&self, module: vk::ShaderModule) {
+        unsafe { self.device.destroy_shader_module(module, None) }
+    }
+}
+
 impl Drop for Gpu {
     fn drop(&mut self) {
         // SAFETY: every child object is owned by an `Exported`/`Imported` whose
@@ -1291,5 +1353,37 @@ mod tests {
             vk::CommandPool::null(),
             "no command pool — nothing can be recorded, so no frame can be drawn"
         );
+    }
+
+    /// ★ A DRIVER ACCEPTS IT — the half the header test cannot answer.
+    ///
+    /// A structurally valid module can still be refused: an unsupported
+    /// capability, a SPIR-V version above what the driver implements, a
+    /// malformed body past the header. `vkCreateShaderModule` is where that
+    /// verdict comes from, and nothing before this line asks for it.
+    #[test]
+    fn the_driver_accepts_the_compiled_shader_module() {
+        let gpu = match Gpu::open() {
+            Ok(g) => g,
+            Err(e) => {
+                skip_or_panic("shader module", &e);
+                return;
+            }
+        };
+        let module = gpu
+            .shader_module()
+            .expect("the driver refused a module build.rs already validated");
+        assert_ne!(
+            module,
+            vk::ShaderModule::null(),
+            "a null handle reported as success"
+        );
+        eprintln!(
+            "kasane S2a: {:?} accepted {} bytes of SPIR-V",
+            gpu.device_name,
+            crate::COMPOSITE_SPV.len()
+        );
+        // SAFETY: created by this device on the line above, destroyed once.
+        unsafe { gpu.destroy_shader_module(module) };
     }
 }

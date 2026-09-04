@@ -1,10 +1,10 @@
 {
   "schema_version": 2,
-  "cargo_lock_sha256": "a09906ffb639dca5af049d4d567b83a689df3f4aaad0ef817836eaf652b00739",
+  "cargo_lock_sha256": "547c8d6552c035ea090d9a2272472e2bd4899514ba5c862407bd65a28e6cbb78",
   "manifest_sha256": {
     "Cargo.toml": "5963af47f38bff290a29b054a4901f2f43266669d89d8f0c6147965a9528f55e",
     "crates/hairetsu/Cargo.toml": "67a784b3f0dc716e74f9257bed09bef7c637618269586ecf20b1ff223114b0da",
-    "crates/kasane/Cargo.toml": "a8722afb4145cec28a10b9583835a7f70f1e11699b6e6ddf7c8c6b9a0ce67af6",
+    "crates/kasane/Cargo.toml": "369669a052055aaa3c836309e6f1cb667e7740f7e74e84b96a9d4dd64dc8ddff",
     "crates/nuri/Cargo.toml": "3116435ecbd4619097d2879f5a26924834f5550aa4c732e667c3617e28d2865d",
     "crates/omoya-spec/Cargo.toml": "75cd6d31f2ef617df89556610445abab8cf9cddb49d7bbf04c28ac5b7fc89031",
     "crates/omoya/Cargo.toml": "b8595973c6e5988e622ce24636bebb4acedc2f85b2ba5017b0fa1063b9d8a26d",
@@ -262,6 +262,27 @@
           "default",
           "std"
         ]
+      },
+      "bit-set-0.8.0": {
+        "runtime_dependencies": [
+          {
+            "name": "bit_vec",
+            "package_key": "bit-vec-0.8.0",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": false,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": []
+      },
+      "bit-vec-0.8.0": {
+        "runtime_dependencies": [],
+        "build_dependencies": [],
+        "features": []
       },
       "bitflags-2.13.1": {
         "runtime_dependencies": [],
@@ -576,6 +597,35 @@
           "wasmbind",
           "winapi",
           "windows-link"
+        ]
+      },
+      "codespan-reporting-0.12.0": {
+        "runtime_dependencies": [
+          {
+            "name": "termcolor",
+            "package_key": "termcolor-1.4.1",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": true,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "unicode_width",
+            "package_key": "unicode-width-0.2.2",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": [
+          "std",
+          "termcolor"
         ]
       },
       "constant_time_eq-0.4.2": {
@@ -2108,6 +2158,49 @@
         "build_dependencies": [],
         "features": []
       },
+      "half-2.7.1": {
+        "runtime_dependencies": [
+          {
+            "name": "cfg_if",
+            "package_key": "cfg-if-1.0.4",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "num_traits",
+            "package_key": "num-traits-0.2.19",
+            "kind": "normal",
+            "features": [
+              "libm"
+            ],
+            "uses_default_features": false,
+            "optional": true,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "zerocopy",
+            "package_key": "zerocopy-0.8.56",
+            "kind": "normal",
+            "features": [
+              "derive",
+              "simd"
+            ],
+            "uses_default_features": false,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": [
+          "num-traits"
+        ]
+      },
       "hashbrown-0.15.5": {
         "runtime_dependencies": [
           {
@@ -2158,6 +2251,11 @@
         "build_dependencies": [],
         "features": []
       },
+      "heck-0.5.0": {
+        "runtime_dependencies": [],
+        "build_dependencies": [],
+        "features": []
+      },
       "hex-0.4.3": {
         "runtime_dependencies": [],
         "build_dependencies": [],
@@ -2166,6 +2264,11 @@
           "default",
           "std"
         ]
+      },
+      "hexf-parse-0.2.1": {
+        "runtime_dependencies": [],
+        "build_dependencies": [],
+        "features": []
       },
       "ident_case-1.0.1": {
         "runtime_dependencies": [],
@@ -2562,6 +2665,200 @@
           "os-poll"
         ]
       },
+      "naga-25.0.1": {
+        "runtime_dependencies": [
+          {
+            "name": "arrayvec",
+            "package_key": "arrayvec-0.7.8",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": false,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "bit_set",
+            "package_key": "bit-set-0.8.0",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": false,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "bitflags",
+            "package_key": "bitflags-2.13.1",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "codespan_reporting",
+            "package_key": "codespan-reporting-0.12.0",
+            "kind": "normal",
+            "features": [
+              "std",
+              "termcolor"
+            ],
+            "uses_default_features": false,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "half",
+            "package_key": "half-2.7.1",
+            "kind": "normal",
+            "features": [
+              "num-traits"
+            ],
+            "uses_default_features": false,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "hashbrown",
+            "package_key": "hashbrown-0.15.5",
+            "kind": "normal",
+            "features": [
+              "default-hasher",
+              "inline-more"
+            ],
+            "uses_default_features": false,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "hexf_parse",
+            "package_key": "hexf-parse-0.2.1",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": true,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "indexmap",
+            "package_key": "indexmap-2.14.0",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": false,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "log",
+            "package_key": "log-0.4.33",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "num_traits",
+            "package_key": "num-traits-0.2.19",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": false,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "once_cell",
+            "package_key": "once_cell-1.21.4",
+            "kind": "normal",
+            "features": [
+              "alloc",
+              "race"
+            ],
+            "uses_default_features": false,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "rustc_hash",
+            "package_key": "rustc-hash-1.1.0",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": false,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "spirv",
+            "package_key": "spirv-0.3.0+sdk-1.3.268.0",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": true,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "strum",
+            "package_key": "strum-0.26.3",
+            "kind": "normal",
+            "features": [
+              "derive"
+            ],
+            "uses_default_features": false,
+            "optional": true,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "thiserror",
+            "package_key": "thiserror-2.0.20",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": false,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "unicode_ident",
+            "package_key": "unicode-ident-1.0.24",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": true,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [
+          {
+            "name": "cfg_aliases",
+            "package_key": "cfg_aliases-0.2.2",
+            "kind": "build",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "host"
+          }
+        ],
+        "features": [
+          "compact",
+          "spv-out",
+          "wgsl-in"
+        ]
+      },
       "nix-0.29.0": {
         "runtime_dependencies": [
           {
@@ -2641,7 +2938,18 @@
         ]
       },
       "num-traits-0.2.19": {
-        "runtime_dependencies": [],
+        "runtime_dependencies": [
+          {
+            "name": "libm",
+            "package_key": "libm-0.2.16",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": true,
+            "target": null,
+            "tree": "target"
+          }
+        ],
         "build_dependencies": [
           {
             "name": "autocfg",
@@ -2656,6 +2964,7 @@
         ],
         "features": [
           "default",
+          "libm",
           "std"
         ]
       },
@@ -3776,6 +4085,11 @@
         "build_dependencies": [],
         "features": []
       },
+      "rustc-hash-1.1.0": {
+        "runtime_dependencies": [],
+        "build_dependencies": [],
+        "features": []
+      },
       "rustversion-1.0.23": {
         "runtime_dependencies": [],
         "build_dependencies": [],
@@ -4784,8 +5098,102 @@
           "all"
         ]
       },
+      "spirv-0.3.0+sdk-1.3.268.0": {
+        "runtime_dependencies": [
+          {
+            "name": "bitflags",
+            "package_key": "bitflags-2.13.1",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": []
+      },
       "strsim-0.11.1": {
         "runtime_dependencies": [],
+        "build_dependencies": [],
+        "features": []
+      },
+      "strum-0.26.3": {
+        "runtime_dependencies": [
+          {
+            "name": "strum_macros",
+            "package_key": "strum_macros-0.26.4",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": true,
+            "target": null,
+            "tree": "host"
+          }
+        ],
+        "build_dependencies": [],
+        "features": [
+          "derive",
+          "strum_macros"
+        ]
+      },
+      "strum_macros-0.26.4": {
+        "runtime_dependencies": [
+          {
+            "name": "heck",
+            "package_key": "heck-0.5.0",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "proc_macro2",
+            "package_key": "proc-macro2-1.0.107",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "quote",
+            "package_key": "quote-1.0.47",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "rustversion",
+            "package_key": "rustversion-1.0.23",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "host"
+          },
+          {
+            "name": "syn",
+            "package_key": "syn-2.0.119",
+            "kind": "normal",
+            "features": [
+              "extra-traits",
+              "parsing"
+            ],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          }
+        ],
         "build_dependencies": [],
         "features": []
       },
@@ -6008,6 +6416,14 @@
         "build_dependencies": [],
         "features": []
       },
+      "unicode-width-0.2.2": {
+        "runtime_dependencies": [],
+        "build_dependencies": [],
+        "features": [
+          "cjk",
+          "default"
+        ]
+      },
       "unsafe-libyaml-0.2.11": {
         "runtime_dependencies": [],
         "build_dependencies": [],
@@ -6871,11 +7287,72 @@
         ]
       },
       "zerocopy-0.8.56": {
-        "runtime_dependencies": [],
+        "runtime_dependencies": [
+          {
+            "name": "zerocopy_derive",
+            "package_key": "zerocopy-derive-0.8.56",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": true,
+            "target": null,
+            "tree": "host"
+          },
+          {
+            "name": "zerocopy_derive",
+            "package_key": "zerocopy-derive-0.8.56",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": "cfg(any())",
+            "tree": "host"
+          }
+        ],
         "build_dependencies": [],
         "features": [
-          "simd"
+          "derive",
+          "simd",
+          "zerocopy-derive"
         ]
+      },
+      "zerocopy-derive-0.8.56": {
+        "runtime_dependencies": [
+          {
+            "name": "proc_macro2",
+            "package_key": "proc-macro2-1.0.107",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "quote",
+            "package_key": "quote-1.0.47",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "syn",
+            "package_key": "syn-2.0.119",
+            "kind": "normal",
+            "features": [
+              "full"
+            ],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": []
       },
       "zmij-1.0.23": {
         "runtime_dependencies": [],
@@ -7264,7 +7741,21 @@
                 "tree": "target"
               }
             ],
-            "build_dependencies": [],
+            "build_dependencies": [
+              {
+                "name": "naga",
+                "package_key": "naga-25.0.1",
+                "kind": "build",
+                "features": [
+                  "spv-out",
+                  "wgsl-in"
+                ],
+                "uses_default_features": false,
+                "optional": false,
+                "target": null,
+                "tree": "host"
+              }
+            ],
             "features": []
           },
           "notify-8.2.0": {
@@ -7724,7 +8215,21 @@
                 "tree": "target"
               }
             ],
-            "build_dependencies": [],
+            "build_dependencies": [
+              {
+                "name": "naga",
+                "package_key": "naga-25.0.1",
+                "kind": "build",
+                "features": [
+                  "spv-out",
+                  "wgsl-in"
+                ],
+                "uses_default_features": false,
+                "optional": false,
+                "target": null,
+                "tree": "host"
+              }
+            ],
             "features": []
           },
           "libloading-0.8.9": {
@@ -8311,7 +8816,21 @@
                 "tree": "target"
               }
             ],
-            "build_dependencies": [],
+            "build_dependencies": [
+              {
+                "name": "naga",
+                "package_key": "naga-25.0.1",
+                "kind": "build",
+                "features": [
+                  "spv-out",
+                  "wgsl-in"
+                ],
+                "uses_default_features": false,
+                "optional": false,
+                "target": null,
+                "tree": "host"
+              }
+            ],
             "features": []
           },
           "libloading-0.8.9": {
@@ -8809,7 +9328,21 @@
                 "tree": "target"
               }
             ],
-            "build_dependencies": [],
+            "build_dependencies": [
+              {
+                "name": "naga",
+                "package_key": "naga-25.0.1",
+                "kind": "build",
+                "features": [
+                  "spv-out",
+                  "wgsl-in"
+                ],
+                "uses_default_features": false,
+                "optional": false,
+                "target": null,
+                "tree": "host"
+              }
+            ],
             "features": []
           },
           "notify-8.2.0": {
@@ -9243,7 +9776,21 @@
                 "tree": "target"
               }
             ],
-            "build_dependencies": [],
+            "build_dependencies": [
+              {
+                "name": "naga",
+                "package_key": "naga-25.0.1",
+                "kind": "build",
+                "features": [
+                  "spv-out",
+                  "wgsl-in"
+                ],
+                "uses_default_features": false,
+                "optional": false,
+                "target": null,
+                "tree": "host"
+              }
+            ],
             "features": []
           },
           "libloading-0.8.9": {
@@ -9804,7 +10351,21 @@
                 "tree": "target"
               }
             ],
-            "build_dependencies": [],
+            "build_dependencies": [
+              {
+                "name": "naga",
+                "package_key": "naga-25.0.1",
+                "kind": "build",
+                "features": [
+                  "spv-out",
+                  "wgsl-in"
+                ],
+                "uses_default_features": false,
+                "optional": false,
+                "target": null,
+                "tree": "host"
+              }
+            ],
             "features": []
           },
           "libloading-0.8.9": {
@@ -10205,6 +10766,12 @@
     "base64-0.22.1": {
       "edition": "2018"
     },
+    "bit-set-0.8.0": {
+      "edition": "2015"
+    },
+    "bit-vec-0.8.0": {
+      "edition": "2015"
+    },
     "bitflags-2.13.1": {
       "edition": "2021"
     },
@@ -10245,6 +10812,9 @@
       "build_script": "build.rs"
     },
     "chrono-0.4.45": {
+      "edition": "2021"
+    },
+    "codespan-reporting-0.12.0": {
       "edition": "2021"
     },
     "constant_time_eq-0.4.2": {
@@ -10411,13 +10981,22 @@
         "path": "src/lib.rs"
       }
     },
+    "half-2.7.1": {
+      "edition": "2021"
+    },
     "hashbrown-0.15.5": {
       "edition": "2021"
     },
     "hashbrown-0.17.1": {
       "edition": "2024"
     },
+    "heck-0.5.0": {
+      "edition": "2021"
+    },
     "hex-0.4.3": {
+      "edition": "2018"
+    },
+    "hexf-parse-0.2.1": {
       "edition": "2018"
     },
     "iana-time-zone-0.1.65": {
@@ -10463,6 +11042,7 @@
     },
     "kasane-0.1.101": {
       "edition": "2024",
+      "build_script": "build.rs",
       "lib_target": {
         "name": "kasane",
         "path": "src/lib.rs"
@@ -10508,6 +11088,10 @@
     },
     "mio-1.2.2": {
       "edition": "2021"
+    },
+    "naga-25.0.1": {
+      "edition": "2021",
+      "build_script": "build.rs"
     },
     "nix-0.29.0": {
       "edition": "2021",
@@ -10644,6 +11228,9 @@
       "edition": "2024",
       "proc_macro": true
     },
+    "rustc-hash-1.1.0": {
+      "edition": "2015"
+    },
     "rustix-0.38.44": {
       "edition": "2021",
       "build_script": "build.rs"
@@ -10734,8 +11321,22 @@
     "socket2-0.6.5": {
       "edition": "2021"
     },
+    "spirv-0.3.0+sdk-1.3.268.0": {
+      "edition": "2018",
+      "lib_target": {
+        "name": "spirv",
+        "path": "lib.rs"
+      }
+    },
     "strsim-0.11.1": {
       "edition": "2015"
+    },
+    "strum-0.26.3": {
+      "edition": "2018"
+    },
+    "strum_macros-0.26.4": {
+      "edition": "2018",
+      "proc_macro": true
     },
     "syn-2.0.119": {
       "edition": "2021"
@@ -10836,6 +11437,9 @@
     "unicode-ident-1.0.24": {
       "edition": "2021"
     },
+    "unicode-width-0.2.2": {
+      "edition": "2021"
+    },
     "unsafe-libyaml-0.2.11": {
       "edition": "2021",
       "binaries": [
@@ -10920,6 +11524,10 @@
     "zerocopy-0.8.56": {
       "edition": "2021",
       "build_script": "build.rs"
+    },
+    "zerocopy-derive-0.8.56": {
+      "edition": "2021",
+      "proc_macro": true
     },
     "zmij-1.0.23": {
       "edition": "2021",
