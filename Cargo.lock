@@ -1786,6 +1786,7 @@ dependencies = [
  "irodori 0.2.0",
  "ishou-tokens",
  "kanshou",
+ "kasane",
  "kukaku",
  "libc",
  "mekuri",

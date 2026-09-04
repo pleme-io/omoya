@@ -33,6 +33,7 @@ mod layout;
 mod localtime;
 mod logind;
 mod mcp;
+mod kasane_renderer;
 mod nuri_renderer;
 mod owed;
 mod placement;

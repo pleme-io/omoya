@@ -51,7 +51,12 @@ use std::os::fd::{FromRawFd, IntoRawFd, OwnedFd};
 /// `B8G8R8A8_UNORM` matches DRM's `ARGB8888`, which is little-endian B,G,R,A in
 /// memory — the same convention `nuri` blits and the bar rasterises. Choosing a
 /// different one here would make the two pipes disagree about what a pixel is.
-const FORMAT: vk::Format = vk::Format::B8G8R8A8_UNORM;
+/// The one pixel format kasane handles.
+///
+/// `B8G8R8A8_UNORM` is what DRM calls `ARGB8888` — the format every Wayland
+/// client and every scanout buffer on this fleet uses. Public so a consumer
+/// can compile its pipelines against the same one rather than restating it.
+pub const FORMAT: vk::Format = vk::Format::B8G8R8A8_UNORM;
 
 /// The handle type. dmabuf, always — this crate has no other reason to exist.
 const HANDLE: vk::ExternalMemoryHandleTypeFlags = vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT;

@@ -122,6 +122,10 @@ evdev = "0.13"
 libc = "0.2"
 # The pleme-io software rasterizer — zero dependencies, replaces libpixman.
 nuri = { path = "../nuri", version = "0.1.0" }
+# The GPU pipe. Its smithay adapter is `src/kasane_renderer.rs`, here rather
+# than in kasane for the same reason nuri's adapter is here — see that file's
+# header. kasane itself depends only on ash, libc and thiserror.
+kasane = { path = "../kasane" }
 thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

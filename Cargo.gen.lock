@@ -1,13 +1,13 @@
 {
   "schema_version": 2,
-  "cargo_lock_sha256": "5f7256cff92a8cabe3296318fb3c31460bdda9c0255725167ea3b3cc84549016",
+  "cargo_lock_sha256": "050ad396668186e23880a5d2e20a34ac302b5c4f52ba97afe48c70620f5ddfcc",
   "manifest_sha256": {
     "Cargo.toml": "7a5a86c332a29868f17be7598d3e428b8db5af1803f95c2f05e829f2e4c461ad",
     "crates/hairetsu/Cargo.toml": "67a784b3f0dc716e74f9257bed09bef7c637618269586ecf20b1ff223114b0da",
     "crates/kasane/Cargo.toml": "369669a052055aaa3c836309e6f1cb667e7740f7e74e84b96a9d4dd64dc8ddff",
     "crates/nuri/Cargo.toml": "3116435ecbd4619097d2879f5a26924834f5550aa4c732e667c3617e28d2865d",
     "crates/omoya-spec/Cargo.toml": "75cd6d31f2ef617df89556610445abab8cf9cddb49d7bbf04c28ac5b7fc89031",
-    "crates/omoya/Cargo.toml": "b8595973c6e5988e622ce24636bebb4acedc2f85b2ba5017b0fa1063b9d8a26d",
+    "crates/omoya/Cargo.toml": "bbe50d0bd4c0284d8528dfb8c39b671f83ea73d22252c79dc0cc52ad35c42034",
     "crates/xkbcommon-hairetsu/Cargo.toml": "47e976fa1c8c185b17a5c2ced9fcec14a3fa5521a7bc9c046f3d23cf94af19b2"
   },
   "target_resolves": {
@@ -3054,6 +3054,16 @@
           {
             "name": "kanshou",
             "package_key": "kanshou-0.1.6",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "kasane",
+            "package_key": "kasane-0.1.103",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
