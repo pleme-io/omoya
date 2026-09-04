@@ -220,11 +220,85 @@ pub fn titlebar_colour() -> irodori::Color {
 /// [`titlebar_colour`] for why this is separate from the `*_for_surface` form.
 #[must_use]
 pub fn chrome_button_colour(which: crate::chrome::Hit) -> irodori::Color {
-    match which {
+    chrome_button_colour_hovered(which, false)
+}
+
+/// A chrome button's colour, brightened while the pointer is over it.
+///
+/// ── ★ WHY HOVER IS NOT DECORATION ────────────────────────────────────────
+/// Hover is the cheapest possible proof to a person that a control is REAL.
+/// When the titlebar buttons were unreachable (`input.rs`'s guard bug), the
+/// operator's report was "the buttons do nothing" — and the reason it read
+/// that way rather than as "my click missed" is that nothing on screen ever
+/// acknowledged the pointer. A dead-looking control and a control that is
+/// dead are indistinguishable without feedback, so the absence of hover was
+/// the second half of that bug's cost.
+///
+/// Brightened rather than recoloured: the three buttons carry MEANING in
+/// their hues (close is aurora red, minimise amber, maximise green), and
+/// swapping a hue on hover would say "this is a different button now".
+#[must_use]
+pub fn chrome_button_colour_hovered(which: crate::chrome::Hit, hovered: bool) -> irodori::Color {
+    let base = match which {
         crate::chrome::Hit::Close => NORD.aurora[0],
         crate::chrome::Hit::Minimize => NORD.aurora[2],
         crate::chrome::Hit::Maximize => NORD.aurora[3],
         crate::chrome::Hit::Drag => NORD.polar_night[2],
+    };
+    if hovered { brighten(base) } else { base }
+}
+
+/// Lift a colour toward white by a fixed fraction.
+///
+/// A multiplicative lift rather than an additive one, so a dark colour moves
+/// as much as a light one in perceived terms and a nearly-white colour cannot
+/// overflow into a different hue.
+fn brighten(c: irodori::Color) -> irodori::Color {
+    const LIFT: f32 = 0.28;
+    // `v + (255 - v) * LIFT` is bounded by 255 for every `v`, so this needs
+    // no clamp and cannot wrap — the naive `v + K` turns a bright close-red
+    // into a dark one, which reads as the button changing meaning.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let up = |v: u8| -> u8 { v.saturating_add(((255.0 - f32::from(v)) * LIFT) as u8) };
+    irodori::Color::new(up(c.r), up(c.g), up(c.b))
+}
+
+#[cfg(test)]
+mod hover_tests {
+    /// ★ HOVER BRIGHTENS AND NEVER WRAPS.
+    #[test]
+    fn hover_lifts_every_channel_without_wrapping() {
+        for which in [
+            crate::chrome::Hit::Close,
+            crate::chrome::Hit::Minimize,
+            crate::chrome::Hit::Maximize,
+        ] {
+            let base = super::chrome_button_colour_hovered(which, false);
+            let hot = super::chrome_button_colour_hovered(which, true);
+            assert!(
+                hot.r >= base.r && hot.g >= base.g && hot.b >= base.b,
+                "{which:?} got DARKER on hover — the lift wrapped"
+            );
+            assert!(
+                (hot.r, hot.g, hot.b) != (base.r, base.g, base.b),
+                "{which:?} looks identical hovered; invisible feedback is the \
+                 same as none, which is the half of the titlebar bug that made \
+                 a missed click read as a dead button"
+            );
+        }
+    }
+
+    /// ★ AND THE HUE SURVIVES — the three buttons carry meaning in their
+    /// colours, so a hover that reordered the channels would say "this is a
+    /// different button now".
+    #[test]
+    fn hover_keeps_the_channel_ordering_that_carries_the_meaning() {
+        let base = super::chrome_button_colour_hovered(crate::chrome::Hit::Close, false);
+        let hot = super::chrome_button_colour_hovered(crate::chrome::Hit::Close, true);
+        assert!(
+            base.r > base.g && hot.r > hot.g,
+            "close must stay red-dominant hovered or unhovered"
+        );
     }
 }
 

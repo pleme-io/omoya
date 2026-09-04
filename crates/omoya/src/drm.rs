@@ -680,11 +680,16 @@ where
     // shapes still differ (one keyed on text, one on nothing, this on a
     // triple). `pending-omoya-cached-raster`.
     #[allow(clippy::type_complexity)]
+    // ★ `Option<Hit>` IS PART OF THE KEY — that is what makes hover free.
+    // The bar is re-rasterised when the pointer crosses a BUTTON BOUNDARY,
+    // not per frame and not per motion event, so hovering costs one raster
+    // per crossing and nothing while the pointer sits still.
     let mut chrome_cache: Vec<(
         u32,
         String,
         i32,
         bool,
+        Option<crate::chrome::Hit>,
         smithay::backend::renderer::element::memory::MemoryRenderBuffer,
     )> = Vec::new();
 
@@ -1247,14 +1252,24 @@ where
                         .is_some_and(|(fx, fy, _, _)| fx == geo.loc.x && fy == geo.loc.y);
                     let bar = crate::chrome::bar_rect(geo);
 
-                    let hit = chrome_cache.iter().any(|(cid, ct, cw, cf, _)| {
-                        *cid == id && ct == &title && *cw == bar.size.w && *cf == is_focused
+                    // Which button, if any, the pointer is over right now.
+                    let hovered = crate::chrome::hit(geo, data.state.pointer_location)
+                        .filter(|h| *h != crate::chrome::Hit::Drag);
+                    let hit = chrome_cache.iter().any(|(cid, ct, cw, cf, ch, _)| {
+                        *cid == id
+                            && ct == &title
+                            && *cw == bar.size.w
+                            && *cf == is_focused
+                            && *ch == hovered
                     });
                     if !hit {
                         chrome_cache.retain(|(cid, ..)| *cid != id);
-                        if let Some(px) =
-                            crate::chrome::rasterize(&title, bar.size.w, is_focused)
-                        {
+                        if let Some(px) = crate::chrome::rasterize_hovered(
+                            &title,
+                            bar.size.w,
+                            is_focused,
+                            hovered,
+                        ) {
                             let mb = smithay::backend::renderer::element::memory::MemoryRenderBuffer::from_slice(
                                 &px,
                                 smithay::backend::allocator::Fourcc::Argb8888,
@@ -1263,7 +1278,14 @@ where
                                 smithay::utils::Transform::Normal,
                                 None,
                             );
-                            chrome_cache.push((id, title.clone(), bar.size.w, is_focused, mb));
+                            chrome_cache.push((
+                                id,
+                                title.clone(),
+                                bar.size.w,
+                                is_focused,
+                                hovered,
+                                mb,
+                            ));
                         }
                     }
                     if let Some((.., b)) = chrome_cache.iter().find(|(cid, ..)| *cid == id)

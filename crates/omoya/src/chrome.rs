@@ -186,6 +186,21 @@ fn contains(r: Rectangle<i32, Logical>, p: Point<i32, Logical>) -> bool {
 /// on `(title, width, focused)`: those are its only inputs.
 #[must_use]
 pub fn rasterize(title: &str, width: i32, focused: bool) -> Option<Vec<u8>> {
+    rasterize_hovered(title, width, focused, None)
+}
+
+/// [`rasterize`], with one button drawn as hovered.
+///
+/// ★ The hovered button is part of the CACHE KEY in `drm.rs`, so this is
+/// re-rasterised only when the pointer crosses a button boundary — not per
+/// frame, and not per motion event.
+#[must_use]
+pub fn rasterize_hovered(
+    title: &str,
+    width: i32,
+    focused: bool,
+    hovered: Option<Hit>,
+) -> Option<Vec<u8>> {
     let font = crate::bar::font()?;
     let (w, h) = (usize::try_from(width).ok()?, usize::try_from(HEIGHT).ok()?);
     if w == 0 || h == 0 {
@@ -210,7 +225,9 @@ pub fn rasterize(title: &str, width: i32, focused: bool) -> Option<Vec<u8>> {
                 .into_iter()
                 .zip([Hit::Close, Hit::Minimize, Hit::Maximize])
         {
-            let c = crate::theme::chrome_button_colour(role);
+            // Brightened while the pointer is on this button — the cheapest
+            // proof to a person that the control is real.
+            let c = crate::theme::chrome_button_colour_hovered(role, hovered == Some(role));
             fill(&mut buf, w, h, r.loc.x, r.loc.y, r.size.w, r.size.h, c);
         }
     }
