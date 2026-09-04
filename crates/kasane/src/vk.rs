@@ -57,8 +57,8 @@ pub struct Gpu {
     // Held because dropping the loader unloads the library the instance and
     // device still point into. Never read directly; its lifetime IS its job.
     _entry: ash::Entry,
-    instance: ash::Instance,
-    physical: vk::PhysicalDevice,
+    pub(crate) instance: ash::Instance,
+    pub(crate) physical: vk::PhysicalDevice,
     device: ash::Device,
     mem_props: vk::PhysicalDeviceMemoryProperties,
     ext_fd: ash::khr::external_memory_fd::Device,
@@ -68,6 +68,13 @@ pub struct Gpu {
     /// True when this is a software rasteriser. Not a defect — it is how CI
     /// exercises the path — but a seat must be able to tell the difference.
     pub is_cpu: bool,
+    /// The graphics queue work is submitted on.
+    pub(crate) queue: vk::Queue,
+    /// Its family index — needed for command pools and for the foreign-queue
+    /// ownership transfers an imported dmabuf requires.
+    pub(crate) queue_family: u32,
+    /// One command pool, reset per frame rather than freed per buffer.
+    pub(crate) command_pool: vk::CommandPool,
     /// Whether `VK_EXT_physical_device_drm` was available and enabled.
     ///
     /// ★ Recorded rather than assumed: querying `PhysicalDeviceDrmPropertiesEXT`
@@ -145,13 +152,27 @@ impl Gpu {
             }
             // SAFETY: same — `pd` is a live handle from this instance.
             let families = unsafe { instance.get_physical_device_queue_family_properties(pd) };
-            // Any family will do: M0 never submits work. M1's readback copy
-            // needs TRANSFER, which every family implicitly supports per spec
-            // when it supports GRAPHICS or COMPUTE — revisit there, not here.
-            if families.is_empty() {
+            // ── ★ A GRAPHICS FAMILY, NOT FAMILY ZERO ─────────────────────
+            //
+            // This was `Some((pd, 0))` with a comment saying any family would
+            // do because M0 never submits work. From stage 1 it does, and
+            // index 0 is right BY LUCK: plo's RTX 3070 exposes six families
+            // and only some carry GRAPHICS. On a device that orders them
+            // differently this is a validation error at submit time, which is
+            // the worst place to find it — long after the device looked fine.
+            //
+            // TRANSFER comes with it: the spec guarantees any family with
+            // GRAPHICS or COMPUTE also supports transfer operations, so
+            // asking for GRAPHICS asks for both.
+            let Some(gfx) = families
+                .iter()
+                .position(|f| f.queue_flags.contains(vk::QueueFlags::GRAPHICS))
+            else {
+                // A device that can import a dmabuf but cannot draw is not a
+                // compositor renderer. Keep looking rather than choose it.
                 continue;
-            }
-            chosen = Some((pd, 0));
+            };
+            chosen = Some((pd, u32::try_from(gfx).unwrap_or(0)));
             // ★ PREFER A REAL GPU, but do not require one: llvmpipe is how
             // this path is covered in CI, and refusing it would make the test
             // unrunnable on exactly the machines that run tests.
@@ -230,8 +251,34 @@ impl Gpu {
         // SAFETY: live handles.
         let mem_props = unsafe { instance.get_physical_device_memory_properties(physical) };
 
+        // SAFETY: `queue_family` was selected above from this device's own
+        // family list, and index 0 exists because the device was created with
+        // exactly one queue from it.
+        let queue = unsafe { device.get_device_queue(queue_family, 0) };
+
+        // ★ RESET_COMMAND_BUFFER, so a buffer is re-recorded rather than
+        // reallocated every frame. A compositor records the same shape of work
+        // 360 times a second; allocating for that is churn the driver has to
+        // absorb.
+        let pool_info = vk::CommandPoolCreateInfo::default()
+            .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
+            .queue_family_index(queue_family);
+        // SAFETY: `pool_info` is a local outliving the call; the family index
+        // is this device's own.
+        let command_pool = match unsafe { device.create_command_pool(&pool_info, None) } {
+            Ok(p) => p,
+            Err(e) => {
+                // SAFETY: the device was created above and owns nothing yet.
+                unsafe { device.destroy_device(None) };
+                return Err(Unavailable::Driver(format!("create_command_pool: {e:?}")));
+            }
+        };
+
         Ok(Self {
             _entry: entry.clone(),
+            queue,
+            queue_family,
+            command_pool,
             ext_fd: ash::khr::external_memory_fd::Device::new(instance, &device),
             instance: instance.clone(),
             physical,
@@ -491,6 +538,11 @@ impl Drop for Gpu {
         // lifetime is tied to `&self`, so all of them are already dropped by the
         // time this runs — that is what the borrow checker is enforcing here.
         unsafe {
+            // ★ ORDER IS LOAD-BEARING: the pool is a child of the device, so
+            // destroying the device first leaves it dangling. Vulkan will not
+            // tell you — it is undefined behaviour, and the validation layers
+            // are not on in production.
+            self.device.destroy_command_pool(self.command_pool, None);
             self.device.destroy_device(None);
             self.instance.destroy_instance(None);
         }
@@ -1173,6 +1225,71 @@ mod tests {
                 minor: 999
             }),
             "drives() accepted a node this device does not have"
+        );
+    }
+
+    /// ★ STAGE 1: THE QUEUE CAN ACTUALLY DRAW.
+    ///
+    /// `Gpu::open` used to take family 0 unconditionally, with a comment
+    /// saying any family would do because M0 never submitted work. From stage
+    /// 1 it does. Index 0 is right BY LUCK on plo — the RTX 3070 exposes six
+    /// families and only some carry GRAPHICS — and on a device that orders
+    /// them differently the symptom is a validation error at submit time,
+    /// long after the device looked healthy.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn the_selected_queue_family_supports_graphics() {
+        let gpu = match Gpu::open() {
+            Ok(g) => g,
+            Err(e) => {
+                skip_or_panic("GPU test", &e);
+                return;
+            }
+        };
+        // SAFETY: live instance and physical device.
+        let families = unsafe {
+            gpu.instance
+                .get_physical_device_queue_family_properties(gpu.physical)
+        };
+        let idx = gpu.queue_family as usize;
+        assert!(
+            idx < families.len(),
+            "queue_family {idx} is out of range for a device with {} families",
+            families.len()
+        );
+        assert!(
+            families[idx].queue_flags.contains(vk::QueueFlags::GRAPHICS),
+            "family {idx} has flags {:#x} and cannot draw. A compositor \
+             renderer submitted here would fail validation at draw time, not \
+             at device creation. (Raw bits: ash is built without its `debug` \
+             feature, so these flags have no Debug impl.)",
+            families[idx].queue_flags.as_raw()
+        );
+        eprintln!(
+            "kasane S1: {:?} queue_family={idx} of {} flags={:#x}",
+            gpu.device_name,
+            families.len(),
+            families[idx].queue_flags.as_raw()
+        );
+    }
+
+    /// ★ AND THE COMMAND POOL EXISTS, which is what proves the device was
+    /// created with a family that can host one. A null pool would mean the
+    /// constructor returned a Gpu whose submission path cannot work.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn the_device_has_a_command_pool() {
+        let gpu = match Gpu::open() {
+            Ok(g) => g,
+            Err(e) => {
+                skip_or_panic("GPU test", &e);
+                return;
+            }
+        };
+        assert_ne!(
+            gpu.command_pool,
+            vk::CommandPool::null(),
+            "no command pool — nothing can be recorded, so no frame can be drawn"
         );
     }
 }
