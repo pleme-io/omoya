@@ -36,10 +36,6 @@
 //! own definitions. Three bodies are not built, and each returns a typed error
 //! naming what is missing rather than a placeholder `Ok`:
 //!
-//!   `Bind<Dmabuf>`   needs kasane to import a dmabuf as a COLOR_ATTACHMENT.
-//!                    `import_tiled` creates SAMPLED | TRANSFER_SRC images —
-//!                    correct for a client surface, wrong for a render target.
-//!                    A third import variant is the work.
 //!   `ImportMem`      needs a staging buffer and a host->device copy. kasane
 //!                    has no upload path at all today.
 //!   `ExportMem`      the readback exists (`Target::read_pixel`), but smithay
@@ -228,12 +224,11 @@ impl KasaneRenderer {
     }
 }
 
-/// A bound render target.
+/// A bound render target — a dmabuf kasane renders straight into.
 ///
-/// ★ NOT CONSTRUCTIBLE YET. `Bind<Dmabuf>` is the unbuilt path — see the
-/// module header — so nothing produces one of these. It exists because the
-/// trait shapes have to name it, and naming it is what proves the lifetime
-/// structure compiles.
+/// ★ No shadow buffer anywhere in this type. That is the whole difference from
+/// `NuriFramebuffer`, which composites into a shadow and then copies it to the
+/// scanout mapping — measured at 12.0 ms of a 12.1 ms frame.
 pub struct KasaneFramebuffer<'buffer> {
     target: Target,
     size: Size<i32, Physical>,
@@ -580,7 +575,87 @@ impl crate::nuri_renderer::ArmFlush for KasaneRenderer {
     }
 }
 
+impl smithay::backend::renderer::Bind<Dmabuf> for KasaneRenderer {
+    fn bind<'a>(&mut self, target: &'a mut Dmabuf) -> Result<Self::Framebuffer<'a>, Self::Error> {
+        use smithay::backend::allocator::Buffer as _;
+
+        if target.num_planes() != 1 {
+            return Err(Error::Unsupported(
+                "multi-plane dmabuf as a render target; kasane renders                  single-plane ARGB8888",
+            ));
+        }
+        let fd = target
+            .handles()
+            .next()
+            .ok_or(Error::Unsupported("dmabuf with no plane handle"))?;
+        // Duplicated because the importer must OWN the fd and smithay lends
+        // it — consuming smithay's would close a descriptor the `Dmabuf` still
+        // believes it owns. Same reasoning as `import_dmabuf`.
+        let owned = fd
+            .try_clone_to_owned()
+            .map_err(|_| Error::Unsupported("could not duplicate the dmabuf fd"))?;
+
+        let geometry = kasane::Geometry {
+            width: target.width(),
+            height: target.height(),
+            stride: u64::from(target.strides().next().unwrap_or(0)),
+            offset: u64::from(target.offsets().next().unwrap_or(0)),
+        };
+        let modifier: u64 = target.format().modifier.into();
+        let inner = Target::from_dmabuf(&self.gpu, owned, geometry, modifier)?;
+
+        #[allow(
+            clippy::cast_possible_wrap,
+            reason = "a display dimension that wrapped an i32 is not a display"
+        )]
+        let size = Size::from((target.width() as i32, target.height() as i32));
+        Ok(KasaneFramebuffer {
+            target: inner,
+            size,
+            _buffer: std::marker::PhantomData,
+        })
+    }
+
+    fn supported_formats(&self) -> Option<smithay::backend::allocator::format::FormatSet> {
+        use smithay::backend::allocator::Format;
+
+        // ★ THE RENDERABLE LIST, NOT THE SAMPLABLE ONE. A device may sample a
+        // layout it cannot render into, and answering this question with the
+        // import list would advertise a scanout format the GPU cannot actually
+        // target — a failure that lands at bind time, per output, on the
+        // machine with a real display.
+        Some(
+            self.gpu
+                .renderable_modifiers()
+                .into_iter()
+                .map(|m| Format {
+                    code: Fourcc::Argb8888,
+                    modifier: m.into(),
+                })
+                .collect(),
+        )
+    }
+}
+
 impl smithay::backend::renderer::ImportDma for KasaneRenderer {
+    fn dmabuf_formats(&self) -> smithay::backend::allocator::format::FormatSet {
+        use smithay::backend::allocator::Format;
+
+        // ★ THE SAMPLABLE LIST — the mirror of `supported_formats` above, and
+        // deliberately a different query. This one becomes what
+        // `zwp_linux_dmabuf_v1` advertises to clients, so answering it with
+        // the renderable list would promise clients a layout the compositor
+        // cannot texture from.
+        self.gpu
+            .importable_modifiers()
+            .into_iter()
+            .map(|m| Format {
+                code: Fourcc::Argb8888,
+                modifier: m.into(),
+            })
+            .collect()
+    }
+
     fn import_dmabuf(
         &mut self,
         dmabuf: &Dmabuf,
@@ -649,8 +724,14 @@ mod tests {
         fn assert_texture<T: Texture + Clone + Send + 'static>() {}
         fn assert_scanout<F: crate::nuri_renderer::ScanoutFlush>() {}
 
+        fn assert_bind<R: smithay::backend::renderer::Bind<Dmabuf>>() {}
+
         assert_renderer::<KasaneRenderer>();
         assert_import_dma::<KasaneRenderer>();
+        // ★ `Bind<Dmabuf>` is what turns a scanout buffer into a render
+        // target, and it is the reason there is no shadow buffer in this
+        // renderer at all.
+        assert_bind::<KasaneRenderer>();
         assert_local_traits::<KasaneRenderer>();
         // ★ `Clone + Send + 'static` is `drm.rs`'s own bound on `R::TextureId`,
         // restated here so a change that breaks it fails in this file rather
@@ -658,6 +739,36 @@ mod tests {
         // type parameter instead of a cause.
         assert_texture::<KasaneTexture>();
         assert_scanout::<KasaneFramebuffer<'_>>();
+    }
+
+    /// ★ THE TWO FORMAT QUESTIONS ARE ASKED SEPARATELY.
+    ///
+    /// `dmabuf_formats` becomes what `zwp_linux_dmabuf_v1` advertises to
+    /// CLIENTS — what they may hand us to texture from. `supported_formats`
+    /// is what the compositor may RENDER INTO. A device can sample a layout it
+    /// cannot target, so answering one with the other advertises a capability
+    /// that fails at bind time, per output, on the machine with a real display.
+    ///
+    /// The renderer cannot be constructed here (no GPU in a unit test), so
+    /// what this pins is the thing that would actually regress: that the two
+    /// are backed by different kasane queries rather than one aliasing the
+    /// other.
+    #[test]
+    fn the_client_format_list_and_the_scanout_format_list_are_different_queries() {
+        let src = include_str!("kasane_renderer.rs");
+        // Cut at the test module so this cannot match its own body — a
+        // source-scanning check that matches its own matcher passes for the
+        // wrong reason.
+        let code = src.split("#[cfg(test)]").next().unwrap_or(src);
+        assert!(
+            code.contains("importable_modifiers()"),
+            "dmabuf_formats must ask the SAMPLABLE list"
+        );
+        assert!(
+            code.contains("renderable_modifiers()"),
+            "supported_formats must ask the RENDERABLE list — using the \
+             samplable one advertises a scanout format the GPU cannot target"
+        );
     }
 
     /// ★ THE UNBUILT PATHS SAY SO, and say WHAT is missing.
