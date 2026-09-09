@@ -802,6 +802,7 @@ pub const LEAVES: &[&str] = &[
     "verbs",
     "deeds_performed",
     "deeds_refused",
+    "protocols",
     "chord_deeds",
     "focus_rect",
     "frame_us",
@@ -1042,6 +1043,32 @@ impl Introspect for OmoyaIntrospect {
             "verbs" => Ok(serde_json::json!(crate::deed::Deed::VERBS)),
             "deeds_performed" => Ok(n(&self.deeds_performed)),
             "deeds_refused" => Ok(n(&self.deeds_refused)),
+            // ★ WHAT THE SEAT PROMISES, and what keeps each promise. The
+            // catalog is the same constant the source-scan gate checks against
+            // `handlers.rs`, so this leaf cannot drift from what is actually
+            // advertised — and a client debugging "why does my app not work
+            // here" can read the withheld list and its reasons too.
+            "protocols" => Ok(serde_json::json!({
+                "advertised": crate::protocols::ADVERTISED
+                    .iter()
+                    .map(|p| {
+                        let (kind, why) = match p.served {
+                            crate::protocols::Served::By(w) => ("served", w),
+                            crate::protocols::Served::HintOnly(w) => ("hint-only", w),
+                        };
+                        serde_json::json!({
+                            "interface": p.interface,
+                            "delegate": p.delegate,
+                            "served": kind,
+                            "by": why,
+                        })
+                    })
+                    .collect::<Vec<_>>(),
+                "withheld": crate::protocols::WITHHELD
+                    .iter()
+                    .map(|(name, why)| serde_json::json!({ "interface": name, "why": why }))
+                    .collect::<Vec<_>>(),
+            })),
             "chord_deeds" => Ok(n(&self.chord_deeds)),
             "focus_rect" => Ok(serde_json::json!(
                 self.focus_rect

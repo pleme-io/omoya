@@ -286,6 +286,26 @@ pub struct Omoya {
     pub output_manager_state: OutputManagerState,
     pub seat_state: SeatState<Omoya>,
     pub data_device_state: DataDeviceState,
+    /// `zwp_relative_pointer_manager_v1` — pointer deltas without a position.
+    ///
+    /// ── ★ WE WERE ALREADY SENDING THESE INTO AN EMPTY LIST ───────────────
+    /// `input.rs` computes a `RelativeMotionEvent` from every mouse event and
+    /// calls `PointerHandle::relative_motion`, with a comment explaining why
+    /// relative motion is not the same as cursor motion. That call reads as a
+    /// working feature and was a NO-OP: smithay's implementation iterates
+    /// `known_relative_pointers` (relative_pointer.rs:112), which is filled
+    /// only when a client binds this manager — and the global did not exist,
+    /// so nothing could bind and the list was permanently empty.
+    ///
+    /// So this is not "add a protocol". The compositor already SERVED
+    /// relative motion, correctly, and simply never told anyone. Advertising
+    /// is what makes the code that was already written reachable.
+    ///
+    /// What it unlocks: pointer-lock clients — games, 3D viewers, anything
+    /// that wants "how far did the mouse move" rather than "where is the
+    /// cursor". Those clients read a cursor pinned at a screen edge as zero
+    /// movement, which is why absolute motion cannot substitute.
+    pub relative_pointer_state: smithay::wayland::relative_pointer::RelativePointerManagerState,
     pub popups: PopupManager,
     pub seat: Seat<Self>,
 
@@ -346,6 +366,10 @@ impl Omoya {
         let output_manager_state = OutputManagerState::new_with_xdg_output::<Self>(&dh);
         let mut seat_state = SeatState::new();
         let data_device_state = DataDeviceState::new::<Self>(&dh);
+        // See the field's doc: `input.rs` has always computed and sent
+        // relative motion; this is the global that lets a client receive it.
+        let relative_pointer_state =
+            smithay::wayland::relative_pointer::RelativePointerManagerState::new::<Self>(&dh);
         let popups = PopupManager::default();
 
         let mut seat: Seat<Self> = seat_state.new_wl_seat(&dh, "omoya");
@@ -455,6 +479,7 @@ impl Omoya {
             output_manager_state,
             seat_state,
             data_device_state,
+            relative_pointer_state,
             popups,
             seat,
         }

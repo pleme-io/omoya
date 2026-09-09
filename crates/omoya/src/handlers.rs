@@ -660,6 +660,13 @@ delegate_data_device!(Omoya);
 
 impl OutputHandler for Omoya {}
 delegate_output!(Omoya);
+// ★ The protocol omoya already SERVED and never advertised. `input.rs`
+// computes a `RelativeMotionEvent` per mouse event and calls
+// `PointerHandle::relative_motion`; without this global no client could
+// bind, so smithay's `known_relative_pointers` was permanently empty and
+// every one of those events went nowhere. Nothing else changes: the send
+// path was correct, it just had no audience.
+smithay::delegate_relative_pointer!(Omoya);
 
 // ── zwp_linux_dmabuf_v1 ─────────────────────────────────────────────────────
 

@@ -37,6 +37,7 @@ mod mcp;
 mod nuri_renderer;
 mod owed;
 mod placement;
+mod protocols;
 mod remap;
 mod rouka;
 mod scanout;
