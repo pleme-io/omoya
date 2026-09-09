@@ -25,7 +25,31 @@
 //! A surface that took its own route to the client would answer neither
 //! question while looking like it had.
 //!
-//! ★ **It is queued, not applied.** `Introspect::query` runs on the kanshou
+//! ★ **The characters come from the LIVE LAYOUT, not a table.** `expand` takes
+//! a `hairetsu::Keymap` and asks it which key produces each character. It used
+//! to carry a hardcoded US map whose own doc justified itself — "omoya's xkb
+//! replacement serves one layout, us ... this table agrees with that decision"
+//! — and that justification died the moment hairetsu shipped a layout
+//! registry. On `br`, keycode 47 is `ç`: the table would have synthesised `;`
+//! for it, and made `ç` unreachable. Same call, same success, wrong character.
+//!
+//! The layout used is the one the seat is ACTUALLY serving
+//! (`ukeire_keymap_layout`, published only on a successful apply), not the one
+//! the config declared — a node whose layout failed to compile is running the
+//! bare US keymap, and typing against the layout it asked for would be wrong
+//! in a second way.
+//!
+//! Two consequences worth knowing before calling it:
+//!
+//! * **AltGr is bracketed like Shift.** On any layout with a level-3 column
+//!   (`br`'s `/`, `¬`, `ª`) the character is unreachable without it, and a
+//!   stuck AltGr puts every subsequent REAL keystroke on level 3.
+//! * **A dead-key character is REFUSED.** `é` on `br` is `dead_acute` then
+//!   `e` — two keystrokes, no single keycode. It returns an error naming the
+//!   character rather than typing a bare `e`, because "héllo" arriving as
+//!   "hllo" is worse than being told.
+//!
+//! //! ★ **It is queued, not applied.** `Introspect::query` runs on the kanshou
 //! sidecar thread and may not touch `Omoya`. So this lands on
 //! `pending_input` and the ping source drains it where `&mut Omoya` is legal —
 //! the same shape `Deed` already uses, for the same reason.
