@@ -51,7 +51,81 @@ pub enum Synth {
 /// `KEY_LEFTSHIFT`. Held around characters whose keycap they share.
 pub const KEY_LEFTSHIFT: u32 = 42;
 
-/// ASCII → (evdev code, needs shift).
+/// `KEY_RIGHTALT` — `ISO_Level3_Shift` on any layout that binds it.
+///
+/// ★ RIGHT alt specifically. On `br` the level-3 column is reached by AltGr,
+/// which `level3(ralt_switch)` binds to the RIGHT alt key; the left one stays
+/// a plain `Alt_L` and would produce a chord instead of a character.
+pub const KEY_RIGHTALT: u32 = 100;
+
+/// The layout synthetic input must type against, from what the seat PUBLISHED.
+///
+/// ── ★ THE EFFECTIVE LAYOUT, NOT THE DECLARED ONE ────────────────────────
+/// `ukeire_keymap_layout` is written only on a SUCCESSFUL `set_xkb_config`
+/// and reads `<bare>` when a declared layout failed to compile. That
+/// distinction is the whole reason to read it rather than the config: a node
+/// that declares an unregistered layout is running the bare US keymap, and
+/// synthesising against the layout it *asked* for would type the wrong
+/// characters on a seat that is demonstrably not using it.
+///
+/// So the rule is: type against what the seat is actually serving.
+#[must_use]
+pub fn keymap_for(published: &str) -> hairetsu::Keymap {
+    // `<bare>` and `<xkb default>` are both the built-in US keymap — the same
+    // one `Keymap::us()` builds — so they resolve there rather than failing.
+    hairetsu::Keymap::for_layout(published).unwrap_or_else(hairetsu::Keymap::us)
+}
+
+/// Which evdev key, with which modifiers, produces `c` on THIS layout.
+///
+/// ── ★ ASKS THE LAYOUT. THE TABLE THAT USED TO LIVE HERE WAS A LIE. ───────
+/// `evdev_for` was a hardcoded US map from `char` to `(code, shift)`, and its
+/// own doc justified itself: "omoya's xkb replacement serves one layout — us —
+/// and refuses anything else. This table agrees with that decision."
+///
+/// That justification died the moment hairetsu shipped a layout REGISTRY. On
+/// `br`, keycode 47 is `ç`; the table would have synthesised `;` for it and
+/// made `ç` unreachable — typing the wrong character, silently, on the one
+/// node that actually declares `br`.
+///
+/// Now it is a projection of the same table resolution reads, so synthetic
+/// input and real input cannot disagree about a layout.
+fn key_for_char(keymap: &hairetsu::Keymap, c: char) -> Result<(u32, hairetsu::ModMask), String> {
+    let (xkb, mods) = keymap.key_for_char(c).ok_or_else(|| {
+        format!(
+            "{c:?} is not reachable by one keystroke on layout {:?} — it may need \
+             a dead-key sequence, which synthetic input cannot express",
+            keymap.layout_name(0)
+        )
+    })?;
+    // Anything beyond Shift and AltGr would need a LOCK toggled (NumLock) or a
+    // chord modifier (Ctrl/Alt), neither of which can be bracketed around a
+    // character without changing seat state the caller did not ask for.
+    let known = hairetsu::modifier::SHIFT | hairetsu::modifier::MOD5;
+    if mods & !known != 0 {
+        return Err(format!(
+            "{c:?} needs modifiers {mods:#06b} that synthetic input will not \
+             hold — refusing rather than typing something else"
+        ));
+    }
+    // XKB keycode -> evdev code. The +8 is XKB's, and subtracting it here is
+    // the ONE place the two numbering schemes meet.
+    Ok((xkb - 8, mods))
+}
+
+/// ASCII → (evdev code, needs shift). **RETIRED FROM PRODUCTION, KEPT AS AN
+/// ORACLE.**
+///
+/// ★ This is the hardcoded US table `expand` used to call. It is `#[cfg(test)]`
+/// now rather than deleted, because it is the best available check on its own
+/// replacement: `the_layout_lookup_agrees_with_the_retired_us_table` asserts
+/// that the layout-derived lookup returns exactly what this returned, for every
+/// printable ASCII character, on `us`.
+///
+/// That is the risk the rewrite actually carries — not "does br work" (a new
+/// capability, separately tested) but "did us change". An independently-written
+/// table that predates the change is a stronger answer to that than any
+/// assertion written alongside the new code.
 ///
 /// ★ A US layout, and that is a STATED limitation rather than a hidden one.
 /// omoya's xkb replacement (`xkbcommon-hairetsu`) serves one layout — `us` —
@@ -62,6 +136,7 @@ pub const KEY_LEFTSHIFT: u32 = 42;
 /// refusal rather than skipping the character — typing `"héllo"` and getting
 /// `"hllo"` is worse than being told the `é` is not representable.
 #[must_use]
+#[cfg(test)]
 pub fn evdev_for(c: char) -> Option<(u32, bool)> {
     // Rows in evdev order, which is keycap order — not alphabetical.
     const ROW1: &str = "1234567890-=";
@@ -121,7 +196,7 @@ pub fn evdev_for(c: char) -> Option<(u32, bool)> {
 /// shift bracketing and the press/release pairing are where the bugs live,
 /// and neither needs a seat to check.
 #[must_use]
-pub fn expand(s: &Synth) -> Result<Vec<Step>, String> {
+pub fn expand(s: &Synth, keymap: &hairetsu::Keymap) -> Result<Vec<Step>, String> {
     Ok(match s {
         Synth::Key { code, pressed } => vec![Step::Key {
             code: *code,
@@ -134,9 +209,11 @@ pub fn expand(s: &Synth) -> Result<Vec<Step>, String> {
         Synth::Text(t) => {
             let mut out = Vec::with_capacity(t.len() * 2);
             let mut shift_held = false;
+            let mut altgr_held = false;
             for c in t.chars() {
-                let (code, shift) = evdev_for(c)
-                    .ok_or_else(|| format!("{c:?} is not on the us layout this seat serves"))?;
+                let (code, mods) = key_for_char(keymap, c)?;
+                let shift = mods & hairetsu::modifier::SHIFT != 0;
+                let altgr = mods & hairetsu::modifier::MOD5 != 0;
                 // ★ Bracket the shift, and only change it when it CHANGES.
                 // Pressing and releasing shift around every character works
                 // but generates 4x the events, and a run of capitals then
@@ -152,6 +229,20 @@ pub fn expand(s: &Synth) -> Result<Vec<Step>, String> {
                         },
                     });
                     shift_held = shift;
+                }
+                // ★ AltGr gets the same bracketing, and it is not optional on
+                // a non-US layout: on `br` the whole level-3 column (`/` on q,
+                // `¬`, `ª`, `º`) is unreachable without it.
+                if altgr != altgr_held {
+                    out.push(Step::Key {
+                        code: KEY_RIGHTALT,
+                        state: if altgr {
+                            KeyState::Pressed
+                        } else {
+                            KeyState::Released
+                        },
+                    });
+                    altgr_held = altgr;
                 }
                 out.push(Step::Key {
                     code,
@@ -169,6 +260,15 @@ pub fn expand(s: &Synth) -> Result<Vec<Step>, String> {
                 // holding.
                 out.push(Step::Key {
                     code: KEY_LEFTSHIFT,
+                    state: KeyState::Released,
+                });
+            }
+            if altgr_held {
+                // Same rule, and worse if broken: a stuck AltGr puts every
+                // real keystroke on the level-3 column, so the keyboard types
+                // symbols the operator cannot explain.
+                out.push(Step::Key {
+                    code: KEY_RIGHTALT,
                     state: KeyState::Released,
                 });
             }
@@ -294,6 +394,22 @@ mod tests {
                 }
             }
         }
+        // ── ★ THE DIFFERENTIAL ────────────────────────────────────────
+        // The retired table vs the layout-derived lookup, on `us`, for every
+        // printable ASCII character. This is what proves the rewrite did not
+        // change the layout everyone is actually running.
+        let us = hairetsu::Keymap::for_layout("us").expect("us is registered");
+        for c in (0x20u8..0x7f).map(char::from) {
+            let old = evdev_for(c);
+            let new = key_for_char(&us, c)
+                .ok()
+                .map(|(code, mods)| (code, mods & hairetsu::modifier::SHIFT != 0));
+            assert_eq!(
+                old, new,
+                "{c:?}: retired table says {old:?}, layout lookup says {new:?}"
+            );
+        }
+
         // Spot-check the anchors of each row against the kernel's own codes.
         assert_eq!(evdev_for('a'), Some((30, false)), "KEY_A");
         assert_eq!(evdev_for('z'), Some((44, false)), "KEY_Z");

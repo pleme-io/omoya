@@ -971,8 +971,19 @@ impl Introspect for OmoyaIntrospect {
                 // unmappable character is refused; doing it here means the
                 // caller is told, instead of the render thread silently
                 // dropping half a string an hour later.
+                // ★ Against the layout the seat is ACTUALLY serving —
+                // `ukeire_keymap_layout` is published only on a
+                // successful apply, so a failed `br` reads `<bare>` and
+                // we correctly type US rather than the layout that did
+                // not take.
+                let layout = self
+                    .ukeire_keymap_layout
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone();
+                let keymap = crate::synth::keymap_for(&layout);
                 let steps =
-                    crate::synth::expand(&synth).map_err(|e| QueryError::unknown_field(e))?;
+                    crate::synth::expand(&synth, &keymap).map_err(QueryError::unknown_field)?;
                 let n = steps.len();
                 self.queue_input(synth);
                 Ok(serde_json::json!({ "queued": text, "steps": n }))

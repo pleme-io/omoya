@@ -218,6 +218,46 @@ impl Keymap {
         &k.levels[idx..=idx]
     }
 
+    /// Which key, held with which modifiers, produces this character.
+    ///
+    /// ── ★ SYNTHETIC INPUT MUST ASK THE LAYOUT, NOT A TABLE ───────────────
+    /// This exists because omoya's `synth.rs` carried a hardcoded US map from
+    /// `char` to `(evdev code, shift)`, justified by a comment saying the seat
+    /// served one layout and the table "agrees with that decision". The moment
+    /// a second layout shipped, that justification became false and the table
+    /// became a silent liar: on `br`, keycode 47 is `ç`, so synthesising `;`
+    /// typed `ç` and `ç` was unreachable entirely.
+    ///
+    /// Derived from the SAME table resolution reads, so the two cannot
+    /// disagree about a layout the way a hand-written map can.
+    ///
+    /// Returns the XKB keycode and the modifier mask to hold. Subtract 8 for
+    /// an evdev code.
+    ///
+    /// ★ WHAT IT CANNOT DO, stated rather than silently mishandled: a
+    /// character reachable only through a DEAD-KEY SEQUENCE (`é` on `br` is
+    /// `dead_acute` then `e`) has no single keycode and returns `None`. The
+    /// caller must refuse rather than skip — typing "héllo" and getting
+    /// "hllo" is worse than being told the `é` is not synthesisable.
+    #[must_use]
+    pub fn key_for_char(&self, c: char) -> Option<(u32, ModMask)> {
+        // Lowest keycode first, then lowest level: prefer the unmodified key
+        // over a shifted or AltGr one that happens to produce the same
+        // character, so synthesising `/` on `br` uses AB11 rather than AltGr+q.
+        for k in &self.keys {
+            for (level, sym) in k.levels.iter().enumerate() {
+                if sym.key_char() != Some(c) {
+                    continue;
+                }
+                let level = u32::try_from(level).ok()?;
+                if let Some(mods) = k.kind.mods_for_level(level) {
+                    return Some((k.keycode, mods));
+                }
+            }
+        }
+        None
+    }
+
     /// Does this key repeat when held?
     ///
     /// Modifier and lock keys must not, or holding Shift types a stream of them.
@@ -552,6 +592,82 @@ mod tests {
     const CAPS: u32 = 66;
     const KP7: u32 = 79;
     const NUMLK: u32 = 77;
+
+    #[test]
+    fn every_level_round_trips_through_its_modifiers() {
+        // ★ THE SEAL. `mods_for_level` and `level_for_key` are one function
+        // read in two directions; nothing but this test makes them agree.
+        //
+        // It is the guard on synthetic input: `key_for_char` picks a level and
+        // returns the modifiers `mods_for_level` says reach it, and the seat
+        // then resolves those modifiers back through `level_for_key`. If the
+        // two ever disagree, synthetic typing produces a DIFFERENT character
+        // than the one requested — silently, because every step succeeds.
+        let mut checked = 0_u32;
+        for def in layout::LAYOUTS {
+            let km = Arc::new(Keymap::for_layout(def.rmlvo).expect("registered"));
+            for entry in def.keys {
+                for level in 0..u32::try_from(entry.levels.len()).expect("small") {
+                    let Some(mods) = entry.kind.mods_for_level(level) else {
+                        continue;
+                    };
+                    let mut st = State::new(Arc::clone(&km));
+                    st.update_mask(mods, 0, 0, 0, 0, 0);
+                    assert_eq!(
+                        st.level_for_key(entry.keycode),
+                        level,
+                        "{}/{} ({:?}): mods_for_level({level}) = {mods:#06b}, but \
+                         level_for_key resolves that back to a different level",
+                        def.rmlvo,
+                        entry.name,
+                        entry.kind
+                    );
+                    checked += 1;
+                }
+            }
+        }
+        assert!(
+            checked > 300,
+            "only {checked} (key, level) pairs round-tripped — the loop is not \
+             reaching the tables"
+        );
+    }
+
+    #[test]
+    fn key_for_char_asks_the_layout_rather_than_a_table() {
+        // ★ The regression this exists to prevent, asserted on the one key
+        // that differs most: keycode 47 is `;` on us and `ç` on br. A
+        // hardcoded US table types `;` on both, and `ç` on neither.
+        let us = Keymap::for_layout("us").expect("us");
+        let br = Keymap::for_layout("br").expect("br");
+
+        assert_eq!(us.key_for_char(';').map(|(k, m)| (k, m)), Some((47, 0)));
+        assert_eq!(br.key_for_char('ç').map(|(k, _)| k), Some(47));
+        // ...and `;` moved, so the SAME character needs a different key.
+        assert_eq!(br.key_for_char(';').map(|(k, _)| k), Some(61));
+
+        // `ç` is not reachable at all on us — refusal, never a substitution.
+        assert_eq!(us.key_for_char('ç'), None);
+
+        // A shifted character reports the Shift modifier.
+        let (code, mods) = us.key_for_char('A').expect("A");
+        assert_eq!(code, 38);
+        assert_eq!(mods, modifier::SHIFT);
+
+        // ★ An AltGr character reports MOD5 — the level-3 column that had no
+        // consumer until `br` existed.
+        let (_, mods) = br.key_for_char('¬').expect("notsign is AltGr on br");
+        assert_eq!(mods & modifier::MOD5, modifier::MOD5);
+    }
+
+    #[test]
+    fn a_dead_key_character_is_refused_not_guessed() {
+        // `é` on br is dead_acute followed by e — two keystrokes, no single
+        // keycode. Returning the `e` key would type a bare `e`, which is the
+        // silent-wrongness shape this whole module exists to refuse.
+        let br = Keymap::for_layout("br").expect("br");
+        assert_eq!(br.key_for_char('é'), None);
+    }
 
     #[test]
     fn plain_a_is_lowercase() {

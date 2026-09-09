@@ -820,8 +820,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .unwrap_or_else(|e| e.into_inner())
                         .drain(..)
                         .collect();
+                    let layout = sink
+                        .ukeire_keymap_layout
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .clone();
+                    let keymap = crate::synth::keymap_for(&layout);
                     for sy in synths {
-                        match crate::synth::expand(&sy) {
+                        match crate::synth::expand(&sy, &keymap) {
                             Ok(steps) => {
                                 for step in steps {
                                     data.state.apply_step(step);

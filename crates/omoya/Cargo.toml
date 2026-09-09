@@ -81,6 +81,12 @@ kanshou = "0.1"
 # FreeType: consistent with the seat's whole point, and the bar is the first
 # thing on the CPU path that needs actual text. Deliberately NOT added to
 # nuri, whose header states it has zero dependencies.
+# hairetsu — the layout engine, taken DIRECTLY rather than through the
+# `xkbcommon` shim. `synth.rs` needs the reverse lookup (`key_for_char`), and
+# the shim deliberately exposes only the C-shaped API smithay expects, which
+# has no inverse. The two crates are one workspace, so this is not a new
+# dependency edge, only an honest one.
+hairetsu = { path = "../hairetsu" }
 fontdue = "0.9"
 # kukaku (区画) — the split-tree layout algebra. Extracted from tear-types
 # when omoya became its third consumer (tear's panes, mado's planned rebase,

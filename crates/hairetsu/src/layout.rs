@@ -5,6 +5,7 @@
 //! source, so the table we resolve against and the table clients compile can
 //! never disagree.
 
+use crate::ModMask;
 use xkeysym::RawKeysym;
 use xkeysym::key;
 
@@ -56,6 +57,59 @@ impl KeyType {
             Self::ControlLevel2 => "PC_CONTROL_LEVEL2",
             Self::FourLevel => "FOUR_LEVEL",
             Self::FourLevelAlphabetic => "FOUR_LEVEL_ALPHABETIC",
+        }
+    }
+
+    /// The modifiers that SELECT a given level on a key of this type.
+    ///
+    /// ── ★ THE INVERSE OF `State::level_for_key`, AND IT MUST STAY THAT ────
+    /// Resolution asks "given these modifiers, which level?"; synthetic input
+    /// asks the opposite — "to reach that level, which modifiers do I hold?".
+    /// Those are one function read in two directions, and the round-trip is
+    /// asserted for every key of every registered layout by
+    /// `every_level_round_trips_through_its_modifiers`.
+    ///
+    /// Writing the reverse by hand instead is how omoya ended up with a
+    /// hardcoded US table for synthetic typing that silently produced the
+    /// wrong characters the moment a second layout existed: on `br`, keycode
+    /// 47 is `ç`, not `;`.
+    ///
+    /// `None` means the level is not reachable on this key type.
+    #[must_use]
+    pub const fn mods_for_level(self, level: u32) -> Option<ModMask> {
+        use crate::modifier::{LOCK, MOD2, MOD5, SHIFT};
+        match (self, level) {
+            (Self::OneLevel, 0) => Some(0),
+
+            (Self::TwoLevel | Self::FourLevel, 0) => Some(0),
+            (Self::TwoLevel | Self::FourLevel, 1) => Some(SHIFT),
+
+            // Shift, not Caps: both reach level 2, and Shift is the one a
+            // synthesiser can release again without leaving the seat in a
+            // different state than it found it.
+            (Self::Alphabetic | Self::FourLevelAlphabetic, 0) => Some(0),
+            (Self::Alphabetic | Self::FourLevelAlphabetic, 1) => Some(SHIFT),
+
+            (Self::FourLevel | Self::FourLevelAlphabetic, 2) => Some(MOD5),
+            (Self::FourLevel | Self::FourLevelAlphabetic, 3) => Some(SHIFT | MOD5),
+
+            // ★ NumLock, and NOT Shift — `level_for_key` resolves the keypad
+            // as `num && !shift`, matching xkeyboard-config's default type,
+            // where Shift+NumLock returns to the BASE level.
+            (Self::Keypad, 0) => Some(0),
+            (Self::Keypad, 1) => Some(MOD2),
+
+            (Self::AltLevel2, 0) => Some(0),
+            (Self::AltLevel2, 1) => Some(crate::modifier::MOD1),
+            (Self::ControlLevel2, 0) => Some(0),
+            (Self::ControlLevel2, 1) => Some(crate::modifier::CONTROL),
+
+            _ => {
+                // Silence the unused-import warning on the `LOCK` arm we
+                // deliberately do not use; see the Alphabetic note above.
+                let _ = LOCK;
+                None
+            }
         }
     }
 
