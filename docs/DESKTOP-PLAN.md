@@ -302,7 +302,38 @@ Copying a URL out of a browser into a terminal is the fifth thing anyone does. `
 
 **★ Corrected dependency, and it is what let this phase move four places earlier: lock does NOT need layer-shell.** `ext-session-lock-v1` supplies its own per-output `ext_session_lock_surface_v1`; smithay ships `session_lock/{mod,lock,surface}.rs` complete. The draft's claim that there is "no surface for a lock UI to draw on" without layer-shell was wrong. Lock needs a *paint face*, and an M0 face is a solid fill plus password dots — which `nuri` can draw with no text stack at all.
 
-**Deliver.** `delegate_session_lock` + `mukae --mode lock` as the session-lock client + `idle-notify` + `idle-inhibit` (wires) + a typed idle policy + DPMS + logind `PrepareForSleep` (device pause/resume is already wired at `logind.rs:309-340`; sleep is not, and an unmodeset resume is untested).
+> ### ★★ STOP — "smithay ships it complete" IS MEASURED FALSE, AND WIRING IT AS WRITTEN SHIPS A LOCK-SCREEN BYPASS
+>
+> **Read this before implementing a line of P4.** The paragraph above is right that lock does not need layer-shell. It is **wrong** that smithay 0.7.0's `session_lock` is complete, and P4's first deliverable — `delegate_session_lock` — would inherit the defect verbatim.
+>
+> **Verified in the vendored source on 2026-09-09**, `smithay-0.7.0/src/wayland/session_lock/`:
+>
+> - `mod.rs:148-152` — every `Request::Lock` mints a **fresh** `SessionLockState::new()`, and `lock.rs:29-33` initialises its `lock_status` to `AtomicBool::new(false)`.
+> - `lock.rs:181-189` — `Request::UnlockAndDestroy` is:
+>
+>   ```rust
+>   if !data.lock_status.load(Ordering::Relaxed) {
+>       lock.post_error(Error::InvalidUnlock, "Session is not locked.");
+>   }
+>   state.lock_state().locked_outputs.clear();
+>   state.unlock();
+>   ```
+>
+>   **There is no `else` and no `return`.**
+>
+> So while the screen is genuinely locked by the real locker, *any* client that can bind `ext_session_lock_manager_v1` may call `lock()` — receiving an object whose `lock_status` is `false` — and then immediately `unlock_and_destroy()`. It takes a protocol error and is disconnected, and **`state.unlock()` runs anyway.** An attacker trades its own connection for the operator's unlocked screen.
+>
+> A second defect rides along: `locked_outputs` is a single `Vec` on the **manager** (`mod.rs:74`), not per-lock, and there is **no `fn destroyed`** in the module — so a crashed locker leaves state the next lock cannot reconcile.
+>
+> **Both are fixed on smithay master and in NO release.** Master replaces the bool with `enum LockStatus { Unlocked, Locked(ExtSessionLockV1), Defunct }`, adds `is_locked_by()`, gates the unlock behind a real `else`, and adds the `destroyed` hook. omoya pins `0.7.0`, which is the only published release — so this is a *version* problem, not a design one.
+>
+> **Nothing is exposed today.** `session_lock` appears nowhere in `crates/omoya/src` (grep, 2026-09-09) and `state.rs:58-62` explicitly refuses `--mode lock`. The risk is entirely prospective and lands the moment someone follows P4 as written.
+>
+> **So P4's first deliverable is not `delegate_session_lock`.** It is: adopt master's `session_lock` — by a `[patch.crates-io]` git pin, or by vendoring master's three files into omoya — and land the invariant as a gate *before* the wiring. Do **not** design a third `LockStatus`: master's per-lock shape already deletes the crashed-locker class more cleanly than anything drafted here would.
+>
+> ★ This is also the general lesson about the pin. Every real smithay consumer — niri, cosmic-comp, xfwl4 — pins a git rev of master rather than the release, and this is one concrete reason why. `0.7.0` is the only published version and it is over a year old. Take that decision deliberately (`pending-omoya-smithay-pin`) rather than inheriting it.
+
+**Deliver.** `delegate_session_lock` (**NOT from 0.7.0 — see the box above**) + `mukae --mode lock` as the session-lock client + `idle-notify` + `idle-inhibit` (wires) + a typed idle policy + DPMS + logind `PrepareForSleep` (device pause/resume is already wired at `logind.rs:309-340`; sleep is not, and an unmodeset resume is untested).
 
 **No second credential implementation.** `mukae-native::verify_user` already does real shadow verification.
 
