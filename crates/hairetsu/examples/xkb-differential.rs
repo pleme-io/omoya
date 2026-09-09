@@ -75,6 +75,8 @@ const EXPECTED: &[(&str, Reason)] = &[
     ("PRSC", Reason::Owed),
     // MENU has no upstream counterpart under these RMLVO names.
     ("MENU", Reason::NotInOracle),
+    ("BKSP", Reason::Redundant),
+    ("LSGT", Reason::UnreachableUpstream),
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -83,6 +85,8 @@ enum Reason {
     XServerGrab,
     Owed,
     NotInOracle,
+    Redundant,
+    UnreachableUpstream,
 }
 
 impl Reason {
@@ -99,6 +103,19 @@ impl Reason {
                  pending-hairetsu-modifier-level-types"
             }
             Self::NotInOracle => "no upstream counterpart under these RMLVO names",
+            Self::Redundant => {
+                "upstream declares two levels whose keysyms are IDENTICAL \
+                 (`BackSpace, BackSpace`); one level is behaviourally the same \
+                 and says so"
+            }
+            Self::UnreachableUpstream => {
+                "upstream gives <LSGT> four levels (`bar`, `brokenbar` at 3/4) \
+                 while binding RALT to plain Alt_R — verified 2026-09-09 — so \
+                 those levels are UNREACHABLE on stock `us`. Declaring them \
+                 would also fail our own matrix rule that a four-level table \
+                 must bind an ISO_Level3_Shift. `br` DOES bind one, and there \
+                 <LSGT> is four-level and matches upstream exactly"
+            }
         }
     }
 }
