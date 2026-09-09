@@ -112,7 +112,12 @@ pub static US: &[KeyEntry] = &[
     k(20, "AE11", TwoLevel, &[key::minus, key::underscore]),
     k(21, "AE12", TwoLevel, &[key::equal, key::plus]),
     k(22, "BKSP", OneLevel, &[key::BackSpace]),
-    k(23, "TAB", OneLevel, &[key::Tab]),
+    // ★ SHIFT+TAB IS BACK-TAB. Found 2026-09-09 by differential against
+    // `xkbcli compile-keymap`, which emits `[ Tab, ISO_Left_Tab ]` here while
+    // we emitted a one-level `Tab` — so Shift+Tab produced a plain Tab and
+    // every reverse-cycle binding in a shell or TUI silently went forwards.
+    // Nothing errored; the key worked, in the wrong direction.
+    k(23, "TAB", TwoLevel, &[key::Tab, key::ISO_Left_Tab]),
     k(24, "AD01", Alphabetic, &[key::q, key::Q]),
     k(25, "AD02", Alphabetic, &[key::w, key::W]),
     k(26, "AD03", Alphabetic, &[key::e, key::E]),
@@ -417,7 +422,12 @@ pub static BR: &[KeyEntry] = &[
         &[key::equal, key::plus, key::section, key::dead_ogonek],
     ),
     k(22, "BKSP", OneLevel, &[key::BackSpace]),
-    k(23, "TAB", OneLevel, &[key::Tab]),
+    // ★ SHIFT+TAB IS BACK-TAB. Found 2026-09-09 by differential against
+    // `xkbcli compile-keymap`, which emits `[ Tab, ISO_Left_Tab ]` here while
+    // we emitted a one-level `Tab` — so Shift+Tab produced a plain Tab and
+    // every reverse-cycle binding in a shell or TUI silently went forwards.
+    // Nothing errored; the key worked, in the wrong direction.
+    k(23, "TAB", TwoLevel, &[key::Tab, key::ISO_Left_Tab]),
     k(24, "AD01", F4A, &[key::q, key::Q, key::slash, key::slash]),
     k(
         25,
@@ -795,6 +805,29 @@ mod tests {
                 binds_switch,
                 "{}: has four-level keys but no ISO_Level3_Shift key — the \
                  AltGr columns are unreachable",
+                l.rmlvo
+            );
+        }
+    }
+
+    #[test]
+    fn shift_tab_is_back_tab_in_every_layout() {
+        // ★ REGRESSION. Both tables emitted a one-level `Tab`, so Shift+Tab
+        // produced a plain Tab: reverse-cycling a completion menu or walking a
+        // TUI's fields backwards silently went FORWARDS. The key worked, in
+        // the wrong direction, which is why nothing ever reported it.
+        //
+        // Caught by differential against `xkbcli compile-keymap`, which emits
+        // `[ Tab, ISO_Left_Tab ]`. In the matrix so a new layout cannot
+        // reintroduce it by copying an old table.
+        for l in LAYOUTS {
+            let tab = l.lookup(23).expect("TAB present");
+            assert_eq!(tab.kind, TwoLevel, "{}: TAB must be two-level", l.rmlvo);
+            assert_eq!(tab.levels[0], key::Tab, "{}", l.rmlvo);
+            assert_eq!(
+                tab.levels[1],
+                key::ISO_Left_Tab,
+                "{}: Shift+Tab is back-tab, not Tab",
                 l.rmlvo
             );
         }

@@ -42,7 +42,23 @@ fn keysym_name(raw: u32) -> String {
         }
         return name.to_owned();
     }
-    // No name: fall back to the numeric form XKB always accepts.
+    // ★ A Unicode-form keysym gets XKB's `U<HEX>` spelling, not the numeric
+    // one. Both compile — this was found by differential against
+    // `xkbcli compile-keymap --layout br` on 2026-09-09, which agreed with us
+    // on 84 of 88 comparable keys and disagreed here only in spelling
+    // (`U2022` vs `0x01002022`, `U1E9E` vs `0x01001e9e`).
+    //
+    // Fixed anyway, because a wire format is read by people as well as
+    // parsers: `U2022` says BULLET to anyone who knows Unicode, and
+    // `0x01002022` says nothing until you subtract the 0x01000000 prefix. The
+    // whole reason this module exists is that emitting a plausible-looking
+    // keymap is not the same as emitting the right one.
+    if let Some(cp) = raw.checked_sub(0x0100_0000)
+        && (0x0100..=0x0010_FFFF).contains(&cp)
+    {
+        return format!("U{cp:04X}");
+    }
+    // No name and not a Unicode keysym: the numeric form XKB always accepts.
     format!("0x{raw:08x}")
 }
 
@@ -473,6 +489,22 @@ mod tests {
         assert!(t.contains(r#"key <AC01> { type= "ALPHABETIC""#));
         // and digits must not
         assert!(t.contains(r#"key <AE01> { type= "TWO_LEVEL""#));
+    }
+
+    #[test]
+    fn unicode_keysyms_use_xkbs_u_spelling_not_a_raw_number() {
+        // ★ REGRESSION, from the same `xkbcli` differential. `xkeysym` has no
+        // name for BULLET or LATIN CAPITAL SHARP S, and the numeric fallback
+        // emitted `0x01002022`. XKB accepts it, so nothing broke — but a wire
+        // format is read by people too, and `U2022` says BULLET while
+        // `0x01002022` says nothing until you subtract the prefix.
+        let t = keymap_text(crate::layout::BR, "Portuguese (Brazil)");
+        assert!(t.contains("U2022"), "BULLET not in U-form");
+        assert!(t.contains("U1E9E"), "LATIN CAPITAL SHARP S not in U-form");
+        assert!(
+            !t.contains("0x0100"),
+            "a Unicode keysym is still emitting the raw numeric form"
+        );
     }
 
     #[test]
