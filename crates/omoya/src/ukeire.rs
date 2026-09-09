@@ -258,31 +258,36 @@ impl SeatModifier {
 /// intent faithfully and the caller reports a compile failure as a typed
 /// error with a fallback to a usable seat.
 ///
-/// ── ★ WHAT THE SEAT CAN ACTUALLY REALISE TODAY: `us` AND NOTHING ELSE ────
-/// Measured live on plo 2026-09-03, and it is a floor in OUR OWN code rather
-/// than a fact about xkb. This workspace patches `libxkbcommon` out for the
-/// pure-Rust `xkbcommon-hairetsu`, whose `new_from_names` is:
+/// ── ★ WHAT THE SEAT CAN REALISE TODAY: `us` AND `br` ────────────────────
+/// **CORRECTED — the floor moved.** This paragraph read "`us` AND NOTHING
+/// ELSE" from 2026-09-03, when `xkbcommon-hairetsu::new_from_names` was a
+/// literal match on `"us"`. That is no longer what the code says: hairetsu now
+/// carries a layout REGISTRY (`hairetsu::layout::LAYOUTS`) and the shim
+/// resolves against it, so `br` compiles to a real ABNT2 keymap — the Ç key on
+/// AC10, the extra `<AB11>`, the acute/tilde dead keys, `AltGr` bound through
+/// `ISO_Level3_Shift`, and a comma on the numpad separator.
 ///
-/// ```text
-/// if !matches!(layout, "" | "us") || !variant.is_empty() { return None; }
-/// Some(Keymap::us())
-/// ```
+/// The measured symptom that motivated it: `nodes/ggg` declares
+/// `services.xserver.xkb.layout = "br"` and got a US seat with the operator's
+/// `ç` key typing `;`. The fallback was structural, so nothing failed — the
+/// seat came up and every key produced *a* character.
 ///
-/// So a `br` declaration compiles to `BadKeymap`, the seat keeps its previous
-/// keymap, and `ukeire_keymap_layout` reads `<bare>`. Proven by running it:
-/// `xkbcli compile-keymap --layout br` succeeds on the same machine, so the
-/// data is present and reachable — it is hairetsu that declines.
+/// **Still refused, and deliberately:** any layout not in the registry, and
+/// ANY named variant. `br` alone is ABNT2 (there is no variant literally named
+/// `abnt2`), so bare `br` is the correct declaration and the case that was
+/// actually being asked for. Handing back a base table for a requested variant
+/// would be the same silent substitution in a new costume.
 ///
-/// **The declaration is still worth carrying, and the surface is still worth
-/// having.** Before this vocabulary a non-US node got a US keymap with NO
-/// signal whatsoever; now it gets an ERROR line naming the layout and a leaf
-/// that says `<bare>` instead of confirming a change that did not happen.
-/// That is the difference between an unsolved problem and an invisible one.
-/// Refusing a non-`us` layout at parse time would be worse: it would make the
-/// truth about ggg's keyboard undeclarable, and the destination is hairetsu
-/// learning layouts, not the config forgetting them.
+/// **The declaration was worth carrying while it could not be realised**, and
+/// that is the reason this surface existed a step ahead of the capability:
+/// before it, a non-US node got a US keymap with NO signal whatsoever; after
+/// it, an unrealisable layout produced an ERROR line naming the layout and a
+/// leaf reading `<bare>`. Refusing a non-`us` layout at parse time would have
+/// made the truth about ggg's keyboard undeclarable — and then there would
+/// have been nothing pointing at the work that has now been done.
 ///
-/// `pending-ukeire-layouts: hairetsu reads xkeyboard-config rules`
+/// `pending-ukeire-variants: hairetsu reads xkeyboard-config rules, so a
+/// named variant (`us(dvorak)`, `br(nodeadkeys)`) resolves rather than refuses`
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Keymap {
@@ -870,21 +875,24 @@ mod tests {
     }
 
     #[test]
-    fn the_xkb_floor_is_us_only_and_this_test_fails_when_that_changes() {
+    fn the_xkb_floor_is_the_layout_registry_and_this_test_fails_when_it_moves() {
         // ★ A TRIPWIRE ON A LIMIT WE OWN, not a celebration of it.
         //
-        // This workspace patches `libxkbcommon` out for the pure-Rust
-        // `xkbcommon-hairetsu`, which accepts `""` or `"us"` with an empty
-        // variant and returns `None` — surfacing as `BadKeymap` — for
-        // anything else. So `ukeire.keymap.layout = "br"` is a declaration
-        // the seat cannot yet realise, and this test is what tells the next
-        // reader when it can: the moment hairetsu learns rules files, the
-        // assertion below flips and `docs/UKEIRE.md`'s claim must be
-        // rewritten in the same commit.
+        // ── The floor MOVED, and this is what that looks like. ──
+        // This test was `the_xkb_floor_is_us_only_…` and asserted
+        // `!compile("br", "")`. Its own failure message named the follow-up:
+        // "Update the `pending-ukeire-layouts` note in ukeire.rs and the
+        // keymap row in docs/UKEIRE.md, then flip this assertion." All three
+        // happened in the commit that landed hairetsu's layout registry, which
+        // is the tripwire working exactly as designed — a limit that got
+        // probed on every `cargo test` could not quietly become folklore.
         //
-        // Deliberately asserts the LIMIT rather than skipping the case,
-        // because a limit nobody probes is a limit that gets restated as a
-        // fact about the world. It is a fact about our code.
+        // What remains a floor: the REGISTRY is the boundary. A layout not in
+        // `hairetsu::layout::LAYOUTS` refuses, and any named variant refuses.
+        // Still asserted rather than skipped, for the original reason — a
+        // limit nobody probes is a limit that gets restated as a fact about
+        // the world, and this is a fact about our code.
+        //
         // Reached through smithay's own re-export rather than by declaring
         // `xkbcommon` here: the workspace patch means that name resolves to
         // hairetsu, and taking it from the consumer's path proves the test
@@ -901,19 +909,37 @@ mod tests {
                 None,
                 xkb::KEYMAP_COMPILE_NO_FLAGS,
             )
-            .is_some()
         };
-        assert!(compile("", ""), "the empty keymap must always compile");
-        assert!(compile("us", ""), "us must always compile");
+        assert!(compile("", "").is_some(), "the empty keymap must compile");
+        assert!(compile("us", "").is_some(), "us must always compile");
         assert!(
-            !compile("br", ""),
-            "hairetsu now compiles `br` — the floor moved. Update the \
-             `pending-ukeire-layouts` note in ukeire.rs and the keymap row \
-             in docs/UKEIRE.md, then flip this assertion."
+            compile("br", "").is_some(),
+            "br must compile — ggg declares it, and a US fallback there is a \
+             seat whose Ç key types a semicolon"
+        );
+
+        // ★ COMPILING IS NOT ENOUGH. The failure this whole file exists to
+        // refuse is a `br` request answered with the `us` table, which
+        // `is_some()` cannot see. Assert the keymaps DIFFER.
+        let (br, us) = (
+            compile("br", "").expect("br"),
+            compile("us", "").expect("us"),
+        );
+        assert_ne!(
+            br.get_as_string(xkb::KEYMAP_FORMAT_TEXT_V1),
+            us.get_as_string(xkb::KEYMAP_FORMAT_TEXT_V1),
+            "br resolved to the us keymap — a silent substitution"
+        );
+
+        assert!(
+            compile("de", "").is_none(),
+            "hairetsu now compiles `de` — add it to the ledger in \
+             docs/UKEIRE.md and to this list, in the same commit"
         );
         assert!(
-            !compile("us", "dvorak"),
-            "hairetsu now accepts a variant — same follow-up as above"
+            compile("us", "dvorak").is_none(),
+            "hairetsu now accepts a variant — retire `pending-ukeire-variants` \
+             in the Keymap doc comment and flip this assertion"
         );
     }
 

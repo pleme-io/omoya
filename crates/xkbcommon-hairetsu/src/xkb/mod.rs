@@ -197,13 +197,22 @@ impl Keymap {
     ///
     /// # Scope
     ///
-    /// hairetsu ships one layout. An empty layout (meaning "system default") or
-    /// `"us"` compiles; **anything else returns `None`.**
+    /// hairetsu ships a REGISTRY of layouts (`hairetsu::layout::LAYOUTS`), and
+    /// this resolves against it. An empty layout means "system default"; a
+    /// registered name compiles; **anything else returns `None`.**
     ///
     /// That refusal is deliberate. Returning the `us` keymap for a request of
     /// `de` would be a silently wrong keyboard — the worst failure this crate
     /// could have. `None` is what the C function returns on a compile failure,
     /// so callers already handle it: smithay turns it into `Error::BadKeymap`.
+    ///
+    /// **Variants are still refused.** `br` alone is ABNT2 (there is no variant
+    /// literally named `abnt2`, which is why `nodes/ggg` declares bare `br`),
+    /// so the registry covers the case that was actually being asked for. A
+    /// named variant — `us(dvorak)`, `br(nodeadkeys)` — is a different table
+    /// this crate does not have, and inventing one from the base layout would
+    /// be exactly the silent substitution the paragraph above refuses.
+    /// `pending-hairetsu-variants`.
     #[must_use]
     pub fn new_from_names<S: Borrow<str> + ?Sized>(
         _context: &Context,
@@ -214,14 +223,10 @@ impl Keymap {
         _options: Option<String>,
         _flags: KeymapCompileFlags,
     ) -> Option<Self> {
-        let layout = layout.borrow();
-        let variant = variant.borrow();
-        if !matches!(layout, "" | "us") || !variant.is_empty() {
+        if !variant.borrow().is_empty() {
             return None;
         }
-        Some(Self {
-            inner: Arc::new(hairetsu::Keymap::us()),
-        })
+        hairetsu::Keymap::for_layout(layout.borrow()).map(|k| Self { inner: Arc::new(k) })
     }
 
     /// Compile a keymap from a shared-memory fd, as a Wayland client sends one.
@@ -491,6 +496,33 @@ mod tests {
         let ctx = Context::new(CONTEXT_NO_FLAGS);
         assert!(Keymap::new_from_names(&ctx, "", "", "", "", None, 0).is_some());
         assert!(Keymap::new_from_names(&ctx, "evdev", "pc105", "us", "", None, 0).is_some());
+    }
+
+    #[test]
+    fn br_compiles_and_is_not_us_wearing_a_different_name() {
+        // ★ The positive half, and it asserts DIFFERENCE rather than success.
+        // `is_some()` alone would pass if `br` resolved to the `us` table —
+        // which is precisely the silent substitution the test below refuses,
+        // just reached from the other direction.
+        let ctx = Context::new(CONTEXT_NO_FLAGS);
+        let br = Keymap::new_from_names(&ctx, "evdev", "abnt2", "br", "", None, 0)
+            .expect("br is registered");
+        let us = Keymap::new_from_names(&ctx, "evdev", "pc105", "us", "", None, 0)
+            .expect("us is registered");
+        let (b, u) = (
+            br.get_as_string(KEYMAP_FORMAT_TEXT_V1),
+            us.get_as_string(KEYMAP_FORMAT_TEXT_V1),
+        );
+        assert_ne!(b, u, "br emitted the us keymap");
+        assert!(b.contains("ccedilla"), "br keymap has no Ç");
+        assert!(!u.contains("ccedilla"), "us keymap should not have Ç");
+        assert!(
+            b.contains("Portuguese (Brazil)"),
+            "br keymap does not name itself"
+        );
+        // The extra ABNT2 key exists in br and not in us.
+        assert!(b.contains("<AB11>"));
+        assert!(!u.contains("<AB11>"));
     }
 
     #[test]

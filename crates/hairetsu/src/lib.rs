@@ -6,15 +6,27 @@
 //! 2. **modifier state** — what Shift/Caps/Ctrl/Alt/Super are doing right now,
 //! 3. **emission** — the XKB keymap *text* handed to Wayland clients.
 //!
-//! All three read the SAME table ([`layout::US`]), so the keymap we resolve
-//! against and the keymap clients compile cannot drift apart. That is the one
-//! structural guarantee here; everything else is ordinary code.
+//! All three read the SAME table — whichever [`layout::LayoutDef`] the keymap
+//! was compiled from — so the keymap we resolve against and the keymap clients
+//! compile cannot drift apart. That is the one structural guarantee here.
+//!
+//! ★ It is a guarantee about the *table*, not about the *rules*, and the
+//! difference matters: resolution applies the level rules in Rust while
+//! emission writes them out in XKB's vocabulary, and nothing makes those two
+//! agree by construction. That seam is held by the parity test in
+//! [`emit`], which parses the emitted `xkb_types` text and compares it against
+//! [`State::level_for_key`] for every key of every registered layout. It found
+//! a real Shift+NumLock divergence the first time it ran.
 //!
 //! # Scope, stated plainly
 //!
-//! This is not an XKB implementation. It does not read `/usr/share/X11/xkb`,
-//! does not parse keymap text, and ships exactly one layout. It covers the
-//! single-layout `us` seat and says so rather than implying more.
+//! This is not an XKB implementation. It does not read `/usr/share/X11/xkb`
+//! and does not parse keymap text. It ships a **registry** of layouts
+//! ([`layout::LAYOUTS`] — `us` and `br`/ABNT2 today), resolved by RMLVO name
+//! through [`Keymap::for_layout`]. A layout outside the registry, and any
+//! named variant, is REFUSED rather than substituted: handing back `us` for a
+//! request of `de` is the worst failure this crate could have, because every
+//! key still produces a character and nothing reports a problem.
 
 #![allow(clippy::module_name_repetitions)]
 
@@ -113,7 +125,26 @@ impl Keymap {
     /// That is the whole reason this returns `Self` and not `Option<Self>`.
     #[must_use]
     pub fn us() -> Self {
-        let keys: Vec<CompiledKey> = layout::US
+        Self::from_def(&layout::LAYOUTS[0])
+    }
+
+    /// Compile a registered layout by its RMLVO name.
+    ///
+    /// An empty name means "system default" and gives `us`. An unregistered
+    /// name returns `None` — **never a substitution**. Handing back `us` for a
+    /// request of `br` is the failure this crate most needs to refuse: the seat
+    /// comes up, every key produces a character, and the operator's `ç` types
+    /// `;` with nothing anywhere reporting a problem.
+    ///
+    /// See [`layout::LAYOUTS`] for what is registered.
+    #[must_use]
+    pub fn for_layout(rmlvo: &str) -> Option<Self> {
+        layout::by_rmlvo(rmlvo).map(Self::from_def)
+    }
+
+    fn from_def(def: &layout::LayoutDef) -> Self {
+        let keys: Vec<CompiledKey> = def
+            .keys
             .iter()
             .map(|e| CompiledKey {
                 keycode: e.keycode,
@@ -122,10 +153,10 @@ impl Keymap {
                 levels: e.levels.iter().copied().map(Keysym::new).collect(),
             })
             .collect();
-        let text = emit::keymap_text(layout::US, "English (US)");
+        let text = emit::keymap_text(def.keys, def.display);
         Self {
             keys,
-            layout_name: "English (US)".to_owned(),
+            layout_name: def.display.to_owned(),
             text,
         }
     }
@@ -439,12 +470,29 @@ impl State {
         let num = mods & modifier::MOD2 != 0;
         let level3 = mods & modifier::MOD5 != 0;
 
+        // ★ EXHAUSTIVE ON PURPOSE — no `_` arm. Adding a key type must be a
+        // compile error here, because a new type silently falling through to
+        // level 0 is a keyboard that types the wrong character with no other
+        // symptom. This is the arm that E0004 forced when `FourLevel` landed,
+        // and keeping it exhaustive is what will force the next one.
         let base = match k.kind {
             layout::KeyType::OneLevel => 0,
-            layout::KeyType::TwoLevel => u32::from(shift),
+            layout::KeyType::TwoLevel | layout::KeyType::FourLevel => u32::from(shift),
             // XOR, not OR: Shift on a capsed keyboard gives lowercase.
-            layout::KeyType::Alphabetic => u32::from(shift ^ caps),
-            layout::KeyType::Keypad => u32::from(shift || num),
+            layout::KeyType::Alphabetic | layout::KeyType::FourLevelAlphabetic => {
+                u32::from(shift ^ caps)
+            }
+            // ★ `num && !shift`, NOT `shift || num`. Found by the emit-parity
+            // test the moment it existed, then settled against
+            // xkeyboard-config 2.46 `types/numpad`, whose DEFAULT ("pc") type
+            // is:
+            //     map[None] = Level1; map[NumLock] = Level2;
+            //     map[Shift+NumLock] = Level1;
+            // There is deliberately no `map[Shift]`. Two consequences, both of
+            // which we had wrong: Shift alone on the keypad is the CURSOR key,
+            // not the digit; and Shift with NumLock on is also the cursor key,
+            // which is what makes shift-select work on a numlocked keypad.
+            layout::KeyType::Keypad => u32::from(num && !shift),
         };
         // Level 3/4 only exist on keys that declare them.
         if level3 && k.levels.len() >= 4 {

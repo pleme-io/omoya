@@ -40,6 +40,12 @@ nix tree:
 | `org/gnome/desktop/input-sources` | GNOME session | derived from the first | derived |
 | **omoya's Wayland seat** | **the actual desktop** | **`us`, hardcoded** | **`us`, hardcoded** |
 
+> **★ That last row is the state this document was written to describe, and it
+> is now history in both halves.** The vocabulary made the seat *read* the
+> declaration (below), and the layout registry made it able to *realise* `br`
+> (see the RESOLVED section). ggg's seat would now get ABNT2. Kept unedited
+> because the drift it records is the thing worth remembering, not the value.
+
 omoya read **none** of them. Its hardcoded US agrees with plo **by
 coincidence** — which is exactly why nobody noticed — and would hand gabi a US
 keymap on a Brazilian ABNT2 keyboard the day omoya reaches ggg. The drift is
@@ -127,6 +133,78 @@ it is a fact about our own code, and therefore ours to dissolve.
 
 `pending-ukeire-layouts: hairetsu reads xkeyboard-config rules`
 
+### ★★ RESOLVED — the floor moved: `br` is realised, and layout is a REGISTRY
+
+**Everything above this heading is history. Read it for the diagnosis, not for
+the current state.** The section is kept rather than rewritten because the
+tripwire it describes is the reason the gap got closed instead of becoming
+folklore: `the_xkb_floor_is_us_only_…` re-probed the limit on every `cargo
+test`, and its failure message named its own follow-up. When the assertion
+flipped, this row, that note and the test moved in the same commit — which is
+what the message told the next reader to do.
+
+**What changed.** `layout` stopped being a constant with a name and became a
+parameter. `hairetsu::layout::LAYOUTS` is a registry of `LayoutDef { rmlvo,
+display, keys }`; `Keymap::for_layout(rmlvo)` resolves against it; and
+`xkbcommon-hairetsu::new_from_names` — the one function the old paragraph
+quotes in full — is now that resolution rather than a literal match on `"us"`.
+
+Adding `br` as a second `if` would have left the class open. As a registry, a
+layout is a **row**, and the conformance matrix in `layout.rs` runs every
+property against every row — sortedness, unique key names, type↔level-count
+agreement, a reachable `ISO_Level3_Shift` wherever four-level columns are
+declared, and resolvability. **A row added without satisfying them fails the
+build**, so the next layout cannot ship half-transcribed.
+
+**What `br` is.** Transcribed from xkeyboard-config 2.46 `symbols/br` (the
+`abnt2` block, which is the `br` default — there is no variant named `abnt2`,
+so bare `br` in `nodes/ggg` was always the correct declaration), composed as
+`latin(basic)` ⊕ the 21 Brazilian overrides ⊕ `level3(ralt_switch)` ⊕
+`kpdl(comma)`. Concretely: **Ç on `<AC10>`** where `us` has `;`, `;` displaced
+to `<AB10>`, the extra **`<AB11>`** key `us` does not have at all, the
+acute/grave and tilde/circumflex dead-key pairs, `dead_diaeresis` on Shift+6,
+`AltGr` bound through `ISO_Level3_Shift`, and a **comma** on the numpad
+separator.
+
+**Two things this unblocked that were not the point.**
+
+1. **The four-level machinery was already written and had never had a
+   consumer.** `State::level_for_key` has handled `MOD5` + `levels.len() >= 4`
+   since the crate was written, and `keysym_to_modifier` already mapped
+   `ISO_Level3_Shift`; the `us` table simply had zero four-level keys, so the
+   arm was dead code that looked live. `br` is its first consumer — this was a
+   wiring job, not a build.
+2. **The emitter had no four-level type at all**, so even a four-level table
+   would have emitted a keymap in which clients could never reach level 3.
+   `FOUR_LEVEL` and `FOUR_LEVEL_ALPHABETIC` now exist in `TYPES`.
+
+**★ And the parity test the emitter's header had been promising found a real
+bug on its first run.** That header called the resolver↔emitter agreement "the
+seam this module cannot make unrepresentable, and the parity test is what
+guards it" — and there was no such test; the ones present are structural
+(sections, braces, name spelling) and all pass while the two sides disagree.
+The real one parses the emitted `xkb_types` text and compares it against
+`level_for_key` for every key of every layout across ten modifier
+combinations (~2 200 pairs). It came back red on **Shift+NumLock**, and
+settling it against `types/numpad` showed **both sides were wrong**: upstream's
+default `KEYPAD` type has `map[NumLock]=Level2` and `map[Shift+NumLock]=Level1`
+and **no `map[Shift]` at all**. We emitted a `map[Shift]=Level2` upstream does
+not have, and resolved `shift || num` where the rule is `num && !shift`. Both
+now match upstream, so Shift on the keypad is the cursor key and shift-select
+works with NumLock on.
+
+A disagreement at that seam is invisible in the worst way: we resolve keysyms
+for our own bindings, the client resolves them from the emitted text, and a
+mismatch means the compositor and the application believe different keys were
+pressed with no error on either side.
+
+**Still refused, deliberately:** any layout not in the registry, and any named
+variant. Handing back a base table for a requested variant is the same silent
+substitution in a new costume.
+
+`pending-ukeire-variants: hairetsu reads xkeyboard-config rules, so a named
+variant (`us(dvorak)`, `br(nodeadkeys)`) resolves rather than refuses`
+
 ## Tier ledger
 
 Every bad state the vocabulary was built to corner, at its **true** tier. A
@@ -144,8 +222,13 @@ here is rounded up.
 | seat modifier set to `ctrl` (soft-bricks the box — every fleet chord would collide with `Ctrl+Alt+F1..F12`, removing the VT escape) | `SeatModifier` is a two-variant closed enum; `ctrl` does not deserialize and no expression constructs it | truly-unrep |
 | cursor dimensions disagreeing with the art | `CELLS_W`/`CELLS_H` are `ART[0].len()` / `ART.len()`; the mask is the single source | truly-unrep |
 | a typo'd knob absorbed silently | `deny_unknown_fields` at every level — the loader `Err`s | parse-time-rejected |
-| an uncompilable xkb layout | `set_xkb_config` returns `Err` **without disturbing the live keymap**, so the operator stays on a seat they can log in and fix it from. The fallback is structural, not a branch. Verified live: `br` → `BadKeymap`, seat keeps its keymap, leaf reads `<bare>` | parse-time-rejected |
-| a layout the seat cannot realise, applied silently | it cannot be silent: an ERROR names the layout and `ukeire_keymap_layout` publishes `<bare>` instead of the requested name. **The layout is still not APPLIED** — hairetsu accepts only `""`/`us` | only-mitigated (C2 — observable and logged, not fixed; the fix is `pending-ukeire-layouts`) |
+| an uncompilable xkb layout | `set_xkb_config` returns `Err` **without disturbing the live keymap**, so the operator stays on a seat they can log in and fix it from. The fallback is structural, not a branch. Verified live: an unregistered layout → `BadKeymap`, seat keeps its keymap, leaf reads `<bare>`. *(The worked example used to be `br`; `br` now compiles — see the RESOLVED section. `de` is the current unregistered case.)* | parse-time-rejected |
+| a layout the seat cannot realise, applied silently | it cannot be silent: an ERROR names the layout and `ukeire_keymap_layout` publishes `<bare>` instead of the requested name. **`br` is now realised** — the residual case is a layout outside `hairetsu::layout::LAYOUTS`, or any named variant | only-mitigated (C2 — observable and logged; the residue is `pending-ukeire-variants`) |
+| a `br` request answered with the `us` table | asserted as **difference**, not success: both the `xkbcommon` shim and omoya's own tripwire compile `br` and `us` and require the emitted keymap text to differ. `is_some()` alone would pass on exactly this defect | CI-caught |
+| a four-level table whose `AltGr` column is unreachable | the matrix refuses any layout that declares a 4-level key and binds no `ISO_Level3_Shift` — the shape where every level-3 keysym is present and none is typeable | CI-caught |
+| a key type disagreeing with its level count | `KeyType::levels_ok` is asserted for every key of every registered layout. A `FOUR_LEVEL` key with two keysyms emits a keymap clients accept and then produces nothing on `AltGr` | CI-caught |
+| our resolver and the emitted keymap disagreeing about a modifier | the emit-parity test **parses the emitted `xkb_types` text** and compares it against `level_for_key` for every key × 10 modifier combinations. Found a real Shift+NumLock divergence on its first run | CI-caught |
+| a new `KeyType` silently resolving to level 0 | `level_for_key`'s `match` is exhaustive with no `_` arm, so adding a type is `E0004`. This is what forced the four-level arms to land with the four-level types | truly-unrepresentable |
 | a remap that rewrites a VT-switch key | `Remaps`'s own `Deserialize` refuses it — the whole `OmoyaConfig` fails to parse and `load()` falls back to the prescribed tier. `Reserved::fleet_linux()` is a pure function of nothing, so the claim set is available *at the parse boundary*; no `Remaps` value in the crate carries one and the only bypass, `unchecked`, is `pub(crate)` and unreachable from any config path | parse-time-rejected |
 | a self-remap or a duplicated remap source | same constructor, all problems named in one message | parse-time-rejected |
 | the seat's keymap diverging from the node's declared layout | **eval-caught**: the nix module defaults `ukeire.keymap.layout` from `services.xserver.xkb.layout`, so agreement is a projection rather than two hand-lists | only-mitigated (C1 — a *default*, so an operator can still override the two apart on purpose. A `readOnly` derived option would make it truly eval-rejected; that is M1, and deliberate: a dual-layout seat on a single-layout TTY is a legitimate thing to want) |

@@ -87,10 +87,36 @@ const TYPES: &str = r#"xkb_types "hairetsu" {
     };
     type "KEYPAD" {
         modifiers= Shift+Mod2;
-        map[Shift]= Level2;
+        map[None]= Level1;
         map[Mod2]= Level2;
+        map[Shift+Mod2]= Level1;
         level_name[Level1]= "Base";
         level_name[Level2]= "Number";
+    };
+    type "FOUR_LEVEL" {
+        modifiers= Shift+Mod5;
+        map[None]= Level1;
+        map[Shift]= Level2;
+        map[Mod5]= Level3;
+        map[Shift+Mod5]= Level4;
+        level_name[Level1]= "Base";
+        level_name[Level2]= "Shift";
+        level_name[Level3]= "Alt Base";
+        level_name[Level4]= "Shift Alt";
+    };
+    type "FOUR_LEVEL_ALPHABETIC" {
+        modifiers= Shift+Lock+Mod5;
+        map[None]= Level1;
+        map[Shift]= Level2;
+        map[Lock]= Level2;
+        map[Mod5]= Level3;
+        map[Shift+Mod5]= Level4;
+        map[Lock+Mod5]= Level4;
+        map[Shift+Lock+Mod5]= Level3;
+        level_name[Level1]= "Base";
+        level_name[Level2]= "Shift";
+        level_name[Level3]= "Alt Base";
+        level_name[Level4]= "Shift Alt";
     };
 };"#;
 
@@ -183,6 +209,172 @@ pub fn keymap_text(keys: &[KeyEntry], layout_name: &str) -> String {
 
     s.push_str("};\n");
     s
+}
+
+#[cfg(test)]
+mod parity {
+    //! ★ THE SEAM THE MODULE HEADER PROMISED.
+    //!
+    //! `TYPES` above encodes the level rules in XKB's vocabulary;
+    //! `State::level_for_key` encodes the same rules in Rust. Nothing makes
+    //! them agree — the header called that "the seam this module cannot make
+    //! unrepresentable, and the parity test is what guards it", and until this
+    //! module existed **there was no such test**. The tests below it are
+    //! structural (sections present, braces balanced, names normalised); every
+    //! one of them passes while the two sides disagree about what Shift+NumLock
+    //! means.
+    //!
+    //! A disagreement here is invisible in the worst way. We resolve keysyms
+    //! internally for our own bindings, and the CLIENT resolves them from the
+    //! emitted text — so a mismatch means the compositor and the application
+    //! believe different keys were pressed, with no error on either side.
+    //!
+    //! This parses the ACTUAL emitted text rather than restating the rules, so
+    //! editing `TYPES` moves the expectation. Restating them in the test would
+    //! only prove the test agrees with itself.
+
+    use super::TYPES;
+    use crate::layout::{KeyType, LAYOUTS};
+    use crate::{Keymap, State, modifier};
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    /// `map[...]` sets, per XKB type name: masked modifiers -> 0-based level.
+    struct XkbType {
+        mask: u32,
+        maps: HashMap<u32, u32>,
+    }
+
+    fn mod_bit(name: &str) -> u32 {
+        match name.trim() {
+            "none" | "None" => 0,
+            n => 1 << modifier::index_of(n).unwrap_or_else(|| panic!("unknown modifier {n}")),
+        }
+    }
+
+    fn mod_set(expr: &str) -> u32 {
+        expr.split('+').map(mod_bit).fold(0, |a, b| a | b)
+    }
+
+    /// Parse the `xkb_types` block into a table keyed by XKB type name.
+    fn parse_types() -> HashMap<String, XkbType> {
+        let mut out = HashMap::new();
+        let mut current: Option<(String, XkbType)> = None;
+        for line in TYPES.lines() {
+            let t = line.trim();
+            if let Some(rest) = t.strip_prefix("type \"") {
+                let name = rest.split('"').next().expect("type name").to_owned();
+                current = Some((
+                    name,
+                    XkbType {
+                        mask: 0,
+                        maps: HashMap::new(),
+                    },
+                ));
+            } else if let Some(rest) = t.strip_prefix("modifiers=") {
+                if let Some((_, ty)) = current.as_mut() {
+                    ty.mask = mod_set(rest.trim_end_matches(';'));
+                }
+            } else if let Some(rest) = t.strip_prefix("map[") {
+                if let Some((_, ty)) = current.as_mut() {
+                    let (mods, lvl) = rest.split_once("]=").expect("map entry shape");
+                    let level: u32 = lvl
+                        .trim()
+                        .trim_end_matches(';')
+                        .trim_start_matches("Level")
+                        .parse()
+                        .expect("level number");
+                    ty.maps.insert(mod_set(mods), level - 1);
+                }
+            } else if t == "};"
+                && let Some((name, ty)) = current.take()
+            {
+                out.insert(name, ty);
+            }
+        }
+        out
+    }
+
+    /// The level a CLIENT would pick, given the emitted type and live mods.
+    fn client_level(ty: &XkbType, mods: u32) -> u32 {
+        *ty.maps.get(&(mods & ty.mask)).unwrap_or(&0)
+    }
+
+    #[test]
+    fn the_emitted_types_cover_every_key_type_we_can_declare() {
+        // Anti-vacuity: a key whose type is absent from `TYPES` emits a keymap
+        // that names an undeclared type, which clients reject outright — and
+        // the loop below would silently skip it.
+        let parsed = parse_types();
+        for kind in [
+            KeyType::OneLevel,
+            KeyType::TwoLevel,
+            KeyType::Alphabetic,
+            KeyType::Keypad,
+            KeyType::FourLevel,
+            KeyType::FourLevelAlphabetic,
+        ] {
+            assert!(
+                parsed.contains_key(kind.xkb_name()),
+                "{:?} emits type \"{}\", which TYPES does not declare",
+                kind,
+                kind.xkb_name()
+            );
+        }
+    }
+
+    #[test]
+    fn our_resolver_and_the_emitted_types_agree_on_every_key() {
+        let parsed = parse_types();
+        // Every modifier combination the emitted types can distinguish.
+        let combos = [
+            0,
+            modifier::SHIFT,
+            modifier::LOCK,
+            modifier::SHIFT | modifier::LOCK,
+            modifier::MOD2,
+            modifier::SHIFT | modifier::MOD2,
+            modifier::MOD5,
+            modifier::SHIFT | modifier::MOD5,
+            modifier::LOCK | modifier::MOD5,
+            modifier::SHIFT | modifier::LOCK | modifier::MOD5,
+        ];
+
+        let mut checked = 0_u32;
+        for def in LAYOUTS {
+            let keymap = Arc::new(Keymap::for_layout(def.rmlvo).expect("registered layout"));
+            for entry in def.keys {
+                let ty = parsed
+                    .get(entry.kind.xkb_name())
+                    .expect("covered by the test above");
+                for mods in combos {
+                    let mut st = State::new(Arc::clone(&keymap));
+                    // Lock is a LOCKED modifier; the rest are depressed.
+                    st.update_mask(mods & !modifier::LOCK, 0, mods & modifier::LOCK, 0, 0, 0);
+
+                    let ours = st.level_for_key(entry.keycode);
+                    let theirs = client_level(ty, mods)
+                        .min(u32::try_from(entry.levels.len().saturating_sub(1)).expect("small"));
+                    assert_eq!(
+                        ours,
+                        theirs,
+                        "{}/{} ({:?}) under mods {mods:#06b}: we resolve level {ours}, a client \
+                         reading the emitted \"{}\" type resolves level {theirs}",
+                        def.rmlvo,
+                        entry.name,
+                        entry.kind,
+                        entry.kind.xkb_name()
+                    );
+                    checked += 1;
+                }
+            }
+        }
+        assert!(
+            checked > 1000,
+            "only {checked} (key, modifier) pairs compared — the loop is not \
+             reaching the tables it is supposed to cover"
+        );
+    }
 }
 
 #[cfg(test)]
