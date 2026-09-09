@@ -692,9 +692,46 @@ impl<S: Session> EvdevBackend<S> {
                 match ev.destructure() {
                     evdev::EventSummary::Key(_, key, value) => {
                         let code = u32::from(key.0);
+                        // ── ★ KERNEL AUTOREPEAT IS DROPPED HERE ────────────
+                        //
+                        // `value == 2` is the kernel repeating a held key
+                        // (~250 ms, then ~33 ms). We open devices RAW
+                        // (`session.open` above), so unlike a libinput
+                        // consumer we see those ticks — and forwarding them
+                        // was wrong twice over:
+                        //
+                        //  (a) `input.rs`'s deed arm fires on every Pressed
+                        //      with no repeat guard, so a HELD `Logo+Q`
+                        //      closed roughly thirty windows a second. Same
+                        //      shape as the mado runaway-font incident that
+                        //      `awase::KeyRepeatGate` was written for — and
+                        //      that gate is named in ukeire.rs's prose and
+                        //      referenced by zero code.
+                        //  (b) it re-sent `wl_keyboard.key(pressed)` with no
+                        //      intervening release, which the protocol
+                        //      forbids, so every client saw doubled presses.
+                        //
+                        // Nothing user-facing is lost: under Wayland the
+                        // CLIENT synthesises repeat from
+                        // `wl_keyboard.repeat_info`, which omoya already
+                        // publishes from `ukeire::Repeat::smithay_repeat_info`.
+                        //
+                        // ★ Those are TWO DIFFERENT CLOCKS and ukeire's header
+                        // does not say so: ukeire's 200 ms / 45 Hz is what we
+                        // ADVERTISE to clients; the kernel's own repeat rate
+                        // is what produced this bug. Advertising one while
+                        // forwarding the other is how the seat ended up
+                        // repeating at both rates at once.
+                        //
+                        // Dropped at the SOURCE rather than guarded at the
+                        // deed arm, because the protocol violation in (b) is
+                        // downstream of the deed and a guard there would fix
+                        // only half of it.
+                        if value == 2 {
+                            continue;
+                        }
                         let state = match value {
                             0 => KeyState::Released,
-                            // ★ value 2 is AUTOREPEAT.
                             _ => KeyState::Pressed,
                         };
                         // BTN_MISC (0x100) is where buttons begin; below it is
@@ -717,7 +754,18 @@ impl<S: Session> EvdevBackend<S> {
                                     base,
                                     code,
                                     state,
-                                    count: if value == 2 { 2 } else { 1 },
+                                    // ★ ALWAYS 1, and that is the contract
+                                    // rather than a simplification. smithay's
+                                    // `count` is the SEAT KEY COUNT — how many
+                                    // keys are held — not a repeat counter.
+                                    // The `if value == 2 { 2 }` this replaces
+                                    // put a repeat flag in a field that means
+                                    // something else, so any consumer reading
+                                    // it as documented was reading a lie. The
+                                    // repeat axis is now dropped above; when it
+                                    // is wanted it comes back as its own typed
+                                    // parameter, never smuggled through here.
+                                    count: 1,
                                 },
                             });
                         }

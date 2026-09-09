@@ -27,7 +27,16 @@
 //! descriptions, not a stringly-typed escape hatch.
 //!
 //! ── ★ THE CATALOG IS A CONSTANT HERE, AND THAT IS A KNOWN DEBT ──────────
-//! `LEAVES` below is hand-maintained because kanshou's `schema()` is never
+//! ★ CORRECTED. This paragraph justified a hand-maintained `LEAVES` copy, and
+//! the copy drifted exactly as duplication does — in BOTH directions (15
+//! answered-but-unlisted leaves, plus `pointer` listed as readable while
+//! being a write verb). The catalog is now `introspect::LEAVES`, one
+//! constant with two readers. The reasoning below still describes the WIRE
+//! limitation correctly and is kept for that; it simply is not a reason to
+//! keep a second list, because both readers are in THIS crate — the MCP
+//! server IS the compositor binary, so no wire is crossed to share a const.
+//!
+//! `LEAVES` was hand-maintained because kanshou's `schema()` is never
 //! dispatched over the wire — `handle_connection` routes `query()` only, so
 //! a `schema` query answers `unknown-field`. Measured 2026-08-27 against
 //! plo. When that gap closes, `omoya_leaves` should ask the live compositor
@@ -57,70 +66,14 @@ use serde::Deserialize;
 /// `omoya-<pid>.sock` that `introspect::serve` binds.
 const APP: &str = "omoya";
 
-/// Every read leaf `introspect.rs` answers. See the module header on why
-/// this is a constant rather than a live `schema()` query.
-const LEAVES: &[&str] = &[
-    "backend",
-    "blit_fast",
-    "blit_general",
-    "blit_slow",
-    "capture_result",
-    "chord_deeds",
-    "deeds_performed",
-    "elements",
-    "flush_bytes",
-    "flush_bytes_total",
-    "flush_mb_per_s",
-    "flush_us",
-    "flush_us_max",
-    "flush_us_total",
-    "focus_rect",
-    "frame_us",
-    "frames",
-    "gather_us",
-    "geometry",
-    "import_full",
-    "import_partial",
-    "input_attached",
-    "input_devices",
-    "last_frame_causes",
-    "layout",
-    "minimized_count",
-    "mode",
-    "modes",
-    "output",
-    "owed",
-    "owed_causes",
-    "owed_vt_switches",
-    "pointer",
-    "presented",
-    "seat",
-    "session_active",
-    "session_events",
-    "socket",
-    "stale_result",
-    "synth_performed",
-    "tab_groups",
-    "td_dirty_pct",
-    "td_mode",
-    "td_presented_marks",
-    "td_refined",
-    "td_refused",
-    "td_rows_dirty",
-    "td_rows_examined",
-    "td_shadows",
-    "ukeire_cursor_scale",
-    "ukeire_keymap_layout",
-    "ukeire_modifier",
-    "ukeire_remaps",
-    "ukeire_repeat_delay_ms",
-    "ukeire_repeat_rate_hz",
-    "ukeire_scroll_factor_milli",
-    "ukeire_scroll_natural",
-    "verbs",
-    "window_app_ids",
-    "windows",
-];
+/// Every read leaf, taken from `introspect.rs` — NOT a second list.
+///
+/// ★ This was a hand-maintained 60-entry copy and it had drifted in both
+/// directions: 15 leaves the compositor answers were missing (so no agent
+/// could discover them), and `pointer` was listed as readable while being a
+/// write verb. Re-exported rather than restated so the drift has nowhere to
+/// live.
+use crate::introspect::LEAVES;
 
 /// Ship a query to the live compositor and render the kotae outcome.
 ///
@@ -449,9 +402,21 @@ mod tests {
                 "write-only verb `{verb}` must not be listed as a readable leaf"
             );
         }
+        // ★ INVERTED, because it was asserting a defect. `pointer` is a
+        // WRITE verb — `introspect.rs:889` answers it with
+        // `{"queued": "pointer", ...}` and moves the cursor, and that file's
+        // own arm-scan gate lists it in `VERBS`, the write-verb exclusion
+        // list. The read is `pointer_pos`. The old assertion defended a
+        // second catalog's disagreement with the first, which is why the two
+        // could contradict each other for as long as they did.
         assert!(
-            LEAVES.contains(&"pointer"),
-            "`pointer` answers a read (the position) and must stay in the catalog"
+            !LEAVES.contains(&"pointer"),
+            "`pointer` is a write verb (introspect.rs:889 returns `queued`); \
+             the readable leaf is `pointer_pos`"
+        );
+        assert!(
+            LEAVES.contains(&"pointer_pos"),
+            "`pointer_pos` is the readable pointer leaf"
         );
     }
 }

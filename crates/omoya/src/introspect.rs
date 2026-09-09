@@ -754,7 +754,103 @@ impl OmoyaIntrospect {
 
 impl Introspect for OmoyaIntrospect {
     fn query(&self, q: &Query) -> QueryResult {
-        // A hand-written impl rather than `#[derive(Introspect)]`, matching what
+        // A hand-written /// Every read leaf `query` answers — the ONE catalog.
+///
+/// ★ PUBLIC, AND THAT IS THE POINT. `mcp.rs` used to carry its own
+/// hand-maintained copy of this list, and the two drifted in BOTH directions:
+/// 15 leaves the compositor answered were invisible to every agent (including
+/// `present_intervals`, the only leaf that separates an idle seat from a
+/// starved one), and `pointer` was advertised as readable while being a WRITE
+/// verb — this file's own arm-scan gate lists it in `VERBS`, the write-verb
+/// exclusion list, and `mcp.rs` had a test asserting the opposite. Two
+/// catalogs in one crate, each with a test defending its own view.
+///
+/// One constant, two readers: the drift is no longer expressible.
+pub const LEAVES: &[&str] = &[
+            "backend",
+            "frames",
+            "presented",
+            "verbs",
+            "deeds_performed",
+            "chord_deeds",
+            "focus_rect",
+            "frame_us",
+            "planes",
+            "route_cpu_bytes",
+            "route_cpu_bytes_total",
+            "route_label",
+            "shm_imports",
+            "shm_imports_empty_damage",
+            "shm_damage_rects",
+            "shm_damage_area",
+            "blit_fast",
+            "blit_general",
+            "blit_slow",
+            "gather_us",
+            "flush_bytes",
+            "flush_bytes_total",
+            "flush_mb_per_s",
+            "flush_us",
+            "flush_us_max",
+            "flush_us_total",
+            "window_app_ids",
+            "td_mode",
+            "td_refined",
+            "td_refused",
+            "td_rows_dirty",
+            "td_rows_examined",
+            "td_shadows",
+            "td_presented_marks",
+            "minimized_count",
+            "tab_groups",
+            "ukeire_repeat_delay_ms",
+            "ukeire_repeat_rate_hz",
+            "ukeire_scroll_factor_milli",
+            "ukeire_scroll_natural",
+            "ukeire_cursor_scale",
+            "ukeire_remaps",
+            "ukeire_modifier",
+            "ukeire_keymap_layout",
+            "td_dirty_pct",
+            "import_full",
+            "import_partial",
+            "elements",
+            "geometry",
+            "layout",
+            "windows",
+            "owed_vt_switches",
+            "capture_result",
+            "stale_result",
+            "stale_result_raw",
+            "toplevels",
+            "layout_mode",
+            "bar_height",
+            "pointer_pos",
+            "present_intervals",
+            "atomic",
+            // ★ THESE WERE ANSWERED AND UNLISTED. `schema()` is how an agent
+            // discovers what it can ask, so a leaf missing here is a leaf that
+            // effectively does not exist — and `last_frame_causes` is the one
+            // that named mado as the idle-repaint source in a single query
+            // after the compositor had been suspected for hours. The
+            // every-schema-leaf-answers gate is one-directional and could not
+            // catch this; the reverse gate below now can.
+            "last_frame_causes",
+            "owed",
+            "owed_causes",
+            "modes",
+            "input_devices",
+            "synth_performed",
+            "input_attached",
+            "session_active",
+            "session_events",
+            "socket",
+            "mode",
+            "output",
+            "seat",
+];
+
+impl rather than `#[derive(Introspect)]`, matching what
         // every existing consumer does: the derive handles named struct fields,
         // and half of what is interesting here is a computed or `OnceLock`
         // value.
@@ -1408,89 +1504,7 @@ impl Introspect for OmoyaIntrospect {
     }
 
     fn schema(&self) -> &'static [&'static str] {
-        &[
-            "backend",
-            "frames",
-            "presented",
-            "verbs",
-            "deeds_performed",
-            "chord_deeds",
-            "focus_rect",
-            "frame_us",
-            "planes",
-            "route_cpu_bytes",
-            "route_cpu_bytes_total",
-            "route_label",
-            "shm_imports",
-            "shm_imports_empty_damage",
-            "shm_damage_rects",
-            "shm_damage_area",
-            "blit_fast",
-            "blit_general",
-            "blit_slow",
-            "gather_us",
-            "flush_bytes",
-            "flush_bytes_total",
-            "flush_mb_per_s",
-            "flush_us",
-            "flush_us_max",
-            "flush_us_total",
-            "window_app_ids",
-            "td_mode",
-            "td_refined",
-            "td_refused",
-            "td_rows_dirty",
-            "td_rows_examined",
-            "td_shadows",
-            "td_presented_marks",
-            "minimized_count",
-            "tab_groups",
-            "ukeire_repeat_delay_ms",
-            "ukeire_repeat_rate_hz",
-            "ukeire_scroll_factor_milli",
-            "ukeire_scroll_natural",
-            "ukeire_cursor_scale",
-            "ukeire_remaps",
-            "ukeire_modifier",
-            "ukeire_keymap_layout",
-            "td_dirty_pct",
-            "import_full",
-            "import_partial",
-            "elements",
-            "geometry",
-            "layout",
-            "windows",
-            "owed_vt_switches",
-            "capture_result",
-            "stale_result",
-            "stale_result_raw",
-            "toplevels",
-            "layout_mode",
-            "bar_height",
-            "pointer_pos",
-            "present_intervals",
-            "atomic",
-            // ★ THESE WERE ANSWERED AND UNLISTED. `schema()` is how an agent
-            // discovers what it can ask, so a leaf missing here is a leaf that
-            // effectively does not exist — and `last_frame_causes` is the one
-            // that named mado as the idle-repaint source in a single query
-            // after the compositor had been suspected for hours. The
-            // every-schema-leaf-answers gate is one-directional and could not
-            // catch this; the reverse gate below now can.
-            "last_frame_causes",
-            "owed",
-            "owed_causes",
-            "modes",
-            "input_devices",
-            "synth_performed",
-            "input_attached",
-            "session_active",
-            "session_events",
-            "socket",
-            "mode",
-            "output",
-            "seat",
-        ]
+        LEAVES
     }
 }
 
