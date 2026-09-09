@@ -460,7 +460,38 @@ pub struct OmoyaIntrospect {
     /// that does the work, so `queued` and `performed` are two independently
     /// sourced numbers that can disagree. A caller polls it to learn the deed
     /// LANDED rather than that it was accepted.
+    ///
+    /// ── ★ AND IT COUNTED REFUSALS AS PERFORMANCES, UNTIL NOW ──────────────
+    /// `Omoya::perform` returns a `DeedOutcome` and the drain discarded it, so
+    /// this incremented for every drained deed whether or not anything
+    /// happened. Measured live on plo (pid 15672, 2026-09-09): with
+    /// `minimized_count: 0`, `do/restore-last` — which can only take
+    /// `DeedOutcome::Refused("nothing is minimized")` — answered
+    /// `{"outcome":"found","value":"queued: restore-last"}` while this counter
+    /// moved 1 → 2.
+    ///
+    /// That made the paragraph above FALSE in the one direction it exists to
+    /// be true in, and it made `flake.nix`'s VM gate
+    /// (`assert after == before + 1`) pass on a seat where every verb refuses
+    /// — the gate written specifically to be non-vacuous was vacuous against
+    /// refusal. `deed.rs` had already recorded the same shape from another
+    /// angle ("three verbs incremented the counter and moved no window",
+    /// 2026-09-03) and it was never fixed.
     pub deeds_performed: AtomicU64,
+    /// Deeds the compositor thread DECLINED, with the reason discarded.
+    ///
+    /// ★ The other arm of `DeedOutcome`, and the reason `deeds_performed` can
+    /// now be trusted: a drained deed increments exactly one of the two, so
+    /// `performed + refused` is the drain count that `deeds_performed` used to
+    /// be. Keeping both means a caller can still see that the drain is alive
+    /// when every deed is being refused — which is the state that previously
+    /// read as perfect health.
+    ///
+    /// The REASON is not published here. `DeedOutcome::Refused` carries a
+    /// `&'static str` and there are ten distinct ones; surfacing them is the
+    /// `deed_result` leaf named in `DeedOutcome::to_json`, still unbuilt.
+    /// `pending-omoya-deed-result`.
+    pub deeds_refused: AtomicU64,
     /// Deeds performed from a CHORD — the keyboard path.
     ///
     /// ★ Separate from `deeds_performed` on purpose, and the separation is the
@@ -770,6 +801,7 @@ pub const LEAVES: &[&str] = &[
     "presented",
     "verbs",
     "deeds_performed",
+    "deeds_refused",
     "chord_deeds",
     "focus_rect",
     "frame_us",
@@ -1009,6 +1041,7 @@ impl Introspect for OmoyaIntrospect {
             "synth_performed" => Ok(n(&self.synth_performed)),
             "verbs" => Ok(serde_json::json!(crate::deed::Deed::VERBS)),
             "deeds_performed" => Ok(n(&self.deeds_performed)),
+            "deeds_refused" => Ok(n(&self.deeds_refused)),
             "chord_deeds" => Ok(n(&self.chord_deeds)),
             "focus_rect" => Ok(serde_json::json!(
                 self.focus_rect
@@ -1479,6 +1512,7 @@ impl Introspect for OmoyaIntrospect {
                 "frames": self.frames.load(Ordering::Relaxed),
                 "presented": self.presented.load(Ordering::Relaxed),
                 "deeds_performed": self.deeds_performed.load(Ordering::Relaxed),
+                "deeds_refused": self.deeds_refused.load(Ordering::Relaxed),
                 "elements": self.elements.load(Ordering::Relaxed),
                 "geometry": self.geometry.lock().unwrap_or_else(|e| e.into_inner()).clone(),
                 "layout": self.layout.lock().unwrap_or_else(|e| e.into_inner()).clone(),

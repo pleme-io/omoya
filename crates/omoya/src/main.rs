@@ -839,13 +839,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     for deed in deeds {
                         tracing::info!(?deed, "performing a deed requested over kanshou");
-                        data.state.perform(deed);
+                        // ★ THE OUTCOME IS READ, NOT DISCARDED — and that is
+                        // the whole fix. `perform` has always returned a
+                        // `DeedOutcome` naming ten distinct refusal reasons,
+                        // and this loop threw it away, so the counter below
+                        // incremented whether or not anything happened.
+                        //
+                        // Measured live on plo (2026-09-09): `restore-last`
+                        // with nothing minimized answered kanshou `found` /
+                        // "queued" and moved `deeds_performed` 1 → 2. A
+                        // refusal was reported to the agent as a success.
+                        //
                         // Counted HERE, by the thread that did the work — see
                         // `OmoyaIntrospect::deeds_performed`. The `do` leaf's
-                        // "queued" answer cannot distinguish a drained deed from
-                        // one nothing ever drains.
-                        sink.deeds_performed
-                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        // "queued" answer cannot distinguish a drained deed
+                        // from one nothing ever drains; these two counters
+                        // now also distinguish a deed that RAN from one that
+                        // was declined.
+                        let outcome = data.state.perform(deed);
+                        let counter = match outcome {
+                            crate::deed::DeedOutcome::Performed => &sink.deeds_performed,
+                            crate::deed::DeedOutcome::Refused(reason) => {
+                                tracing::info!(reason, "deed refused");
+                                &sink.deeds_refused
+                            }
+                        };
+                        counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     }
                 })
             {

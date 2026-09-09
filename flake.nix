@@ -563,13 +563,39 @@
                         print("no LIVE omoya kanshou socket found")
                         sys.exit(1)
                     print("socket:", sock)
-                    print("request:", q(sock, ["capture"], [dest]))
+                    # ★ PARSE THE ENVELOPE, DO NOT STRING-MATCH IT.
+                    #
+                    # This probe read `str(result).startswith("ok:")`, which
+                    # was right until `capture_result` became a JSON envelope
+                    # (`{"request_id": N, "outcome": "ok:..."}`, drm.rs:1842).
+                    # From that commit the prefix never matched and this gate
+                    # — the ONLY pixel-level check omoya has — was red, while
+                    # reading like a genuine capture failure.
+                    #
+                    # And matching a prefix was never sufficient anyway:
+                    # `capture_result` OUTLIVES the client that asked, and
+                    # introspect.rs's own note says to compare `request_id`
+                    # against the id the request returned. Without that, a
+                    # probe can read a PREVIOUS capture's success and pass on
+                    # a seat that captured nothing.
+                    req = q(sock, ["capture"], [dest])
+                    print("request:", req)
+                    want = req["Ok"]["request_id"]
                     for _ in range(50):
                         time.sleep(0.2)
                         r = q(sock, ["capture_result"], [])
-                        if r.get("Ok"):
-                            print("result:", r["Ok"])
-                            sys.exit(0 if str(r["Ok"]).startswith("ok:") else 1)
+                        if not r.get("Ok"):
+                            continue
+                        env = json.loads(r["Ok"])
+                        print("result:", env)
+                        got = env.get("request_id")
+                        if got != want:
+                            # A stale result from an earlier request: keep
+                            # waiting rather than judging on someone else's.
+                            print(f"stale request_id {got} != {want}, waiting")
+                            continue
+                        outcome = str(env.get("outcome"))
+                        sys.exit(0 if outcome.startswith("ok:") else 1)
                     print("capture never completed")
                     sys.exit(1)
                   '')
@@ -963,13 +989,35 @@
               # the compositor thread that actually ran it, so the two numbers
               # can disagree — and the disagreement is precisely "the ping did
               # not wake the loop", which on an idle seat is the whole risk.
-              before = int(machine.succeed("kanshou-get deeds_performed").strip())
+              # ★ ASSERT ON THE DRAIN, WHICH IS WHAT THIS GATE ACTUALLY CLAIMS.
+              #
+              # `deeds_performed` used to count every drained deed, refusals
+              # included, so this assertion passed on a seat where every verb
+              # declined — the gate written specifically to be non-vacuous was
+              # vacuous against refusal. That is now fixed in the compositor
+              # (a drained deed increments `deeds_performed` XOR
+              # `deeds_refused`), which means asserting on `deeds_performed`
+              # alone would make THIS gate flaky for the opposite reason:
+              # `focus-right` legitimately refuses when there is nothing to
+              # focus, and a one-window VM is exactly that case.
+              #
+              # The stated purpose is "the calloop ping did not wake the loop",
+              # and the loop waking is `performed + refused`. So the sum is
+              # what gets asserted, and both parts get printed so a reader can
+              # see WHICH happened.
+              def drained():
+                  p = int(machine.succeed("kanshou-get deeds_performed").strip())
+                  r = int(machine.succeed("kanshou-get deeds_refused").strip())
+                  return p, r, p + r
+
+              bp, br, before = drained()
               print("do:", machine.succeed("kanshou-get do/focus-right").strip())
               machine.sleep(2)
-              after = int(machine.succeed("kanshou-get deeds_performed").strip())
-              print(f"deeds performed: {before} -> {after}")
+              ap, ar, after = drained()
+              print(f"deeds performed: {bp} -> {ap}, refused: {br} -> {ar}")
               assert after == before + 1, (
-                  f"deeds_performed went {before} -> {after}. The verb was "
+                  f"drained deeds went {before} -> {after} "
+                  f"(performed {bp}->{ap}, refused {br}->{ar}). The verb was "
                   "accepted and never executed: the calloop ping did not wake "
                   "the loop, which is exactly the failure this design exists "
                   "to prevent on an idle seat."

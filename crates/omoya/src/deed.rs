@@ -415,6 +415,15 @@ impl crate::state::Omoya {
     /// worst failure this layer has, because the key visibly stops reaching
     /// the application AND produces no effect — the operator concludes the
     /// keyboard is broken.
+    /// ★ `#[must_use]` BECAUSE DISCARDING IT WAS THE BUG. Every arm below
+    /// can decline, naming one of ten reasons, and until 2026-09-09 all five
+    /// call sites threw the answer away — so `deeds_performed` counted
+    /// refusals as performances and the agent-facing `do` verb reported a
+    /// no-op as a success. A future silent discard is now a warning at the
+    /// call site rather than a defect found by reading the seat's counters
+    /// against its behaviour.
+    #[must_use = "a deed can be REFUSED — dropping the outcome is what made \
+                  `deeds_performed` count no-ops as successes"]
     pub fn perform(&mut self, deed: Deed) -> DeedOutcome {
         match deed {
             Deed::Focus(dir) => {

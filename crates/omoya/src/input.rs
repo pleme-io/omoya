@@ -180,10 +180,19 @@ impl Omoya {
             // `chord_deeds` is the number that would have said so on day one:
             // a seat whose operator is typing and whose chord counter never
             // moves is a seat whose keymap is not connected.
-            self.introspect
-                .chord_deeds
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            self.perform(d);
+            // ★ COUNTED ON THE OUTCOME, like the kanshou drain. A chord
+            // that resolves to a deed the seat then declines is not a
+            // performed chord — counting it as one is how a keymap that
+            // "works" can sit on top of a seat where nothing moves.
+            let outcome = self.perform(d);
+            let counter = match outcome {
+                crate::deed::DeedOutcome::Performed => &self.introspect.chord_deeds,
+                crate::deed::DeedOutcome::Refused(reason) => {
+                    tracing::info!(reason, "chord deed refused");
+                    &self.introspect.deeds_refused
+                }
+            };
+            counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
         if let Some(vt) = switched {
             tracing::info!(vt, "VT switch performed — the seat released the display");
@@ -370,13 +379,34 @@ impl Omoya {
                     keyboard.set_focus(self, w.toplevel().map(|t| t.wl_surface().clone()), serial);
                     match what {
                         crate::chrome::Hit::Close => {
-                            self.perform(crate::deed::Deed::Close);
+                            // A titlebar button on a window that cannot take
+                            // the deed: nothing to report to, so the refusal
+                            // is logged rather than counted.
+                            if let crate::deed::DeedOutcome::Refused(reason) =
+                                self.perform(crate::deed::Deed::Close)
+                            {
+                                tracing::info!(reason, "titlebar deed refused");
+                            }
                         }
                         crate::chrome::Hit::Minimize => {
-                            self.perform(crate::deed::Deed::Minimize);
+                            // A titlebar button on a window that cannot take
+                            // the deed: nothing to report to, so the refusal
+                            // is logged rather than counted.
+                            if let crate::deed::DeedOutcome::Refused(reason) =
+                                self.perform(crate::deed::Deed::Minimize)
+                            {
+                                tracing::info!(reason, "titlebar deed refused");
+                            }
                         }
                         crate::chrome::Hit::Maximize => {
-                            self.perform(crate::deed::Deed::ToggleMaximize);
+                            // A titlebar button on a window that cannot take
+                            // the deed: nothing to report to, so the refusal
+                            // is logged rather than counted.
+                            if let crate::deed::DeedOutcome::Refused(reason) =
+                                self.perform(crate::deed::Deed::ToggleMaximize)
+                            {
+                                tracing::info!(reason, "titlebar deed refused");
+                            }
                         }
                         crate::chrome::Hit::Drag => {
                             #[allow(clippy::cast_possible_truncation)]
