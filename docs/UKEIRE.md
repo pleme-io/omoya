@@ -198,6 +198,43 @@ for our own bindings, the client resolves them from the emitted text, and a
 mismatch means the compositor and the application believe different keys were
 pressed with no error on either side.
 
+### ★ Who composes the dead keys — and why the seat does not need `text-input-v3`
+
+ABNT2 is a **dead-key layout**: `ã`, `ç`, `â`, `é` are all two keystrokes, and
+`<AD11>` / `<AC11>` produce `dead_acute` / `dead_tilde` rather than characters.
+So a reasonable reader asks whether shipping the layout is worth anything while
+omoya advertises neither `zwp_text_input_v3` nor `zwp_input_method_v2`.
+
+It is, because **composition is the client's job, not the compositor's.** The
+compositor's whole contribution is to deliver the right keysym and hand over a
+keymap that names it. What the client does with `dead_acute` is between the
+client and its own toolkit.
+
+Traced for our own flagship client, mado (2026-09-09, from source):
+
+| step | where | what happens |
+|---|---|---|
+| 1 | omoya | emits the `br` keymap text; `<AD11>` level 1 is `dead_acute` |
+| 2 | winit 0.30 | compiles that text with the REAL `libxkbcommon`, loaded dynamically (`xkbcommon-dl`) — the client is not on hairetsu |
+| 3 | winit | `platform_impl/linux/common/xkb/compose.rs` — `xkb_compose_state_new`, `feed(keysym)`, `xkb_compose_state_get_utf8` |
+| 4 | winit → madori | a completed sequence surfaces as `WindowEvent::Ime` (`madori/src/app.rs:1131`) |
+| 5 | madori | `set_ime_allowed(true)` is called on window creation (`app.rs:805`), which is what makes winit emit those events at all |
+| 6 | mado | `AppEvent::Ime(ImeEvent::Commit(text))` → `engine.on_ime_commit(text)` → the PTY (`gui_tear_attach.rs:1127`) |
+
+Every link is present in code that already ships. **Not verified live** — say
+so rather than rounding it up; the honest claim is "the client-side half exists
+and is reachable", and the check is to type `ç`, `ã` and `á` into mado on a
+`br` seat.
+
+Two consequences worth stating plainly:
+
+- **`text-input-v3` is for input METHODS** (fcitx5/ibus, CJK, a virtual
+  keyboard) — a separate capability from dead keys, still absent, still worth
+  having. Dead keys are not the argument for it.
+- **A client that does NOT compose sees `dead_acute` and produces nothing.**
+  That is correct behaviour on every compositor, not an omoya defect — but it
+  is the thing to check first if a non-mado client cannot type accents.
+
 **Still refused, deliberately:** any layout not in the registry, and any named
 variant. Handing back a base table for a requested variant is the same silent
 substitution in a new costume.
