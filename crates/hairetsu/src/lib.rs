@@ -493,6 +493,10 @@ impl State {
             // not the digit; and Shift with NumLock on is also the cursor key,
             // which is what makes shift-select work on a numlocked keypad.
             layout::KeyType::Keypad => u32::from(num && !shift),
+            // Alt / Control select level 2 on exactly one key each. Shift does
+            // NOT: Shift+PrintScreen is still Print, Alt+PrintScreen is Sys_Req.
+            layout::KeyType::AltLevel2 => u32::from(mods & modifier::MOD1 != 0),
+            layout::KeyType::ControlLevel2 => u32::from(mods & modifier::CONTROL != 0),
         };
         // Level 3/4 only exist on keys that declare them.
         if level3 && k.levels.len() >= 4 {

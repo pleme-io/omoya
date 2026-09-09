@@ -52,8 +52,14 @@ use std::process::Command;
 ///   implement through that path.
 /// * `XServerGrab` — `XF86Ungrab` / `XF86ClearGrab` break an X server's active
 ///   grab. There is no such thing to break on Wayland.
-/// * `Owed` — a real level we do not emit yet, kept HERE rather than silently
-///   dropped so the list reads as a to-do and not as an approval.
+///
+/// ★ There is deliberately NO "we'll get to it" category left. `PAUS` and
+/// `PRSC` were waived as `Owed` on the first run — upstream reaches
+/// `Pause/Break` through Control and `Print/Sys_Req` through Alt, neither of
+/// which our key types could express — and the honest response to a waiver
+/// that names real missing behaviour is to implement it, not to keep it on a
+/// list. `PC_CONTROL_LEVEL2` and `PC_ALT_LEVEL2` now exist and both keys match
+/// upstream exactly.
 const EXPECTED: &[(&str, Reason)] = &[
     ("FK01", Reason::XFree86Vt),
     ("FK02", Reason::XFree86Vt),
@@ -71,8 +77,6 @@ const EXPECTED: &[(&str, Reason)] = &[
     ("KPSU", Reason::XFree86Vt),
     ("KPDV", Reason::XServerGrab),
     ("KPMU", Reason::XServerGrab),
-    ("PAUS", Reason::Owed),
-    ("PRSC", Reason::Owed),
     // MENU has no upstream counterpart under these RMLVO names.
     ("MENU", Reason::NotInOracle),
     ("BKSP", Reason::Redundant),
@@ -83,7 +87,6 @@ const EXPECTED: &[(&str, Reason)] = &[
 enum Reason {
     XFree86Vt,
     XServerGrab,
-    Owed,
     NotInOracle,
     Redundant,
     UnreachableUpstream,
@@ -97,11 +100,6 @@ impl Reason {
                  VT switching in input.rs, not through a keysym"
             }
             Self::XServerGrab => "XF86Ungrab / XF86ClearGrab break an X grab; Wayland has none",
-            Self::Owed => {
-                "OWED — a real level we do not emit (Print/Sys_Req needs an \
-                 ALT_LEVEL2 key type, Pause/Break a CONTROL_LEVEL2 one). \
-                 pending-hairetsu-modifier-level-types"
-            }
             Self::NotInOracle => "no upstream counterpart under these RMLVO names",
             Self::Redundant => {
                 "upstream declares two levels whose keysyms are IDENTICAL \

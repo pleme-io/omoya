@@ -27,6 +27,14 @@ pub enum KeyType {
     /// The non-alphabetic four-level type — digits and punctuation on a layout
     /// that puts symbols on `AltGr`.
     FourLevel,
+    /// Alt selects level 2. Upstream's `PC_ALT_LEVEL2` — `<PRSC>` only.
+    ///
+    /// Shift is NOT the selector, which is the whole reason this type exists
+    /// rather than reusing [`Self::TwoLevel`]: Alt+PrintScreen is `Sys_Req`
+    /// and Shift+PrintScreen is still `Print`.
+    AltLevel2,
+    /// Control selects level 2. Upstream's `PC_CONTROL_LEVEL2` — `<PAUS>` only.
+    ControlLevel2,
     /// Shift XOR Caps selects level 2; `AltGr` adds 2. Letters, four levels.
     ///
     /// Distinct from [`Self::FourLevel`] for exactly the reason
@@ -44,6 +52,8 @@ impl KeyType {
             Self::TwoLevel => "TWO_LEVEL",
             Self::Alphabetic => "ALPHABETIC",
             Self::Keypad => "KEYPAD",
+            Self::AltLevel2 => "PC_ALT_LEVEL2",
+            Self::ControlLevel2 => "PC_CONTROL_LEVEL2",
             Self::FourLevel => "FOUR_LEVEL",
             Self::FourLevelAlphabetic => "FOUR_LEVEL_ALPHABETIC",
         }
@@ -60,7 +70,11 @@ impl KeyType {
     pub const fn levels_ok(self, n: usize) -> bool {
         match self {
             Self::OneLevel => n == 1,
-            Self::TwoLevel | Self::Alphabetic | Self::Keypad => n == 2,
+            Self::TwoLevel
+            | Self::Alphabetic
+            | Self::Keypad
+            | Self::AltLevel2
+            | Self::ControlLevel2 => n == 2,
             Self::FourLevel | Self::FourLevelAlphabetic => n == 4,
         }
     }
@@ -92,7 +106,7 @@ const fn k(
     }
 }
 
-use KeyType::{Alphabetic, Keypad, OneLevel, TwoLevel};
+use KeyType::{Alphabetic, AltLevel2, ControlLevel2, Keypad, OneLevel, TwoLevel};
 
 /// The `us` layout.
 ///
@@ -192,7 +206,7 @@ pub static US: &[KeyEntry] = &[
     k(104, "KPEN", OneLevel, &[key::KP_Enter]),
     k(105, "RCTL", OneLevel, &[key::Control_R]),
     k(106, "KPDV", OneLevel, &[key::KP_Divide]),
-    k(107, "PRSC", OneLevel, &[key::Print]),
+    k(107, "PRSC", AltLevel2, &[key::Print, key::Sys_Req]),
     k(108, "RALT", OneLevel, &[key::Alt_R]),
     k(110, "HOME", OneLevel, &[key::Home]),
     k(111, "UP", OneLevel, &[key::Up]),
@@ -207,7 +221,7 @@ pub static US: &[KeyEntry] = &[
     k(121, "MUTE", OneLevel, &[key::XF86_AudioMute]),
     k(122, "VOL-", OneLevel, &[key::XF86_AudioLowerVolume]),
     k(123, "VOL+", OneLevel, &[key::XF86_AudioRaiseVolume]),
-    k(127, "PAUS", OneLevel, &[key::Pause]),
+    k(127, "PAUS", ControlLevel2, &[key::Pause, key::Break]),
     k(133, "LWIN", OneLevel, &[key::Super_L]),
     k(134, "RWIN", OneLevel, &[key::Super_R]),
     k(135, "MENU", OneLevel, &[key::Menu]),
@@ -682,7 +696,7 @@ pub static BR: &[KeyEntry] = &[
     k(104, "KPEN", OneLevel, &[key::KP_Enter]),
     k(105, "RCTL", OneLevel, &[key::Control_R]),
     k(106, "KPDV", OneLevel, &[key::KP_Divide]),
-    k(107, "PRSC", OneLevel, &[key::Print]),
+    k(107, "PRSC", AltLevel2, &[key::Print, key::Sys_Req]),
     // ★ NOT Alt_R — see the level3(ralt_switch) note above.
     k(108, "RALT", OneLevel, &[key::ISO_Level3_Shift]),
     k(110, "HOME", OneLevel, &[key::Home]),
@@ -698,7 +712,7 @@ pub static BR: &[KeyEntry] = &[
     k(121, "MUTE", OneLevel, &[key::XF86_AudioMute]),
     k(122, "VOL-", OneLevel, &[key::XF86_AudioLowerVolume]),
     k(123, "VOL+", OneLevel, &[key::XF86_AudioRaiseVolume]),
-    k(127, "PAUS", OneLevel, &[key::Pause]),
+    k(127, "PAUS", ControlLevel2, &[key::Pause, key::Break]),
     k(133, "LWIN", OneLevel, &[key::Super_L]),
     k(134, "RWIN", OneLevel, &[key::Super_R]),
     k(135, "MENU", OneLevel, &[key::Menu]),

@@ -109,6 +109,20 @@ const TYPES: &str = r#"xkb_types "hairetsu" {
         level_name[Level1]= "Base";
         level_name[Level2]= "Number";
     };
+    type "PC_ALT_LEVEL2" {
+        modifiers= Mod1;
+        map[None]= Level1;
+        map[Mod1]= Level2;
+        level_name[Level1]= "Base";
+        level_name[Level2]= "Alt";
+    };
+    type "PC_CONTROL_LEVEL2" {
+        modifiers= Control;
+        map[None]= Level1;
+        map[Control]= Level2;
+        level_name[Level1]= "Base";
+        level_name[Level2]= "Control";
+    };
     type "FOUR_LEVEL" {
         modifiers= Shift+Mod5;
         map[None]= Level1;
@@ -329,6 +343,8 @@ mod parity {
             KeyType::Keypad,
             KeyType::FourLevel,
             KeyType::FourLevelAlphabetic,
+            KeyType::AltLevel2,
+            KeyType::ControlLevel2,
         ] {
             assert!(
                 parsed.contains_key(kind.xkb_name()),
@@ -350,6 +366,10 @@ mod parity {
             modifier::SHIFT | modifier::LOCK,
             modifier::MOD2,
             modifier::SHIFT | modifier::MOD2,
+            modifier::MOD1,
+            modifier::SHIFT | modifier::MOD1,
+            modifier::CONTROL,
+            modifier::SHIFT | modifier::CONTROL,
             modifier::MOD5,
             modifier::SHIFT | modifier::MOD5,
             modifier::LOCK | modifier::MOD5,
