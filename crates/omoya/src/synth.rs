@@ -294,9 +294,16 @@ pub enum Step {
 mod tests {
     use super::*;
 
+    /// The layout the ASCII cases are written against, named rather than
+    /// implied — these assertions are about `us` specifically, and `br` moves
+    /// several of the keycodes they pin.
+    fn us() -> hairetsu::Keymap {
+        hairetsu::Keymap::for_layout("us").expect("us is registered")
+    }
+
     #[test]
     fn a_lowercase_run_needs_no_shift() {
-        let steps = expand(&Synth::Text("abc".into())).unwrap();
+        let steps = expand(&Synth::Text("abc".into()), &us()).unwrap();
         assert!(
             !steps.iter().any(|s| matches!(
                 s,
@@ -312,7 +319,7 @@ mod tests {
 
     #[test]
     fn shift_is_held_across_a_run_not_tapped_per_character() {
-        let steps = expand(&Synth::Text("ABC".into())).unwrap();
+        let steps = expand(&Synth::Text("ABC".into()), &us()).unwrap();
         let shifts = steps
             .iter()
             .filter(|s| {
@@ -337,7 +344,7 @@ mod tests {
         // pressed makes every subsequent REAL keystroke uppercase, and there
         // is no key to lift.
         for text in ["A", "aA", "Aa", "!", "hello World!"] {
-            let steps = expand(&Synth::Text(text.into())).unwrap();
+            let steps = expand(&Synth::Text(text.into()), &us()).unwrap();
             let mut held = false;
             for s in &steps {
                 if let Step::Key {
@@ -354,7 +361,7 @@ mod tests {
 
     #[test]
     fn every_press_has_its_release() {
-        let steps = expand(&Synth::Text("Hello, World!".into())).unwrap();
+        let steps = expand(&Synth::Text("Hello, World!".into()), &us()).unwrap();
         let mut down = std::collections::HashSet::new();
         for s in &steps {
             if let Step::Key { code, state } = s {
@@ -372,12 +379,55 @@ mod tests {
     }
 
     #[test]
+    fn the_same_character_synthesises_differently_per_layout() {
+        // ★ THE WHOLE POINT, and the regression this replaced. A hardcoded US
+        // table types the same keycodes whatever the seat is running: on `br`
+        // it would have sent keycode 39 for `;` — which on that layout is `ç` —
+        // and `ç` itself would have been unreachable.
+        let br = hairetsu::Keymap::for_layout("br").expect("br is registered");
+
+        let semi_us = expand(&Synth::Text(";".into()), &us()).unwrap();
+        let semi_br = expand(&Synth::Text(";".into()), &br).unwrap();
+        assert_ne!(
+            semi_us, semi_br,
+            "`;` must not synthesise the same keycode on us and br"
+        );
+
+        // `ç` is typeable on br and refused on us — a refusal, never the
+        // nearest key.
+        assert!(expand(&Synth::Text("ç".into()), &br).is_ok());
+        assert!(expand(&Synth::Text("ç".into()), &us()).is_err());
+    }
+
+    #[test]
+    fn an_altgr_character_brackets_right_alt_and_releases_it() {
+        // The level-3 column had no consumer before `br`. If AltGr is not
+        // held, the character is simply wrong; if it is not RELEASED, every
+        // subsequent real keystroke lands on level 3.
+        let br = hairetsu::Keymap::for_layout("br").expect("br");
+        let steps = expand(&Synth::Text("¬".into()), &br).unwrap();
+        let downs = steps
+            .iter()
+            .filter(|s| matches!(s, Step::Key { code, state } if *code == KEY_RIGHTALT && *state == KeyState::Pressed))
+            .count();
+        let ups = steps
+            .iter()
+            .filter(|s| matches!(s, Step::Key { code, state } if *code == KEY_RIGHTALT && *state == KeyState::Released))
+            .count();
+        assert_eq!(downs, 1, "AltGr must be pressed once: {steps:?}");
+        assert_eq!(
+            ups, 1,
+            "AltGr must be released, or the seat is stuck on level 3"
+        );
+    }
+
+    #[test]
     fn an_unmappable_character_is_refused_not_skipped() {
         // ★ Typing "héllo" and getting "hllo" is worse than an error: the
         // caller believes it sent what it asked for.
-        let e = expand(&Synth::Text("héllo".into())).unwrap_err();
+        let e = expand(&Synth::Text("héllo".into()), &us()).unwrap_err();
         assert!(e.contains('é'), "the refusal must name the character: {e}");
-        assert!(expand(&Synth::Text("hello".into())).is_ok());
+        assert!(expand(&Synth::Text("hello".into()), &us()).is_ok());
     }
 
     #[test]
