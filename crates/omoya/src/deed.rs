@@ -94,6 +94,9 @@ pub enum Deed {
     TabJoin,
     /// Take the focused window out of its group.
     TabLeave,
+    /// Snap the focused floating window by Windows' Win+Arrow table — see
+    /// `snap::step`. Floating mode only; refused, by name, in tiling mode.
+    Snap(Direction),
 }
 
 impl Deed {
@@ -131,6 +134,10 @@ impl Deed {
             "tab-prev" => Self::TabPrev,
             "tab-join" => Self::TabJoin,
             "tab-leave" => Self::TabLeave,
+            "snap-left" => Self::Snap(Direction::Left),
+            "snap-right" => Self::Snap(Direction::Right),
+            "snap-up" => Self::Snap(Direction::Above),
+            "snap-down" => Self::Snap(Direction::Below),
             _ => return None,
         })
     }
@@ -157,6 +164,10 @@ impl Deed {
         "tab-prev",
         "tab-join",
         "tab-leave",
+        "snap-left",
+        "snap-right",
+        "snap-up",
+        "snap-down",
     ];
 }
 
@@ -197,6 +208,18 @@ pub fn default_bindings() -> (BindingMap<Deed>, Vec<Hotkey>) {
 /// representation, so this function can take a bare `Modifiers` without
 /// needing to police it.
 pub fn default_bindings_on(logo: Modifiers) -> (BindingMap<Deed>, Vec<Hotkey>) {
+    default_bindings_for(logo, false)
+}
+
+/// The binding map for a seat modifier and layout mode.
+///
+/// ★ IN FLOATING MODE THE ARROWS SNAP. Logo+Arrows is Windows' snap chord and
+/// the one people's hands already know; directional focus stays on Logo+hjkl,
+/// which floating mode keeps. Tiling mode is unchanged — there the arrows
+/// focus, as they always have. One map per mode rather than a mode check
+/// inside the deed, so `omoya config-show`-style introspection of the map
+/// says what a chord does.
+pub fn default_bindings_for(logo: Modifiers, floating: bool) -> (BindingMap<Deed>, Vec<Hotkey>) {
     let mut map = BindingMap::<Deed>::typed();
     let mut clashes = Vec::new();
     let Some(mode) = map.mode_mut("default") else {
@@ -220,7 +243,13 @@ pub fn default_bindings_on(logo: Modifiers) -> (BindingMap<Deed>, Vec<Hotkey>) {
         (Key::Up, Direction::Above),
         (Key::Right, Direction::Right),
     ] {
-        if let Err(prev) = mode.try_bind(Binding::new(Hotkey::new(logo, key), Deed::Focus(dir))) {
+        let arrow = matches!(key, Key::Left | Key::Right | Key::Up | Key::Down);
+        let deed = if floating && arrow {
+            Deed::Snap(dir)
+        } else {
+            Deed::Focus(dir)
+        };
+        if let Err(prev) = mode.try_bind(Binding::new(Hotkey::new(logo, key), deed)) {
             clashes.push(prev.hotkey);
         }
         if let Err(prev) = mode.try_bind(Binding::new(
@@ -312,6 +341,38 @@ mod tests {
         match map.match_key(hk, &MatchContext::default()) {
             MatchResult::Matched { action, .. } => Some(action),
             _ => None,
+        }
+    }
+
+    #[test]
+    fn in_floating_mode_the_arrows_snap_and_hjkl_still_focus() {
+        let (mut m, clashes) = default_bindings_for(LOGO, true);
+        assert!(clashes.is_empty(), "{clashes:?}");
+        for (key, dir) in [
+            (Key::Left, Direction::Left),
+            (Key::Right, Direction::Right),
+            (Key::Up, Direction::Above),
+            (Key::Down, Direction::Below),
+        ] {
+            assert_eq!(hit(&mut m, Hotkey::new(LOGO, key)), Some(Deed::Snap(dir)));
+        }
+        assert_eq!(
+            hit(&mut m, Hotkey::new(LOGO, Key::H)),
+            Some(Deed::Focus(Direction::Left))
+        );
+        // Tiling is untouched: the arrows still focus there.
+        let (mut t, _) = default_bindings_for(LOGO, false);
+        assert_eq!(
+            hit(&mut t, Hotkey::new(LOGO, Key::Left)),
+            Some(Deed::Focus(Direction::Left))
+        );
+    }
+
+    #[test]
+    fn every_snap_verb_parses() {
+        for v in ["snap-left", "snap-right", "snap-up", "snap-down"] {
+            assert!(matches!(Deed::parse(v), Some(Deed::Snap(_))), "{v}");
+            assert!(Deed::VERBS.contains(&v), "{v} missing from VERBS");
         }
     }
 
@@ -516,6 +577,26 @@ impl crate::state::Omoya {
                     None => DeedOutcome::Refused("no focused window to cycle from"),
                 }
             }
+            Deed::Snap(dir) => {
+                if self.config.layout.mode != crate::config::LayoutMode::Floating {
+                    return DeedOutcome::Refused(
+                        "snapping is a floating-mode deed (layout.mode: tiling)",
+                    );
+                }
+                let Some(w) = self.focused_window() else {
+                    return DeedOutcome::Refused("no focused window to snap");
+                };
+                match crate::snap::step(crate::snap::tile_of(&w), dir) {
+                    crate::snap::Step::To(tile) => {
+                        crate::snap::set(&w, tile);
+                        self.apply_layout();
+                        DeedOutcome::Performed
+                    }
+                    crate::snap::Step::Minimize => {
+                        return self.perform(Deed::Minimize);
+                    }
+                }
+            }
             Deed::TabJoin => match (self.focused_surface_id(), self.previous_focus_id()) {
                 (Some(id), Some(host)) if id != host => {
                     self.windows.join(id, host);
@@ -590,6 +671,17 @@ impl crate::state::Omoya {
         let kb = self.seat.get_keyboard()?;
         let surface = kb.current_focus()?;
         Some(crate::winid::of(&surface))
+    }
+
+    /// The focused WINDOW, matched by surface — never by `winid`, which is
+    /// per-client and collides (every mado is 16).
+    #[must_use]
+    pub fn focused_window(&self) -> Option<smithay::desktop::Window> {
+        let surface = self.seat.get_keyboard()?.current_focus()?;
+        self.space
+            .elements()
+            .find(|w| w.toplevel().is_some_and(|t| *t.wl_surface() == surface))
+            .cloned()
     }
 
     /// The window focused before the current one, for `tab-join`.

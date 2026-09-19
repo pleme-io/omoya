@@ -114,6 +114,30 @@ pub fn forget(w: &Window) {
 /// size. Clamping the position rather than shrinking the window is deliberate:
 /// resizing a window because the screen moved would be the compositor
 /// overruling a size the client chose.
+/// A window's own FREE size (the frame, titlebar included), once it has one.
+///
+/// Absent until the operator resizes the window; the layout then uses the
+/// config fractions. Kept beside the position for the same reason — on the
+/// window, because ids collide across clients — and so a window leaving a snap
+/// tile returns to ITS size rather than to the default.
+#[derive(Debug, Default)]
+struct FloatSize(Cell<Option<smithay::utils::Size<i32, Logical>>>);
+
+/// The remembered free size of `w`, if any.
+#[must_use]
+pub fn recall_size(w: &Window) -> Option<smithay::utils::Size<i32, Logical>> {
+    w.user_data().get::<FloatSize>().and_then(|s| s.0.get())
+}
+
+/// Remember `size` as `w`'s free size.
+pub fn remember_size(w: &Window, size: smithay::utils::Size<i32, Logical>) {
+    let map = w.user_data();
+    map.insert_if_missing(FloatSize::default);
+    if let Some(s) = map.get::<FloatSize>() {
+        s.0.set(Some(size));
+    }
+}
+
 #[must_use]
 pub fn clamped(
     remembered: Point<i32, Logical>,

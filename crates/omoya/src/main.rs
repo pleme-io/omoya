@@ -41,6 +41,7 @@ mod protocols;
 mod remap;
 mod rouka;
 mod scanout;
+mod snap;
 mod spawn;
 mod stale;
 mod state;
@@ -1028,8 +1029,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // default never had.
     {
         let modifier = data.state.config.ukeire.modifier;
-        if modifier != crate::ukeire::SeatModifier::default() {
-            let (map, clashes) = crate::deed::default_bindings_on(modifier.modifiers());
+        let floating = data.state.config.layout.mode == crate::config::LayoutMode::Floating;
+        if modifier != crate::ukeire::SeatModifier::default() || floating {
+            let (map, clashes) = crate::deed::default_bindings_for(modifier.modifiers(), floating);
             if !clashes.is_empty() {
                 tracing::error!(?clashes, "duplicate key bindings — later ones were refused");
             }

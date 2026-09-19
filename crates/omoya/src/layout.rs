@@ -312,6 +312,31 @@ impl Tiling {
 // ── ★ THE COMPOSITOR SIDE: TURN THE TREE INTO POSITIONS AND CONFIGURES ───
 
 impl crate::state::Omoya {
+    /// Map `w` so its FRAME (titlebar included) is `frame`.
+    ///
+    /// ★ CONSTRAIN THE FRAME, NOT THE CONTENT. Maximise used to map the
+    /// CONTENT at the zone's origin and skip the `content_for` shrink, so the
+    /// titlebar — drawn ABOVE the content — landed under the status bar and
+    /// the focus ring at x = -2. One helper for maximise and every snap tile,
+    /// so that fix cannot be lost by the next placement that needs it.
+    pub fn place_frame(
+        &mut self,
+        w: &smithay::desktop::Window,
+        frame: smithay::utils::Rectangle<i32, smithay::utils::Logical>,
+    ) {
+        let content = crate::chrome::content_for(frame);
+        let content = if content.size.is_empty() {
+            frame
+        } else {
+            content
+        };
+        if let Some(t) = w.toplevel() {
+            t.with_pending_state(|st| st.size = Some(content.size));
+            t.send_pending_configure();
+        }
+        self.space.map_element(w.clone(), content.loc, true);
+    }
+
     /// Re-place every window according to the layout tree.
     ///
     /// ★ TWO HALVES, AND ONLY ONE OF THEM IS OBVIOUS. Moving the element in
@@ -535,28 +560,20 @@ impl crate::state::Omoya {
                     continue;
                 }
                 crate::windowmode::Placement::Maximized => {
-                    // ★ CONSTRAIN THE FRAME, NOT THE CONTENT. This mapped the
-                    // CONTENT at `usable.loc`/`usable.size` and skipped the
-                    // `content_for` shrink below, so the titlebar — which is
-                    // drawn ABOVE the content — rendered in the band the status
-                    // bar occupies (y 4..28 at bar_height 28) and the focus
-                    // ring landed at x = -2. A maximised window was the one
-                    // window whose controls were under the bar.
-                    let frame = usable;
-                    let content = crate::chrome::content_for(frame);
-                    let content = if content.size.is_empty() {
-                        frame
-                    } else {
-                        content
-                    };
-                    if let Some(t) = w.toplevel() {
-                        t.with_pending_state(|st| st.size = Some(content.size));
-                        t.send_pending_configure();
-                    }
-                    self.space.map_element(w.clone(), content.loc, true);
+                    self.place_frame(w, usable);
                     continue;
                 }
                 crate::windowmode::Placement::AsLaidOut => {}
+            }
+            // ── ★ A SNAPPED WINDOW TAKES ITS TILE ────────────────────────
+            // Checked after `Placement` so minimise and maximise still win,
+            // and only in floating mode: a tile is a floating-window idea,
+            // and in tiling mode the tree owns every rect.
+            if floating_mode {
+                if let Some(tile) = crate::snap::tile_of(w) {
+                    self.place_frame(w, crate::snap::frame_for(tile, usable));
+                    continue;
+                }
             }
             // ★ IN FLOATING MODE THE SIZE COMES FROM CONFIG, NOT FROM THE
             // PER-APP RULE. `for_app_id_in` returns `Tiled` for an unlisted
@@ -616,14 +633,24 @@ impl crate::state::Omoya {
                 // multiplications, and it is what supplies the SIZE even when
                 // the position is recalled. `width`/`height` are fractions of
                 // the zone, so the rect is the only place they become pixels.
-                let first = crate::placement::snap_to_edges(
-                    crate::placement::cascaded(
-                        usable,
-                        width,
-                        height,
-                        idx,
-                        self.config.layout.cascade_step,
+                let cascade = crate::placement::cascaded(
+                    usable,
+                    width,
+                    height,
+                    idx,
+                    self.config.layout.cascade_step,
+                );
+                // A window the operator has sized keeps ITS size; the config
+                // fractions are only the size a window starts at.
+                let cascade = match crate::floatpos::recall_size(w) {
+                    Some(size) => smithay::utils::Rectangle::new(
+                        cascade.loc,
+                        (size.w.min(usable.size.w), size.h.min(usable.size.h)).into(),
                     ),
+                    None => cascade,
+                };
+                let first = crate::placement::snap_to_edges(
+                    cascade,
                     usable,
                     self.config.layout.snap_threshold,
                 );
@@ -1011,7 +1038,7 @@ mod tests {
 /// second is stable enough to make a placement decision on, and
 /// `placement::for_app_id` treats both as tiled anyway — but a future rule
 /// that wants to distinguish them can.
-fn app_id_of(w: &smithay::desktop::Window) -> Option<String> {
+pub fn app_id_of(w: &smithay::desktop::Window) -> Option<String> {
     use smithay::wayland::compositor::with_states;
     use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
     let t = w.toplevel()?;

@@ -33,6 +33,12 @@ use smithay::{
 
 use crate::state::Omoya;
 
+/// Two titlebar presses on the same window within this are a double-click.
+/// 400 ms sits between macOS's and Windows' defaults (both configurable,
+/// both near 500), short enough that two separate drags are not mistaken
+/// for one.
+pub const DOUBLE_CLICK: std::time::Duration = std::time::Duration::from_millis(400);
+
 impl Omoya {
     /// Handle one key, from wherever it came.
     ///
@@ -408,7 +414,23 @@ impl Omoya {
                                 tracing::info!(reason, "titlebar deed refused");
                             }
                         }
+                        crate::chrome::Hit::Drag
+                            if self.last_titlebar_press.as_ref().is_some_and(|(prev, at)| {
+                                *prev == w && at.elapsed() <= DOUBLE_CLICK
+                            }) =>
+                        {
+                            // ── ★ DOUBLE-CLICK THE TITLEBAR: MAXIMISE ────
+                            // The same verb as the button and Logo+F, so the
+                            // three can never disagree about what maximise is.
+                            self.last_titlebar_press = None;
+                            if let crate::deed::DeedOutcome::Refused(reason) =
+                                self.perform(crate::deed::Deed::ToggleMaximize)
+                            {
+                                tracing::info!(reason, "titlebar double-click refused");
+                            }
+                        }
                         crate::chrome::Hit::Drag => {
+                            self.last_titlebar_press = Some((w.clone(), std::time::Instant::now()));
                             #[allow(clippy::cast_possible_truncation)]
                             let offset =
                                 smithay::utils::Point::<i32, smithay::utils::Logical>::from((
@@ -431,6 +453,43 @@ impl Omoya {
                                 smithay::input::pointer::Focus::Clear,
                             );
                         }
+                    }
+                    return;
+                }
+
+                // ── ★ THE MARGIN AROUND A FRAME RESIZES IT ───────────────
+                // A press just OUTSIDE a floating window's frame grabs that
+                // edge (or corner), as on macOS and Windows. Outside, because
+                // inside belongs to the client. Front to back, for the same
+                // reason as the titlebar scan above: where two margins meet,
+                // the visible window wins. Overlays (the launcher) are not
+                // resizable — they size themselves.
+                let border = self.space.elements().rev().find_map(|w| {
+                    if crate::placement::for_app_id_in(
+                        crate::layout::app_id_of(w).as_deref(),
+                        &self.config.placement,
+                    )
+                    .is_floating()
+                    {
+                        return None;
+                    }
+                    let geo = self.space.element_geometry(w)?;
+                    let frame = smithay::utils::Rectangle::new(
+                        (geo.loc.x, geo.loc.y - crate::chrome::HEIGHT).into(),
+                        (geo.size.w, geo.size.h + crate::chrome::HEIGHT).into(),
+                    );
+                    crate::grab::border_hit(frame, p).map(|e| (w.clone(), e))
+                });
+                if let Some((w, edges)) = border {
+                    self.space.raise_element(&w, true);
+                    keyboard.set_focus(self, w.toplevel().map(|t| t.wl_surface().clone()), serial);
+                    let start_data = smithay::input::pointer::GrabStartData {
+                        focus: None,
+                        button,
+                        location: p,
+                    };
+                    if let Some(grab) = crate::grab::ResizeGrab::begin(self, w, edges, start_data) {
+                        pointer.set_grab(self, grab, serial, smithay::input::pointer::Focus::Clear);
                     }
                     return;
                 }

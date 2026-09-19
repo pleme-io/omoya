@@ -320,14 +320,57 @@ impl XdgShellHandler for Omoya {
         );
     }
 
-    /// M2: accepted and ignored — see the module header.
+    /// A client asking to be resized from one of its edges — what a window
+    /// with its own (client-side) decorations sends when its border is dragged.
+    ///
+    /// ★ Was "accepted and ignored" (M2). Validated exactly like
+    /// `move_request`: the serial must match a live press the compositor
+    /// issued, or any client could resize itself at will. Floating mode only
+    /// — in tiling mode the tree owns every rect and a client-driven size
+    /// would be overwritten by the next layout pass.
     fn resize_request(
         &mut self,
-        _surface: ToplevelSurface,
-        _seat: wl_seat::WlSeat,
-        _serial: Serial,
-        _edges: xdg_toplevel::ResizeEdge,
+        surface: ToplevelSurface,
+        seat: wl_seat::WlSeat,
+        serial: Serial,
+        edges: xdg_toplevel::ResizeEdge,
     ) {
+        if self.config.layout.mode != crate::config::LayoutMode::Floating {
+            return;
+        }
+        let edges = crate::grab::Edges::from(edges);
+        if edges.is_empty() {
+            return;
+        }
+        let Some(seat) = Seat::<Self>::from_resource(&seat) else {
+            return;
+        };
+        let Some(pointer) = seat.get_pointer() else {
+            return;
+        };
+        if !pointer.has_grab(serial) {
+            tracing::debug!("resize_request refused — serial does not match a live grab");
+            return;
+        }
+        let Some(start_data) = pointer.grab_start_data() else {
+            return;
+        };
+        let wl_surface = surface.wl_surface();
+        let Some(window) = self
+            .space
+            .elements()
+            .find(|w| {
+                w.toplevel()
+                    .map(smithay::wayland::shell::xdg::ToplevelSurface::wl_surface)
+                    == Some(wl_surface)
+            })
+            .cloned()
+        else {
+            return;
+        };
+        if let Some(grab) = crate::grab::ResizeGrab::begin(self, window, edges, start_data) {
+            pointer.set_grab(self, grab, serial, smithay::input::pointer::Focus::Clear);
+        }
     }
 
     fn grab(&mut self, _surface: PopupSurface, _seat: wl_seat::WlSeat, _serial: Serial) {}

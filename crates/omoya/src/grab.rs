@@ -85,6 +85,111 @@ pub fn snap_rect(
     (nx, ny)
 }
 
+/// The `PointerGrab` methods every omoya grab forwards unchanged.
+///
+/// Written once because two grabs (move, resize) need the identical dozen
+/// pass-throughs, and a hand-copied second set is free to drift — the day a
+/// gesture is handled in one and forgotten in the other. Each grab keeps only
+/// what makes it a grab: `motion` and `button`. Requires a `start_data` field.
+macro_rules! pointer_grab_passthrough {
+    () => {
+        fn relative_motion(
+            &mut self,
+            data: &mut Omoya,
+            handle: &mut PointerInnerHandle<'_, Omoya>,
+            focus: Option<(
+                <Omoya as smithay::input::SeatHandler>::PointerFocus,
+                Point<f64, Logical>,
+            )>,
+            event: &RelativeMotionEvent,
+        ) {
+            handle.relative_motion(data, focus, event);
+        }
+
+        fn axis(
+            &mut self,
+            data: &mut Omoya,
+            handle: &mut PointerInnerHandle<'_, Omoya>,
+            details: AxisFrame,
+        ) {
+            handle.axis(data, details);
+        }
+        fn frame(&mut self, data: &mut Omoya, handle: &mut PointerInnerHandle<'_, Omoya>) {
+            handle.frame(data);
+        }
+        fn gesture_swipe_begin(
+            &mut self,
+            d: &mut Omoya,
+            h: &mut PointerInnerHandle<'_, Omoya>,
+            e: &GestureSwipeBeginEvent,
+        ) {
+            h.gesture_swipe_begin(d, e);
+        }
+        fn gesture_swipe_update(
+            &mut self,
+            d: &mut Omoya,
+            h: &mut PointerInnerHandle<'_, Omoya>,
+            e: &GestureSwipeUpdateEvent,
+        ) {
+            h.gesture_swipe_update(d, e);
+        }
+        fn gesture_swipe_end(
+            &mut self,
+            d: &mut Omoya,
+            h: &mut PointerInnerHandle<'_, Omoya>,
+            e: &GestureSwipeEndEvent,
+        ) {
+            h.gesture_swipe_end(d, e);
+        }
+        fn gesture_pinch_begin(
+            &mut self,
+            d: &mut Omoya,
+            h: &mut PointerInnerHandle<'_, Omoya>,
+            e: &GesturePinchBeginEvent,
+        ) {
+            h.gesture_pinch_begin(d, e);
+        }
+        fn gesture_pinch_update(
+            &mut self,
+            d: &mut Omoya,
+            h: &mut PointerInnerHandle<'_, Omoya>,
+            e: &GesturePinchUpdateEvent,
+        ) {
+            h.gesture_pinch_update(d, e);
+        }
+        fn gesture_pinch_end(
+            &mut self,
+            d: &mut Omoya,
+            h: &mut PointerInnerHandle<'_, Omoya>,
+            e: &GesturePinchEndEvent,
+        ) {
+            h.gesture_pinch_end(d, e);
+        }
+        fn gesture_hold_begin(
+            &mut self,
+            d: &mut Omoya,
+            h: &mut PointerInnerHandle<'_, Omoya>,
+            e: &GestureHoldBeginEvent,
+        ) {
+            h.gesture_hold_begin(d, e);
+        }
+        fn gesture_hold_end(
+            &mut self,
+            d: &mut Omoya,
+            h: &mut PointerInnerHandle<'_, Omoya>,
+            e: &GestureHoldEndEvent,
+        ) {
+            h.gesture_hold_end(d, e);
+        }
+
+        fn start_data(&self) -> &GrabStartData<Omoya> {
+            &self.start_data
+        }
+
+        fn unset(&mut self, _data: &mut Omoya) {}
+    };
+}
+
 /// A window being dragged by the pointer.
 pub struct MoveGrab {
     pub start_data: GrabStartData<Omoya>,
@@ -111,6 +216,22 @@ impl PointerGrab<Omoya> for MoveGrab {
         handle.motion(data, None, event);
 
         let p: Point<i32, Logical> = (event.location.x as i32, event.location.y as i32).into();
+        // ── ★ DRAGGING A SNAPPED WINDOW FREES IT (Windows/macOS) ─────────
+        // It returns to its free size at once, and the grab offset is scaled
+        // so the pointer keeps its RELATIVE spot on the titlebar — grabbing a
+        // half-screen window near its right edge must not leave the pointer
+        // hanging off the right of a window that just got narrower.
+        if crate::snap::tile_of(&self.window).is_some() {
+            let before = data.space.element_geometry(&self.window);
+            crate::snap::set(&self.window, None);
+            data.apply_layout();
+            if let (Some(old), Some(new)) = (before, data.space.element_geometry(&self.window)) {
+                if old.size.w > 0 {
+                    let frac = f64::from(p.x - old.loc.x) / f64::from(old.size.w);
+                    self.offset.x = -(f64::from(new.size.w) * frac.clamp(0.0, 1.0)) as i32;
+                }
+            }
+        }
         // ★ CLAMPED, SO THE TITLEBAR CANNOT LEAVE THE SCREEN. `p + offset` is
         // unbounded, and the titlebar is the ONE part of a window that must
         // stay reachable — drag it past the top or the side and the thing you
@@ -147,21 +268,16 @@ impl PointerGrab<Omoya> for MoveGrab {
         // broken: the next `apply_layout` re-derived the position from the
         // window's index and put it straight back. The Space is the layout's
         // OUTPUT; this is where the operator's intent is kept.
-        crate::floatpos::remember(&self.window, new_loc);
+        //
+        // ★ THE FRAME, NOT THE CONTENT. `floatpos` is read by the layout as
+        // the FRAME origin (the titlebar's top-left); remembering the content
+        // origin made every later layout pass push a dragged window down by
+        // `chrome::HEIGHT` (2026-09-19).
+        crate::floatpos::remember(
+            &self.window,
+            (new_loc.x, new_loc.y - crate::chrome::HEIGHT).into(),
+        );
         data.introspect.mark(crate::owed::Owed::Windows);
-    }
-
-    fn relative_motion(
-        &mut self,
-        data: &mut Omoya,
-        handle: &mut PointerInnerHandle<'_, Omoya>,
-        focus: Option<(
-            <Omoya as smithay::input::SeatHandler>::PointerFocus,
-            Point<f64, Logical>,
-        )>,
-        event: &RelativeMotionEvent,
-    ) {
-        handle.relative_motion(data, focus, event);
     }
 
     fn button(
@@ -179,7 +295,23 @@ impl PointerGrab<Omoya> for MoveGrab {
             // operator pulls away, it jumps back. On release it reads as
             // alignment, which is what `snap_threshold`'s own doc-comment says
             // it is for.
-            if let Some(geo) = data.space.element_geometry(&self.window) {
+            // ── ★ AN EDGE OR CORNER RELEASE SNAPS TO A TILE ──────────────
+            // Decided from where the POINTER is, not the window: the pointer
+            // is what the operator pushed into the edge, and the window is
+            // clamped inside the zone so it can never reach it.
+            let pointer = handle.current_location();
+            let tile = data
+                .space
+                .outputs()
+                .next()
+                .and_then(|o| data.space.output_geometry(o))
+                .and_then(|screen| {
+                    crate::snap::zone_for((pointer.x as i32, pointer.y as i32).into(), screen)
+                });
+            if let Some(tile) = tile {
+                crate::snap::set(&self.window, Some(tile));
+                data.apply_layout();
+            } else if let Some(geo) = data.space.element_geometry(&self.window) {
                 let zone = data
                     .space
                     .outputs()
@@ -202,87 +334,309 @@ impl PointerGrab<Omoya> for MoveGrab {
         }
     }
 
-    fn axis(
+    pointer_grab_passthrough!();
+}
+
+/// Which edges of a frame a resize moves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Edges {
+    pub left: bool,
+    pub right: bool,
+    pub top: bool,
+    pub bottom: bool,
+}
+
+impl Edges {
+    /// No edge at all — not a resize.
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        !(self.left || self.right || self.top || self.bottom)
+    }
+}
+
+impl From<smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::ResizeEdge>
+    for Edges
+{
+    fn from(
+        e: smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::ResizeEdge,
+    ) -> Self {
+        use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::ResizeEdge as R;
+        let (left, right, top, bottom) = match e {
+            R::Left => (true, false, false, false),
+            R::Right => (false, true, false, false),
+            R::Top => (false, false, true, false),
+            R::Bottom => (false, false, false, true),
+            R::TopLeft => (true, false, true, false),
+            R::TopRight => (false, true, true, false),
+            R::BottomLeft => (true, false, false, true),
+            R::BottomRight => (false, true, false, true),
+            _ => (false, false, false, false),
+        };
+        Self {
+            left,
+            right,
+            top,
+            bottom,
+        }
+    }
+}
+
+/// The smallest FRAME a resize may produce: room for the titlebar's three
+/// buttons and a few lines of content. Below it a window is a sliver the
+/// operator cannot grab again.
+pub const MIN_W: i32 = 160;
+/// See [`MIN_W`].
+pub const MIN_H: i32 = crate::chrome::HEIGHT + 72;
+
+/// How far OUTSIDE a floating frame a press still grabs its edge. The content
+/// surface takes clicks inside it, so the handle lives in the margin — 8 px,
+/// the width of a deliberate aim at an edge.
+pub const RESIZE_MARGIN: i32 = 8;
+
+/// How far along an edge from a corner still grabs the corner, so a corner is
+/// a comfortable target rather than an 8 x 8 px square.
+pub const CORNER_RUN: i32 = 16;
+
+/// `frame` resized by a pointer that moved `(dx, dy)` while holding `edges`.
+///
+/// ★ PURE. The dragged edges move and the opposite edges STAY PUT — dragging
+/// the left edge leftward grows the window leftward, it does not slide it.
+/// Clamped at [`MIN_W`]/[`MIN_H`] without letting the fixed edge move.
+#[must_use]
+pub fn resized(
+    frame: smithay::utils::Rectangle<i32, Logical>,
+    edges: Edges,
+    dx: i32,
+    dy: i32,
+) -> smithay::utils::Rectangle<i32, Logical> {
+    let (mut x, mut y, mut w, mut h) = (frame.loc.x, frame.loc.y, frame.size.w, frame.size.h);
+    if edges.right {
+        w = (frame.size.w + dx).max(MIN_W);
+    }
+    if edges.bottom {
+        h = (frame.size.h + dy).max(MIN_H);
+    }
+    if edges.left {
+        w = (frame.size.w - dx).max(MIN_W);
+        x = frame.loc.x + frame.size.w - w;
+    }
+    if edges.top {
+        h = (frame.size.h - dy).max(MIN_H);
+        y = frame.loc.y + frame.size.h - h;
+    }
+    smithay::utils::Rectangle::new((x, y).into(), (w, h).into())
+}
+
+/// Which edges a press at `p` grabs on `frame`, or `None` when it is not in
+/// the resize margin around it.
+#[must_use]
+pub fn border_hit(
+    frame: smithay::utils::Rectangle<i32, Logical>,
+    p: Point<f64, Logical>,
+) -> Option<Edges> {
+    #[allow(clippy::cast_possible_truncation)]
+    let (px, py) = (p.x.floor() as i32, p.y.floor() as i32);
+    let (l, t) = (frame.loc.x, frame.loc.y);
+    let (r, b) = (l + frame.size.w, t + frame.size.h);
+    let m = RESIZE_MARGIN;
+    let inside_outer = px >= l - m && px < r + m && py >= t - m && py < b + m;
+    let inside_frame = px >= l && px < r && py >= t && py < b;
+    if !inside_outer || inside_frame {
+        return None;
+    }
+    let near = |v: i32, edge: i32| (v - edge).abs() <= CORNER_RUN;
+    let left = px < l || (py < t || py >= b) && near(px, l);
+    let right = px >= r || (py < t || py >= b) && near(px, r);
+    let top = py < t || (px < l || px >= r) && near(py, t);
+    let bottom = py >= b || (px < l || px >= r) && near(py, b);
+    let e = Edges {
+        left,
+        right,
+        top,
+        bottom,
+    };
+    (!e.is_empty()).then_some(e)
+}
+
+/// A floating window being resized by the pointer.
+///
+/// Works in FRAME space (titlebar included), because that is the unit
+/// `floatpos` remembers and the layout places; the client is configured with
+/// the content size `chrome::content_for` derives from it.
+pub struct ResizeGrab {
+    pub start_data: GrabStartData<Omoya>,
+    pub window: Window,
+    pub edges: Edges,
+    /// The frame at grab start. Every motion resizes from THIS, never from
+    /// the last motion, so rounding cannot accumulate into drift.
+    pub initial: smithay::utils::Rectangle<i32, Logical>,
+}
+
+impl ResizeGrab {
+    /// Start resizing `window` by `edges`. A snapped window is freed first and
+    /// resized from the tile it was in, as on Windows and macOS.
+    pub fn begin(
+        data: &Omoya,
+        window: Window,
+        edges: Edges,
+        start_data: GrabStartData<Omoya>,
+    ) -> Option<Self> {
+        let geo = data.space.element_geometry(&window)?;
+        let initial = smithay::utils::Rectangle::new(
+            (geo.loc.x, geo.loc.y - crate::chrome::HEIGHT).into(),
+            (geo.size.w, geo.size.h + crate::chrome::HEIGHT).into(),
+        );
+        crate::snap::set(&window, None);
+        Some(Self {
+            start_data,
+            window,
+            edges,
+            initial,
+        })
+    }
+}
+
+impl PointerGrab<Omoya> for ResizeGrab {
+    fn motion(
         &mut self,
         data: &mut Omoya,
         handle: &mut PointerInnerHandle<'_, Omoya>,
-        details: AxisFrame,
+        _focus: Option<(
+            <Omoya as smithay::input::SeatHandler>::PointerFocus,
+            Point<f64, Logical>,
+        )>,
+        event: &MotionEvent,
     ) {
-        handle.axis(data, details);
-    }
-    fn frame(&mut self, data: &mut Omoya, handle: &mut PointerInnerHandle<'_, Omoya>) {
-        handle.frame(data);
-    }
-    fn gesture_swipe_begin(
-        &mut self,
-        d: &mut Omoya,
-        h: &mut PointerInnerHandle<'_, Omoya>,
-        e: &GestureSwipeBeginEvent,
-    ) {
-        h.gesture_swipe_begin(d, e);
-    }
-    fn gesture_swipe_update(
-        &mut self,
-        d: &mut Omoya,
-        h: &mut PointerInnerHandle<'_, Omoya>,
-        e: &GestureSwipeUpdateEvent,
-    ) {
-        h.gesture_swipe_update(d, e);
-    }
-    fn gesture_swipe_end(
-        &mut self,
-        d: &mut Omoya,
-        h: &mut PointerInnerHandle<'_, Omoya>,
-        e: &GestureSwipeEndEvent,
-    ) {
-        h.gesture_swipe_end(d, e);
-    }
-    fn gesture_pinch_begin(
-        &mut self,
-        d: &mut Omoya,
-        h: &mut PointerInnerHandle<'_, Omoya>,
-        e: &GesturePinchBeginEvent,
-    ) {
-        h.gesture_pinch_begin(d, e);
-    }
-    fn gesture_pinch_update(
-        &mut self,
-        d: &mut Omoya,
-        h: &mut PointerInnerHandle<'_, Omoya>,
-        e: &GesturePinchUpdateEvent,
-    ) {
-        h.gesture_pinch_update(d, e);
-    }
-    fn gesture_pinch_end(
-        &mut self,
-        d: &mut Omoya,
-        h: &mut PointerInnerHandle<'_, Omoya>,
-        e: &GesturePinchEndEvent,
-    ) {
-        h.gesture_pinch_end(d, e);
-    }
-    fn gesture_hold_begin(
-        &mut self,
-        d: &mut Omoya,
-        h: &mut PointerInnerHandle<'_, Omoya>,
-        e: &GestureHoldBeginEvent,
-    ) {
-        h.gesture_hold_begin(d, e);
-    }
-    fn gesture_hold_end(
-        &mut self,
-        d: &mut Omoya,
-        h: &mut PointerInnerHandle<'_, Omoya>,
-        e: &GestureHoldEndEvent,
-    ) {
-        h.gesture_hold_end(d, e);
+        handle.motion(data, None, event);
+        #[allow(clippy::cast_possible_truncation)]
+        let (dx, dy) = (
+            (event.location.x - self.start_data.location.x) as i32,
+            (event.location.y - self.start_data.location.y) as i32,
+        );
+        let frame = resized(self.initial, self.edges, dx, dy);
+        crate::floatpos::remember(&self.window, frame.loc);
+        crate::floatpos::remember_size(&self.window, frame.size);
+        data.place_frame(&self.window, frame);
+        data.introspect.mark(crate::owed::Owed::Windows);
     }
 
-    fn start_data(&self) -> &GrabStartData<Omoya> {
-        &self.start_data
+    fn button(
+        &mut self,
+        data: &mut Omoya,
+        handle: &mut PointerInnerHandle<'_, Omoya>,
+        event: &ButtonEvent,
+    ) {
+        handle.button(data, event);
+        if handle.current_pressed().is_empty() {
+            data.introspect.mark(crate::owed::Owed::Windows);
+            handle.unset_grab(self, data, event.serial, event.time, true);
+        }
     }
 
-    fn unset(&mut self, _data: &mut Omoya) {}
+    pointer_grab_passthrough!();
+}
+
+#[cfg(test)]
+mod resize_tests {
+    use super::*;
+    use smithay::utils::Rectangle;
+
+    fn frame() -> Rectangle<i32, Logical> {
+        Rectangle::new((100, 100).into(), (400, 300).into())
+    }
+    const R: Edges = Edges {
+        left: false,
+        right: true,
+        top: false,
+        bottom: false,
+    };
+    const L: Edges = Edges {
+        left: true,
+        right: false,
+        top: false,
+        bottom: false,
+    };
+    const TL: Edges = Edges {
+        left: true,
+        right: false,
+        top: true,
+        bottom: false,
+    };
+    const BR: Edges = Edges {
+        left: false,
+        right: true,
+        top: false,
+        bottom: true,
+    };
+
+    #[test]
+    fn the_right_edge_grows_rightward_and_the_left_edge_stays() {
+        let r = resized(frame(), R, 50, 999);
+        assert_eq!(r, Rectangle::new((100, 100).into(), (450, 300).into()));
+    }
+
+    #[test]
+    fn the_left_edge_grows_leftward_and_the_right_edge_stays() {
+        let r = resized(frame(), L, -50, 0);
+        assert_eq!(r.loc.x, 50);
+        assert_eq!(r.loc.x + r.size.w, 500, "the right edge must not move");
+    }
+
+    #[test]
+    fn a_corner_moves_both_of_its_edges() {
+        let r = resized(frame(), TL, -10, -20);
+        assert_eq!(r, Rectangle::new((90, 80).into(), (410, 320).into()));
+    }
+
+    #[test]
+    fn shrinking_stops_at_the_minimum_without_moving_the_fixed_edge() {
+        let r = resized(frame(), TL, 10_000, 10_000);
+        assert_eq!((r.size.w, r.size.h), (MIN_W, MIN_H));
+        assert_eq!((r.loc.x + r.size.w, r.loc.y + r.size.h), (500, 400));
+        let r = resized(frame(), BR, -10_000, -10_000);
+        assert_eq!(
+            r.loc,
+            frame().loc,
+            "shrinking from bottom-right keeps the origin"
+        );
+    }
+
+    #[test]
+    fn the_margin_outside_an_edge_grabs_it_and_the_inside_does_not() {
+        let p = |x: f64, y: f64| Point::<f64, Logical>::from((x, y));
+        assert_eq!(border_hit(frame(), p(96.0, 250.0)), Some(L));
+        assert_eq!(border_hit(frame(), p(503.0, 250.0)), Some(R));
+        assert_eq!(
+            border_hit(frame(), p(300.0, 250.0)),
+            None,
+            "inside is the client's"
+        );
+        assert_eq!(
+            border_hit(frame(), p(80.0, 250.0)),
+            None,
+            "beyond the margin"
+        );
+    }
+
+    #[test]
+    fn near_a_corner_the_margin_grabs_the_corner() {
+        let p = |x: f64, y: f64| Point::<f64, Logical>::from((x, y));
+        assert_eq!(border_hit(frame(), p(96.0, 96.0)), Some(TL));
+        assert_eq!(
+            border_hit(frame(), p(96.0, 108.0)),
+            Some(TL),
+            "along the left edge near the top"
+        );
+        assert_eq!(border_hit(frame(), p(503.0, 398.0)), Some(BR));
+    }
+
+    #[test]
+    fn every_protocol_edge_maps_and_none_is_empty() {
+        use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::ResizeEdge as E;
+        assert_eq!(Edges::from(E::BottomRight), BR);
+        assert_eq!(Edges::from(E::TopLeft), TL);
+        assert!(Edges::from(E::None).is_empty());
+    }
 }
 
 #[cfg(test)]

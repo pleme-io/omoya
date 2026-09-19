@@ -186,6 +186,11 @@ pub struct Omoya {
     /// The surface focused before the current one, so `tab-join` has a host
     /// without putting a window id on the verb surface.
     pub previous_focus: Option<u32>,
+    /// The last titlebar press — which window, and when — so a second press
+    /// on the same bar within `input::DOUBLE_CLICK` toggles maximise, as a
+    /// titlebar double-click does on macOS and Windows. The window itself,
+    /// never a `winid`, which collides across clients.
+    pub last_titlebar_press: Option<(smithay::desktop::Window, std::time::Instant)>,
     pub loop_signal: LoopSignal,
 
     /// Whether a frame is owed, and why. See [`crate::owed::Owed`].
@@ -448,6 +453,7 @@ impl Omoya {
             tiling: crate::layout::Tiling::default(),
             windows: crate::windowmode::Windows::default(),
             previous_focus: None,
+            last_titlebar_press: None,
             bindings: {
                 let (map, clashes) = crate::deed::default_bindings();
                 // Reported, never fatal. A keymap typo must not take down the

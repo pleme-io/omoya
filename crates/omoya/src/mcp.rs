@@ -251,7 +251,7 @@ impl OmoyaMcp {
 
     #[tool(
         description = "Perform a compositor verb on the live seat (focus-left/right/up/down, \
-                       resize-*, close, spawn-terminal, spawn-launcher). An unknown verb is \
+                       resize-*, snap-*, close, spawn-terminal, spawn-launcher). An unknown verb is \
                        REFUSED by name rather than ignored. MUTATES the operator's desktop."
     )]
     async fn omoya_do(&self, Parameters(input): Parameters<VerbInput>) -> String {
