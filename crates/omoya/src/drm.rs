@@ -1213,11 +1213,22 @@ where
                     )
                 });
                 let p = data.state.pointer_location;
-                // Clamped so the glyph stays wholly on-screen. The arrow's
-                // hotspot is its TIP at (0,0); a resize arrow's is its centre,
-                // so the bitmap is placed `hotspot` up-left of the pointer.
-                let x = (p.x.round() as i32 - hx).clamp(0, mode.size.w - cw);
-                let y = (p.y.round() as i32 - hy).clamp(0, mode.size.h - ch);
+                // ── ★ THE HOTSPOT FOLLOWS THE POINTER; THE GLYPH MAY CLIP ──
+                //
+                // This clamped the BITMAP into the output, which silently
+                // moved the hotspot away from the pointer near an edge — the
+                // arrow's tip, and a resize arrow's centre, lying by up to
+                // half a glyph (19 px at cursor_scale 2). A pointer that is
+                // not where the pixels say it is aims wrong, which is the one
+                // thing a cursor may not do.
+                //
+                // So the POINTER is clamped to the output and the bitmap is
+                // placed `hotspot` up-left of it, negative coordinates and
+                // all: at a border the glyph is partially off-screen, exactly
+                // as every other desktop draws it.
+                let px = (p.x.round() as i32).clamp(0, mode.size.w - 1);
+                let py = (p.y.round() as i32).clamp(0, mode.size.h - 1);
+                let (x, y) = (px - hx, py - hy);
                 use smithay::backend::renderer::element::Kind;
                 use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
                 if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(

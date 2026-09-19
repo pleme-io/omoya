@@ -185,8 +185,6 @@ macro_rules! pointer_grab_passthrough {
         fn start_data(&self) -> &GrabStartData<Omoya> {
             &self.start_data
         }
-
-        fn unset(&mut self, _data: &mut Omoya) {}
     };
 }
 
@@ -221,9 +219,17 @@ impl PointerGrab<Omoya> for MoveGrab {
         // so the pointer keeps its RELATIVE spot on the titlebar — grabbing a
         // half-screen window near its right edge must not leave the pointer
         // hanging off the right of a window that just got narrower.
-        if crate::snap::tile_of(&self.window).is_some() {
+        // ★ MAXIMISED COUNTS TOO. Dragging a maximised window restores it on
+        // Windows and macOS; omoya freed a SNAPPED window and left a maximised
+        // one glued to the screen, following the pointer nowhere.
+        let maximised = crate::layout::surface_id_of(&self.window)
+            .is_some_and(|id| data.windows.mode_of(id) == crate::windowmode::Mode::Maximized);
+        if crate::snap::tile_of(&self.window).is_some() || maximised {
             let before = data.space.element_geometry(&self.window);
             crate::snap::set(&self.window, None);
+            if maximised && let Some(id) = crate::layout::surface_id_of(&self.window) {
+                data.windows.toggle_maximize(id);
+            }
             data.apply_layout();
             if let (Some(old), Some(new)) = (before, data.space.element_geometry(&self.window)) {
                 if old.size.w > 0 {
@@ -356,6 +362,14 @@ impl PointerGrab<Omoya> for MoveGrab {
     }
 
     pointer_grab_passthrough!();
+
+    /// ★ CLEARS WHAT THIS GRAB SET. A force-unset (window destroyed mid-drag,
+    /// focus moved, another client grabbing) never runs `button`, so the snap
+    /// preview stayed painted on screen with nothing being dragged.
+    fn unset(&mut self, data: &mut Omoya) {
+        data.snap_preview = None;
+        data.introspect.mark(crate::owed::Owed::Windows);
+    }
 }
 
 /// Which edges of a frame a resize moves.
@@ -513,7 +527,9 @@ impl ResizeGrab {
             (geo.loc.x, geo.loc.y - crate::chrome::HEIGHT).into(),
             (geo.size.w, geo.size.h + crate::chrome::HEIGHT).into(),
         );
-        crate::snap::set(&window, None);
+        // ★ NOT UN-SNAPPED HERE. `begin` runs on the PRESS, so freeing the
+        // tile here meant a bare click on a snapped window's edge un-snapped
+        // it with no drag at all. The tile is released on the first motion.
         Some(Self {
             start_data,
             window,
@@ -535,6 +551,9 @@ impl PointerGrab<Omoya> for ResizeGrab {
         event: &MotionEvent,
     ) {
         handle.motion(data, None, event);
+        // A resize frees the tile — on the first MOTION, so a click that never
+        // moves leaves the window snapped where it was.
+        crate::snap::set(&self.window, None);
         #[allow(clippy::cast_possible_truncation)]
         let (dx, dy) = (
             (event.location.x - self.start_data.location.x) as i32,
@@ -563,6 +582,14 @@ impl PointerGrab<Omoya> for ResizeGrab {
     }
 
     pointer_grab_passthrough!();
+
+    /// ★ CLEARS WHAT THIS GRAB SET. smithay force-unsets a grab when the seat
+    /// changes underneath it (the window is destroyed, focus moves, a client
+    /// takes a new grab) and that path does NOT run `button` — so the resize
+    /// cursor would stay on the seat with no resize in progress.
+    fn unset(&mut self, data: &mut Omoya) {
+        data.active_resize = None;
+    }
 }
 
 impl Omoya {
