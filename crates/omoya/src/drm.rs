@@ -1547,6 +1547,8 @@ where
             // what makes overlapping windows read correctly.
             use smithay::backend::renderer::element::Kind;
             use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
+            let mut drew_chrome_for: std::collections::HashSet<u32> =
+                std::collections::HashSet::new();
             let surface = |e| {
                 SeatElements::Space(smithay::desktop::space::SpaceRenderElements::Surface(e))
             };
@@ -1569,11 +1571,17 @@ where
                         Kind::Unspecified,
                     ) {
                         elements.push(SeatElements::Texture(el));
+                        drew_chrome_for.insert(id);
                     }
                 }
                 elements.extend(els.into_iter().map(surface));
             }
             elements.extend(lower_elements.into_iter().map(surface));
+            // ★ PUBLISHED FROM THE PUSH, so `titlebar_drawn` is a measurement.
+            *introspect
+                .chrome_drawn
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = drew_chrome_for;
             // Published so `windows` and `elements` can be compared. A window
             // exists in `Space` from creation; an element exists only once the
             // client has attached a buffer, so a gap between the two is

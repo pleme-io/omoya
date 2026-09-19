@@ -118,6 +118,16 @@ pub struct ToplevelRow {
     /// `ServerSide`: the client drew nothing because it was told not to, and
     /// the compositor drew nothing because only the focused window gets a ring.
     pub decoration_elements_drawn: u32,
+    /// Whether the renderer drew a TITLEBAR for this window on the last frame.
+    ///
+    /// ★ MEASURED BY THE RENDERER, and separate from the ring count above,
+    /// which is what `chrome_verdict` used to read. With the focus ring
+    /// configured OFF (2026-09-19) that count is 0 for every window, so the
+    /// verdict reported "none drawn" for windows whose bar was demonstrably on
+    /// screen — measured live on plo, a leaf lying about the thing it exists
+    /// to witness. The bar and the ring are two different decorations; the
+    /// verdict asks about the bar.
+    pub titlebar_drawn: bool,
     pub focused: bool,
     /// Whether the layout tree holds this window. `false` in floating mode for
     /// EVERY window (`layout.rs` unmaps them all), which is why a resize deed
@@ -133,7 +143,11 @@ impl ToplevelRow {
     #[must_use]
     pub fn chrome_verdict(&self, floating: bool) -> &'static str {
         let told_server = self.decoration_mode_sent.as_deref() == Some("ServerSide");
-        match (told_server, floating, self.decoration_elements_drawn) {
+        // The bar is the chrome an operator grabs; the ring is a focus cue and
+        // is configurable off. A verdict about "grabbable chrome" therefore
+        // reads the bar.
+        let drawn = u32::from(self.titlebar_drawn);
+        match (told_server, floating, drawn) {
             (true, true, 0) => "no-grabbable-chrome: told ServerSide, floating, none drawn",
             (true, _, 0) => "server-side promised, none drawn",
             (true, _, _) => "server-side drawn",
@@ -600,6 +614,11 @@ pub struct OmoyaIntrospect {
     /// precisely the report "the windows have no borders to drag around".
     /// Three legal values, one illegal state, and no leaf could see it.
     pub toplevels: std::sync::Mutex<Vec<ToplevelRow>>,
+    /// Window ids (`winid::of`) the renderer drew a titlebar for on the last
+    /// composed frame. Written by the renderer, read by the layout pass when
+    /// it publishes `toplevels` — so `titlebar_drawn` is a MEASUREMENT of what
+    /// was drawn, never a re-derivation of what should have been.
+    pub chrome_drawn: std::sync::Mutex<std::collections::HashSet<u32>>,
     /// The bar's height in pixels, so a caller can derive the CONTENT region.
     ///
     /// ── ★ WHY A MASK IS MANDATORY, NOT A NICETY ─────────────────────────
@@ -1763,6 +1782,28 @@ impl OmoyaIntrospect {
 mod toplevel_table_tests {
     use super::ToplevelRow;
 
+    #[test]
+    fn the_verdict_reads_the_bar_not_the_focus_ring() {
+        // ★ THE DEFECT THIS PINS (plo, 2026-09-19). `chrome_verdict` read the
+        // focus-RING edge count. The ring is configurable and was turned OFF
+        // that morning, so every window — bar plainly on screen — reported
+        // "no-grabbable-chrome: told ServerSide, floating, none drawn". A leaf
+        // whose whole job is to witness missing chrome was reporting chrome
+        // missing whenever a DIFFERENT decoration was disabled.
+        let mut r = row(Some("ServerSide"), 0);
+        r.titlebar_drawn = true; // bar drawn, ring off (the live plo state)
+        assert_eq!(r.chrome_verdict(true), "server-side drawn");
+
+        // And the real finding still fires: told ServerSide, nothing drawn.
+        let mut bare = row(Some("ServerSide"), 4);
+        bare.titlebar_drawn = false;
+        assert_eq!(
+            bare.chrome_verdict(true),
+            "no-grabbable-chrome: told ServerSide, floating, none drawn",
+            "a focus ring is not a grabbable titlebar"
+        );
+    }
+
     fn row(sent: Option<&str>, drawn: u32) -> ToplevelRow {
         ToplevelRow {
             id: 0,
@@ -1770,6 +1811,7 @@ mod toplevel_table_tests {
             decoration_mode_sent: sent.map(ToOwned::to_owned),
             rect: Some((518, 280, 883, 547)),
             decoration_elements_drawn: drawn,
+            titlebar_drawn: drawn > 0,
             focused: true,
             tiled: false,
         }

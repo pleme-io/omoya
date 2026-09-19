@@ -799,6 +799,18 @@ impl crate::state::Omoya {
                         // investigation at the renderer, which was correct.
                         // The titlebar is counted separately below.
                         decoration_elements_drawn: u32::from(is_focused) * 4,
+                        // ★ WHAT THE RENDERER DREW, not what this pass thinks
+                        // it should have. `chrome_verdict` exists to catch
+                        // "told ServerSide and nothing appeared"; deriving it
+                        // here would make it agree with itself and witness
+                        // nothing.
+                        titlebar_drawn: crate::layout::surface_id_of(w).is_some_and(|id| {
+                            self.introspect
+                                .chrome_drawn
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .contains(&id)
+                        }),
                         focused: is_focused,
                         tiled: false,
                     }
