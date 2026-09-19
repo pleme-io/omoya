@@ -79,6 +79,26 @@ pub struct OmoyaConfig {
     /// means, and how fast it is taken. See `ukeire.rs`; every knob under
     /// here was a literal in five different files until 2026-09-03.
     pub ukeire: crate::ukeire::Ukeire,
+    /// Whether the focused window gets an outline. See [`FocusRing`].
+    pub focus_ring: FocusRing,
+}
+
+/// The outline drawn around the focused window.
+///
+/// ── ★ OFF BY DEFAULT, BY OPERATOR DECISION (2026-09-19) ─────────────────
+/// The 2 px nord8 ring read as a blue-green halo around every focused window
+/// and the operator asked for it gone. It is a typed choice rather than a
+/// deletion (★★ MODULARIZE, DON'T DELETE): `accent` brings it back exactly as
+/// it was. Focus is still published as `focus_rect` and still marks the bar,
+/// so turning the ring off removes a decoration, not the information.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FocusRing {
+    /// No outline.
+    #[default]
+    Off,
+    /// A `layout::BORDER`-wide outline in the palette accent (nord8).
+    Accent,
 }
 
 /// How the seat decides what changed on screen.
@@ -325,6 +345,7 @@ impl OmoyaConfig {
             // constants that could drift.
             damage: DamageConfig::default(),
             ukeire: crate::ukeire::Ukeire::default(),
+            focus_ring: FocusRing::default(),
         }
     }
 
@@ -658,5 +679,14 @@ mod tests {
                 "{name} tier's own remaps are refused by its own validator"
             );
         }
+    }
+
+    #[test]
+    fn the_focus_ring_is_off_unless_asked_for() {
+        assert_eq!(OmoyaConfig::bare().focus_ring, FocusRing::Off);
+        assert_eq!(OmoyaConfig::prescribed().focus_ring, FocusRing::Off);
+        let on: OmoyaConfig = serde_yaml::from_str("focus_ring: accent\n").unwrap();
+        assert_eq!(on.focus_ring, FocusRing::Accent);
+        assert!(serde_yaml::from_str::<OmoyaConfig>("focus_ring: teal\n").is_err());
     }
 }

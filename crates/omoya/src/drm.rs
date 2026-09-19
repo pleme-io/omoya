@@ -1349,11 +1349,16 @@ where
                 chrome_cache.retain(|(cid, ..)| live.contains(cid));
             }
 
-            if let Some((fx, fy, fw, fh)) = *introspect
-                .focus_rect
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-            {
+            // The ring is a typed choice (`config.focus_ring`, off by
+            // default); `focus_rect` is still read and published either way.
+            let ring = data.state.config.focus_ring == crate::config::FocusRing::Accent;
+            if let (true, Some((fx, fy, fw, fh))) = (
+                ring,
+                *introspect
+                    .focus_rect
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()),
+            ) {
                 use smithay::backend::renderer::element::Kind;
                 use smithay::backend::renderer::element::solid::SolidColorRenderElement;
                 use smithay::backend::renderer::utils::CommitCounter;
