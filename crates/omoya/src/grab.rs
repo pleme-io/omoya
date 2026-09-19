@@ -277,6 +277,17 @@ impl PointerGrab<Omoya> for MoveGrab {
             &self.window,
             (new_loc.x, new_loc.y - crate::chrome::HEIGHT).into(),
         );
+        // ── ★ SHOW WHERE A RELEASE WOULD LAND ────────────────────────────
+        // The same `zone_for` the release uses, so the preview can never
+        // promise a tile the drop will not give. Cleared on release.
+        data.snap_preview = data
+            .space
+            .outputs()
+            .next()
+            .and_then(|o| data.space.output_geometry(o))
+            .and_then(|screen| crate::snap::zone_for(p, screen))
+            .zip(usable_zone(data))
+            .map(|(tile, usable)| crate::snap::frame_for(tile, usable));
         data.introspect.mark(crate::owed::Owed::Windows);
     }
 
@@ -299,6 +310,7 @@ impl PointerGrab<Omoya> for MoveGrab {
             // Decided from where the POINTER is, not the window: the pointer
             // is what the operator pushed into the edge, and the window is
             // clamped inside the zone so it can never reach it.
+            data.snap_preview = None;
             let pointer = handle.current_location();
             let tile = data
                 .space
@@ -408,20 +420,26 @@ pub fn resized(
     edges: Edges,
     dx: i32,
     dy: i32,
+    (min_w, min_h): (i32, i32),
 ) -> smithay::utils::Rectangle<i32, Logical> {
+    // The floor is the larger of the seat's minimum and the CLIENT's own
+    // (`xdg_toplevel.set_min_size`, grown by the titlebar): configuring a
+    // window below what it declared it can render is the compositor
+    // overruling the protocol.
+    let (min_w, min_h) = (min_w.max(MIN_W), min_h.max(MIN_H));
     let (mut x, mut y, mut w, mut h) = (frame.loc.x, frame.loc.y, frame.size.w, frame.size.h);
     if edges.right {
-        w = (frame.size.w + dx).max(MIN_W);
+        w = (frame.size.w + dx).max(min_w);
     }
     if edges.bottom {
-        h = (frame.size.h + dy).max(MIN_H);
+        h = (frame.size.h + dy).max(min_h);
     }
     if edges.left {
-        w = (frame.size.w - dx).max(MIN_W);
+        w = (frame.size.w - dx).max(min_w);
         x = frame.loc.x + frame.size.w - w;
     }
     if edges.top {
-        h = (frame.size.h - dy).max(MIN_H);
+        h = (frame.size.h - dy).max(min_h);
         y = frame.loc.y + frame.size.h - h;
     }
     smithay::utils::Rectangle::new((x, y).into(), (w, h).into())
@@ -513,7 +531,8 @@ impl PointerGrab<Omoya> for ResizeGrab {
             (event.location.x - self.start_data.location.x) as i32,
             (event.location.y - self.start_data.location.y) as i32,
         );
-        let frame = resized(self.initial, self.edges, dx, dy);
+        let min = crate::layout::client_min_frame(&self.window);
+        let frame = resized(self.initial, self.edges, dx, dy, min);
         crate::floatpos::remember(&self.window, frame.loc);
         crate::floatpos::remember_size(&self.window, frame.size);
         data.place_frame(&self.window, frame);
@@ -528,12 +547,55 @@ impl PointerGrab<Omoya> for ResizeGrab {
     ) {
         handle.button(data, event);
         if handle.current_pressed().is_empty() {
+            data.active_resize = None;
             data.introspect.mark(crate::owed::Owed::Windows);
             handle.unset_grab(self, data, event.serial, event.time, true);
         }
     }
 
     pointer_grab_passthrough!();
+}
+
+impl Omoya {
+    /// The floating window whose resize margin `p` is in, and which edges —
+    /// front-most first, so where two margins meet the visible window wins.
+    /// Overlays (the launcher) are not resizable: they size themselves.
+    ///
+    /// ONE hit-test for both the click that starts a resize and the cursor
+    /// that advertises it, so the arrow can never promise an edge the click
+    /// will not grab.
+    #[must_use]
+    pub fn border_under(&self, p: Point<f64, Logical>) -> Option<(Window, Edges)> {
+        if self.config.layout.mode != crate::config::LayoutMode::Floating {
+            return None;
+        }
+        self.space.elements().rev().find_map(|w| {
+            if crate::placement::for_app_id_in(
+                crate::layout::app_id_of(w).as_deref(),
+                &self.config.placement,
+            )
+            .is_floating()
+            {
+                return None;
+            }
+            let geo = self.space.element_geometry(w)?;
+            let frame = smithay::utils::Rectangle::new(
+                (geo.loc.x, geo.loc.y - crate::chrome::HEIGHT).into(),
+                (geo.size.w, geo.size.h + crate::chrome::HEIGHT).into(),
+            );
+            border_hit(frame, p).map(|e| (w.clone(), e))
+        })
+    }
+
+    /// The pointer shape to draw right now: the resize arrow for the edge
+    /// being dragged, else for the margin the pointer hovers, else the arrow.
+    #[must_use]
+    pub fn cursor_shape(&self) -> crate::cursor::Shape {
+        let edges = self
+            .active_resize
+            .or_else(|| self.border_under(self.pointer_location).map(|(_, e)| e));
+        crate::cursor::Shape::for_edges(edges)
+    }
 }
 
 #[cfg(test)]
@@ -571,34 +633,43 @@ mod resize_tests {
 
     #[test]
     fn the_right_edge_grows_rightward_and_the_left_edge_stays() {
-        let r = resized(frame(), R, 50, 999);
+        let r = resized(frame(), R, 50, 999, (0, 0));
         assert_eq!(r, Rectangle::new((100, 100).into(), (450, 300).into()));
     }
 
     #[test]
     fn the_left_edge_grows_leftward_and_the_right_edge_stays() {
-        let r = resized(frame(), L, -50, 0);
+        let r = resized(frame(), L, -50, 0, (0, 0));
         assert_eq!(r.loc.x, 50);
         assert_eq!(r.loc.x + r.size.w, 500, "the right edge must not move");
     }
 
     #[test]
     fn a_corner_moves_both_of_its_edges() {
-        let r = resized(frame(), TL, -10, -20);
+        let r = resized(frame(), TL, -10, -20, (0, 0));
         assert_eq!(r, Rectangle::new((90, 80).into(), (410, 320).into()));
     }
 
     #[test]
     fn shrinking_stops_at_the_minimum_without_moving_the_fixed_edge() {
-        let r = resized(frame(), TL, 10_000, 10_000);
+        let r = resized(frame(), TL, 10_000, 10_000, (0, 0));
         assert_eq!((r.size.w, r.size.h), (MIN_W, MIN_H));
         assert_eq!((r.loc.x + r.size.w, r.loc.y + r.size.h), (500, 400));
-        let r = resized(frame(), BR, -10_000, -10_000);
+        let r = resized(frame(), BR, -10_000, -10_000, (0, 0));
         assert_eq!(
             r.loc,
             frame().loc,
             "shrinking from bottom-right keeps the origin"
         );
+    }
+
+    #[test]
+    fn a_clients_own_minimum_beats_the_seats() {
+        let r = resized(frame(), BR, -10_000, -10_000, (300, 250));
+        assert_eq!((r.size.w, r.size.h), (300, 250));
+        // …and the seat floor still holds when the client declares less.
+        let r = resized(frame(), BR, -10_000, -10_000, (10, 10));
+        assert_eq!((r.size.w, r.size.h), (MIN_W, MIN_H));
     }
 
     #[test]

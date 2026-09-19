@@ -667,8 +667,14 @@ where
     // The arrow bitmap. Built on first use and kept: the shape never
     // changes, so rebuilding it per frame would hand the damage tracker a
     // new commit each time — the same trap the bar's text comparison avoids.
-    let mut cursor_buffer: Option<smithay::backend::renderer::element::memory::MemoryRenderBuffer> =
-        None;
+    //
+    // ONE buffer PER SHAPE (arrow + four resize arrows), each built on first
+    // use and kept — switching shape reuses a buffer rather than rebuilding
+    // one, so hovering an edge never hands the damage tracker a new commit.
+    let mut cursor_buffers: std::collections::HashMap<
+        crate::cursor::Shape,
+        smithay::backend::renderer::element::memory::MemoryRenderBuffer,
+    > = std::collections::HashMap::new();
     // ── ★ CHROME BUFFERS, CACHED ON THEIR OWN INPUTS ────────────────────
     //
     // One buffer per window holding its whole titlebar — ground, buttons and
@@ -732,6 +738,10 @@ where
     /// is the honest degradation: two elements holding one id is the exact
     /// confusion stable ids exist to prevent.
     const CHROME_WINDOWS: usize = 8;
+
+    // The snap preview is ONE solid rect, so it needs one stable id of its own
+    // for the same reason as the border edges below.
+    let snap_preview_id = smithay::backend::renderer::element::Id::new();
 
     let border_ids: [smithay::backend::renderer::element::Id; 4] = [
         smithay::backend::renderer::element::Id::new(),
@@ -1091,26 +1101,28 @@ where
                 // but only USED on the frame that builds the buffer — the
                 // arrow is rasterized once because its shape never changes.
                 let cscale = data.state.config.ukeire.pointer.cursor_scale.get();
-                let cur = cursor_buffer.get_or_insert_with(|| {
+                // The shape comes from `Omoya::cursor_shape` — the SAME border
+                // hit-test the click uses, so the resize arrow never promises
+                // an edge the press will not grab.
+                let shape = data.state.cursor_shape();
+                let (cw, ch) = crate::cursor::shape_size_at(shape, cscale);
+                let (hx, hy) = crate::cursor::hotspot_at(shape, cscale);
+                let cur = cursor_buffers.entry(shape).or_insert_with(|| {
                     smithay::backend::renderer::element::memory::MemoryRenderBuffer::from_slice(
-                        &crate::cursor::rasterize_at(cscale),
+                        &crate::cursor::rasterize_shape_at(shape, cscale),
                         smithay::backend::allocator::Fourcc::Argb8888,
-                        (
-                            crate::cursor::width_at(cscale),
-                            crate::cursor::height_at(cscale),
-                        ),
+                        (cw, ch),
                         1,
                         smithay::utils::Transform::Normal,
                         None,
                     )
                 });
                 let p = data.state.pointer_location;
-                // Clamped so the arrow stays wholly on-screen. The TIP is at
-                // (0,0) of the bitmap, so the clamp is against the full
-                // extent — letting the body run off the edge would make the
-                // pointer appear to shrink as it approaches a border.
-                let x = (p.x.round() as i32).clamp(0, mode.size.w - crate::cursor::width_at(cscale));
-                let y = (p.y.round() as i32).clamp(0, mode.size.h - crate::cursor::height_at(cscale));
+                // Clamped so the glyph stays wholly on-screen. The arrow's
+                // hotspot is its TIP at (0,0); a resize arrow's is its centre,
+                // so the bitmap is placed `hotspot` up-left of the pointer.
+                let x = (p.x.round() as i32 - hx).clamp(0, mode.size.w - cw);
+                let y = (p.y.round() as i32 - hy).clamp(0, mode.size.h - ch);
                 use smithay::backend::renderer::element::Kind;
                 use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
                 if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
@@ -1347,6 +1359,33 @@ where
                     .filter_map(crate::layout::surface_id_of)
                     .collect();
                 chrome_cache.retain(|(cid, ..)| live.contains(cid));
+            }
+
+            // ── ★ THE SNAP PREVIEW ──────────────────────────────────────────
+            // While a window is dragged into an edge or corner, show the tile
+            // a release would give it — a translucent accent wash, drawn ABOVE
+            // the windows (it must be visible over the one being dragged) and
+            // below the cursor. `snap_preview` is set by `MoveGrab` from the
+            // same `zone_for` the release uses.
+            if let Some(r) = data.state.snap_preview {
+                use smithay::backend::renderer::element::Kind;
+                use smithay::backend::renderer::element::solid::SolidColorRenderElement;
+                use smithay::backend::renderer::utils::CommitCounter;
+                let [cr, cg, cb, _] = crate::theme::focus_border_for_surface(false);
+                // Premultiplied: rgb scaled by the same alpha.
+                const WASH: f32 = 0.28;
+                elements.push(SeatElements::Solid(SolidColorRenderElement::new(
+                    snap_preview_id.clone(),
+                    // Logical == physical on this seat (scale 1), built the
+                    // same way the focus-ring edges are.
+                    smithay::utils::Rectangle::new(
+                        (r.loc.x, r.loc.y).into(),
+                        (r.size.w, r.size.h).into(),
+                    ),
+                    CommitCounter::default(),
+                    smithay::backend::renderer::Color32F::from([cr * WASH, cg * WASH, cb * WASH, WASH]),
+                    Kind::Unspecified,
+                )));
             }
 
             // The ring is a typed choice (`config.focus_ring`, off by

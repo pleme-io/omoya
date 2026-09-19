@@ -107,12 +107,157 @@ pub fn rasterize() -> Vec<u8> {
 /// untouched rather than punching a black hole in it.
 #[must_use]
 pub fn rasterize_at(scale: i32) -> Vec<u8> {
+    rasterize_shape_at(Shape::Arrow, scale)
+}
+
+/// Every pointer shape the seat draws.
+///
+/// ── ★ WHY SHAPES AT ALL (2026-09-19) ────────────────────────────────────
+/// Floating windows resize from an 8 px margin OUTSIDE their frame
+/// (`grab::border_hit`). Without a cursor that changes there, that margin is a
+/// band of desktop that silently behaves differently — the operator has to
+/// already know it is there. Every desktop that resizes from edges changes the
+/// pointer over them; that change IS the affordance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Shape {
+    /// The pointer.
+    Arrow,
+    /// Left/right edge: `↔`.
+    ResizeHorizontal,
+    /// Top/bottom edge: `↕`.
+    ResizeVertical,
+    /// Top-left / bottom-right corner: `⤡`.
+    ResizeNwSe,
+    /// Top-right / bottom-left corner: `⤢`.
+    ResizeNeSw,
+}
+
+impl Shape {
+    /// Every shape, for tests and caches.
+    pub const ALL: [Self; 5] = [
+        Self::Arrow,
+        Self::ResizeHorizontal,
+        Self::ResizeVertical,
+        Self::ResizeNwSe,
+        Self::ResizeNeSw,
+    ];
+
+    /// The shape for resizing by `edges` — `None` means "not a resize", which
+    /// is the arrow.
+    #[must_use]
+    pub fn for_edges(edges: Option<crate::grab::Edges>) -> Self {
+        let Some(e) = edges else { return Self::Arrow };
+        match (e.left, e.right, e.top, e.bottom) {
+            (true, _, true, _) | (_, true, _, true) => Self::ResizeNwSe,
+            (_, true, true, _) | (true, _, _, true) => Self::ResizeNeSw,
+            (true, _, _, _) | (_, true, _, _) => Self::ResizeHorizontal,
+            (_, _, true, _) | (_, _, _, true) => Self::ResizeVertical,
+            _ => Self::Arrow,
+        }
+    }
+
+    const fn art(self) -> &'static [&'static str] {
+        match self {
+            Self::Arrow => ART,
+            Self::ResizeHorizontal => ART_H,
+            Self::ResizeVertical => ART_V,
+            Self::ResizeNwSe => ART_NWSE,
+            Self::ResizeNeSw => ART_NESW,
+        }
+    }
+}
+
+const ART_H: &[&str] = &[
+    "....X.....X....",
+    "...XX.....XX...",
+    "..X#X.....X#X..",
+    ".X##XXXXXXX##X.",
+    "X#############X",
+    ".X##XXXXXXX##X.",
+    "..X#X.....X#X..",
+    "...XX.....XX...",
+    "....X.....X....",
+];
+
+const ART_V: &[&str] = &[
+    "....X....",
+    "...X#X...",
+    "..X###X..",
+    ".X#####X.",
+    "XXXX#XXXX",
+    "...X#X...",
+    "...X#X...",
+    "...X#X...",
+    "...X#X...",
+    "...X#X...",
+    "XXXX#XXXX",
+    ".X#####X.",
+    "..X###X..",
+    "...X#X...",
+    "....X....",
+];
+
+const ART_NWSE: &[&str] = &[
+    "XXXXX......",
+    "X###X......",
+    "X##X.......",
+    "X#X#X......",
+    "XX.X#X.....",
+    "....X#X....",
+    ".....X#X.XX",
+    "......X#X#X",
+    ".......X##X",
+    "......X###X",
+    "......XXXXX",
+];
+
+const ART_NESW: &[&str] = &[
+    "......XXXXX",
+    "......X###X",
+    ".......X##X",
+    "......X#X#X",
+    ".....X#X.XX",
+    "....X#X....",
+    "XX.X#X.....",
+    "X#X#X......",
+    "X##X.......",
+    "X###X......",
+    "XXXXX......",
+];
+
+/// `(width, height)` of `shape` in screen pixels at `scale`.
+#[must_use]
+pub fn shape_size_at(shape: Shape, scale: i32) -> (i32, i32) {
+    let art = shape.art();
+    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+    (art[0].len() as i32 * scale, art.len() as i32 * scale)
+}
+
+/// Where in the bitmap the pointer position lands: the arrow's TIP, and the
+/// CENTRE of every resize arrow (you aim a resize at the edge, not at a
+/// corner of the glyph).
+#[must_use]
+pub fn hotspot_at(shape: Shape, scale: i32) -> (i32, i32) {
+    match shape {
+        Shape::Arrow => (0, 0),
+        _ => {
+            let (w, h) = shape_size_at(shape, scale);
+            (w / 2, h / 2)
+        }
+    }
+}
+
+/// Rasterize any shape to premultiplied ARGB8888 — same fill, outline and
+/// transparency rules as the arrow.
+#[must_use]
+pub fn rasterize_shape_at(shape: Shape, scale: i32) -> Vec<u8> {
     let fill = NORD.snow_storm[2];
     let line = NORD.polar_night[0];
-    let (w, h) = (width_at(scale) as usize, height_at(scale) as usize);
+    let (w, h) = shape_size_at(shape, scale);
+    let (w, h) = (w as usize, h as usize);
     let mut buf = vec![0u8; w * h * 4];
 
-    for (row, art) in ART.iter().enumerate() {
+    for (row, art) in shape.art().iter().enumerate() {
         for (col, ch) in art.chars().enumerate() {
             let colour = match ch {
                 '#' => Some(fill),
@@ -233,5 +378,84 @@ mod tests {
             );
         }
         assert!(rasterize_at(4).len() > rasterize_at(2).len());
+    }
+
+    #[test]
+    fn the_arrow_is_unchanged_by_the_shape_generalisation() {
+        // `rasterize_at` now routes through `rasterize_shape_at(Arrow, …)`;
+        // the arrow the seat has always drawn must come out identical.
+        assert_eq!(shape_size_at(Shape::Arrow, 2), (width_at(2), height_at(2)));
+        assert_eq!(hotspot_at(Shape::Arrow, 2), (0, 0));
+    }
+
+    #[test]
+    fn every_shape_is_rectangular_ascii_and_symmetric_where_it_should_be() {
+        for shape in Shape::ALL {
+            let art = shape.art();
+            for row in art {
+                assert_eq!(row.len(), art[0].len(), "{shape:?} is ragged");
+                assert!(
+                    row.chars().all(|c| matches!(c, '#' | 'X' | '.')),
+                    "{shape:?}"
+                );
+            }
+            if shape != Shape::Arrow {
+                // A resize arrow points both ways: 180-degree symmetric.
+                let flipped: Vec<String> = art
+                    .iter()
+                    .rev()
+                    .map(|r| r.chars().rev().collect())
+                    .collect();
+                assert_eq!(
+                    flipped,
+                    art.iter().map(|r| (*r).to_owned()).collect::<Vec<_>>(),
+                    "{shape:?}"
+                );
+                let (w, h) = shape_size_at(shape, 2);
+                assert_eq!(hotspot_at(shape, 2), (w / 2, h / 2));
+            }
+            assert_eq!(
+                rasterize_shape_at(shape, 2).len(),
+                (shape_size_at(shape, 2).0 * shape_size_at(shape, 2).1 * 4) as usize
+            );
+        }
+    }
+
+    #[test]
+    fn edges_pick_the_matching_shape() {
+        use crate::grab::Edges;
+        let e = |left, right, top, bottom| {
+            Some(Edges {
+                left,
+                right,
+                top,
+                bottom,
+            })
+        };
+        assert_eq!(Shape::for_edges(None), Shape::Arrow);
+        assert_eq!(
+            Shape::for_edges(e(true, false, false, false)),
+            Shape::ResizeHorizontal
+        );
+        assert_eq!(
+            Shape::for_edges(e(false, false, false, true)),
+            Shape::ResizeVertical
+        );
+        assert_eq!(
+            Shape::for_edges(e(true, false, true, false)),
+            Shape::ResizeNwSe
+        );
+        assert_eq!(
+            Shape::for_edges(e(false, true, false, true)),
+            Shape::ResizeNwSe
+        );
+        assert_eq!(
+            Shape::for_edges(e(false, true, true, false)),
+            Shape::ResizeNeSw
+        );
+        assert_eq!(
+            Shape::for_edges(e(true, false, false, true)),
+            Shape::ResizeNeSw
+        );
     }
 }

@@ -1050,6 +1050,45 @@ impl Introspect for OmoyaIntrospect {
                 });
                 Ok(serde_json::json!({ "queued": "click", "code": code }))
             }
+            "drag" => {
+                // ★ PRESS, MOVE, RELEASE — QUEUED AS ONE UNIT. The only way an
+                // agent can exercise a grab (move, resize, drag-to-snap), and
+                // shaped like `click` for the same safety reason: the release
+                // is queued in the same breath as the press, so no caller can
+                // strand a button held on the operator's desktop. Motion is
+                // split into `steps` events so grabs see a real drag, not a
+                // teleport.
+                let (Some(dx), Some(dy)) = (
+                    q.args.first().and_then(serde_json::Value::as_f64),
+                    q.args.get(1).and_then(serde_json::Value::as_f64),
+                ) else {
+                    return Err(QueryError::unknown_field(
+                        "drag needs dx and dy (and optionally a button code), e.g. drag 200 0",
+                    ));
+                };
+                let code = q
+                    .args
+                    .get(2)
+                    .and_then(serde_json::Value::as_u64)
+                    .and_then(|c| u32::try_from(c).ok())
+                    .unwrap_or(272);
+                const STEPS: u32 = 8;
+                self.queue_input(crate::synth::Synth::Button {
+                    code,
+                    pressed: true,
+                });
+                for _ in 0..STEPS {
+                    self.queue_input(crate::synth::Synth::Pointer {
+                        dx: dx / f64::from(STEPS),
+                        dy: dy / f64::from(STEPS),
+                    });
+                }
+                self.queue_input(crate::synth::Synth::Button {
+                    code,
+                    pressed: false,
+                });
+                Ok(serde_json::json!({ "queued": "drag", "dx": dx, "dy": dy, "code": code }))
+            }
             "synth_performed" => Ok(n(&self.synth_performed)),
             "verbs" => Ok(serde_json::json!(crate::deed::Deed::VERBS)),
             "deeds_performed" => Ok(n(&self.deeds_performed)),
@@ -1637,6 +1676,7 @@ mod tests {
                 "key",
                 "pointer",
                 "click",
+                "drag",
                 "capture",
                 // A diagnostic REQUEST, not a field: it schedules a scan on
                 // the next naturally-drawn frame. `stale_result` reads the

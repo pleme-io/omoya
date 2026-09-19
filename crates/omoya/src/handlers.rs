@@ -369,6 +369,7 @@ impl XdgShellHandler for Omoya {
             return;
         };
         if let Some(grab) = crate::grab::ResizeGrab::begin(self, window, edges, start_data) {
+            self.active_resize = Some(edges);
             pointer.set_grab(self, grab, serial, smithay::input::pointer::Focus::Clear);
         }
     }

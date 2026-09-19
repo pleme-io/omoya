@@ -464,22 +464,7 @@ impl Omoya {
                 // reason as the titlebar scan above: where two margins meet,
                 // the visible window wins. Overlays (the launcher) are not
                 // resizable — they size themselves.
-                let border = self.space.elements().rev().find_map(|w| {
-                    if crate::placement::for_app_id_in(
-                        crate::layout::app_id_of(w).as_deref(),
-                        &self.config.placement,
-                    )
-                    .is_floating()
-                    {
-                        return None;
-                    }
-                    let geo = self.space.element_geometry(w)?;
-                    let frame = smithay::utils::Rectangle::new(
-                        (geo.loc.x, geo.loc.y - crate::chrome::HEIGHT).into(),
-                        (geo.size.w, geo.size.h + crate::chrome::HEIGHT).into(),
-                    );
-                    crate::grab::border_hit(frame, p).map(|e| (w.clone(), e))
-                });
+                let border = self.border_under(p);
                 if let Some((w, edges)) = border {
                     self.space.raise_element(&w, true);
                     keyboard.set_focus(self, w.toplevel().map(|t| t.wl_surface().clone()), serial);
@@ -489,6 +474,7 @@ impl Omoya {
                         location: p,
                     };
                     if let Some(grab) = crate::grab::ResizeGrab::begin(self, w, edges, start_data) {
+                        self.active_resize = Some(edges);
                         pointer.set_grab(self, grab, serial, smithay::input::pointer::Focus::Clear);
                     }
                     return;
@@ -516,6 +502,47 @@ impl Omoya {
                 // protocol at all.
 
                 let logo_held = keyboard.modifier_state().logo;
+                // ── ★ LOGO + RIGHT-DRAG RESIZES, FROM THE NEAREST CORNER ──────
+                // The companion to Logo+left-drag move, and the reason an
+                // operator never has to aim at the 8 px margin: grab anywhere
+                // in the window, and the quadrant the pointer is in picks the
+                // corner that moves. Floating only — the tree owns tiled rects.
+                if logo_held
+                    && button == 0x111
+                    && self.config.layout.mode == crate::config::LayoutMode::Floating
+                {
+                    if let Some(geo) = self.space.element_geometry(&window) {
+                        let p = pointer.current_location();
+                        let (cx, cy) = (
+                            f64::from(geo.loc.x) + f64::from(geo.size.w) / 2.0,
+                            f64::from(geo.loc.y) + f64::from(geo.size.h) / 2.0,
+                        );
+                        let edges = crate::grab::Edges {
+                            left: p.x < cx,
+                            right: p.x >= cx,
+                            top: p.y < cy,
+                            bottom: p.y >= cy,
+                        };
+                        let start_data = smithay::input::pointer::GrabStartData {
+                            focus: None,
+                            button,
+                            location: p,
+                        };
+                        self.space.raise_element(&window, true);
+                        if let Some(grab) =
+                            crate::grab::ResizeGrab::begin(self, window.clone(), edges, start_data)
+                        {
+                            self.active_resize = Some(edges);
+                            pointer.set_grab(
+                                self,
+                                grab,
+                                serial,
+                                smithay::input::pointer::Focus::Clear,
+                            );
+                        }
+                        return;
+                    }
+                }
                 if logo_held && button == 0x110 {
                     if let Some(geo) = self.space.element_geometry(&window) {
                         let p = pointer.current_location();

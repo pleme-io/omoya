@@ -191,6 +191,14 @@ pub struct Omoya {
     /// titlebar double-click does on macOS and Windows. The window itself,
     /// never a `winid`, which collides across clients.
     pub last_titlebar_press: Option<(smithay::desktop::Window, std::time::Instant)>,
+    /// The edges of the resize in progress, so the cursor keeps its resize
+    /// arrow even when the pointer runs past the margin (a window clamped at
+    /// its minimum size stops following). Set when a `ResizeGrab` starts,
+    /// cleared on its release.
+    pub active_resize: Option<crate::grab::Edges>,
+    /// The frame a drag released right now would snap to — drawn as a
+    /// translucent preview while a window is dragged into an edge or corner.
+    pub snap_preview: Option<smithay::utils::Rectangle<i32, smithay::utils::Logical>>,
     pub loop_signal: LoopSignal,
 
     /// Whether a frame is owed, and why. See [`crate::owed::Owed`].
@@ -454,6 +462,8 @@ impl Omoya {
             windows: crate::windowmode::Windows::default(),
             previous_focus: None,
             last_titlebar_press: None,
+            active_resize: None,
+            snap_preview: None,
             bindings: {
                 let (map, clashes) = crate::deed::default_bindings();
                 // Reported, never fatal. A keymap typo must not take down the

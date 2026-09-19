@@ -491,6 +491,43 @@ impl crate::state::Omoya {
                 self.focus_direction(dir);
                 DeedOutcome::Performed
             }
+            Deed::Resize(dir) if self.config.layout.mode == crate::config::LayoutMode::Floating => {
+                // ── ★ FLOATING: THE KEYBOARD RESIZES THE FOCUSED WINDOW ───────
+                // This used to be refused ("no tiled window to resize") —
+                // correct about the tree, and useless to an operator with a
+                // floating seat and no mouse on the edge. Right/Down grow,
+                // Left/Up shrink, from the top-left anchor; a snapped window
+                // is freed first. Same `resized` rule and minimums as a drag.
+                const STEP: i32 = 48;
+                let Some(w) = self.focused_window() else {
+                    return DeedOutcome::Refused("no focused window to resize");
+                };
+                let Some(geo) = self.space.element_geometry(&w) else {
+                    return DeedOutcome::Refused("the focused window is not mapped");
+                };
+                let frame = smithay::utils::Rectangle::new(
+                    (geo.loc.x, geo.loc.y - crate::chrome::HEIGHT).into(),
+                    (geo.size.w, geo.size.h + crate::chrome::HEIGHT).into(),
+                );
+                let edges = crate::grab::Edges {
+                    right: matches!(dir, Direction::Left | Direction::Right),
+                    bottom: matches!(dir, Direction::Above | Direction::Below),
+                    ..Default::default()
+                };
+                let (dx, dy) = match dir {
+                    Direction::Right => (STEP, 0),
+                    Direction::Left => (-STEP, 0),
+                    Direction::Below => (0, STEP),
+                    Direction::Above => (0, -STEP),
+                };
+                let next =
+                    crate::grab::resized(frame, edges, dx, dy, crate::layout::client_min_frame(&w));
+                crate::snap::set(&w, None);
+                crate::floatpos::remember(&w, next.loc);
+                crate::floatpos::remember_size(&w, next.size);
+                self.apply_layout();
+                DeedOutcome::Performed
+            }
             Deed::Resize(dir) => {
                 // 0.05 of the parent, matching kukaku's MIN_RATIO: one press
                 // is the smallest move that cannot collapse a pane, so a held

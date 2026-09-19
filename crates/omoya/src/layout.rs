@@ -1123,6 +1123,28 @@ fn client_fixed_size(w: &smithay::desktop::Window) -> Option<smithay::utils::Siz
     })
 }
 
+/// The client's declared minimum as a FRAME size (content + titlebar), or
+/// `(0, 0)` when it declared none. `xdg_toplevel.set_min_size` is a request
+/// the compositor must honour when it picks a size — see `grab::resized`.
+#[must_use]
+pub fn client_min_frame(w: &smithay::desktop::Window) -> (i32, i32) {
+    use smithay::wayland::compositor::with_states;
+    use smithay::wayland::shell::xdg::SurfaceCachedState;
+    let Some(t) = w.toplevel() else { return (0, 0) };
+    let min = with_states(t.wl_surface(), |states| {
+        states
+            .cached_state
+            .get::<SurfaceCachedState>()
+            .current()
+            .min_size
+    });
+    if min.w <= 0 && min.h <= 0 {
+        (0, 0)
+    } else {
+        (min.w.max(0), min.h.max(0) + crate::chrome::HEIGHT)
+    }
+}
+
 pub fn surface_id_of(w: &smithay::desktop::Window) -> Option<u32> {
     use smithay::reexports::wayland_server::Resource as _;
     Some(crate::winid::of(w.toplevel()?.wl_surface()))

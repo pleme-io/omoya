@@ -174,6 +174,16 @@ pub struct PointerInput {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct DragInput {
+    /// Relative X distance to drag, in logical pixels.
+    pub dx: f64,
+    /// Relative Y distance to drag, in logical pixels.
+    pub dy: f64,
+    /// evdev button code. Defaults to 272 (BTN_LEFT).
+    pub code: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ClickInput {
     /// evdev button code. Defaults to 272 (BTN_LEFT). Press and release are
     /// both queued, so a caller cannot leave a button down on the seat.
@@ -302,6 +312,20 @@ impl OmoyaMcp {
     }
 
     #[tool(
+        description = "Drag from the current pointer position by (dx, dy) with a button held \
+                       (default BTN_LEFT/272): press, 8 motion steps, release — queued as one \
+                       unit, so a button is never left down. Exercises move/resize/snap grabs. \
+                       MUTATES the operator's desktop."
+    )]
+    async fn omoya_drag(&self, Parameters(input): Parameters<DragInput>) -> String {
+        let mut args = vec![serde_json::json!(input.dx), serde_json::json!(input.dy)];
+        if let Some(c) = input.code {
+            args.push(serde_json::json!(c));
+        }
+        ask(vec!["drag".into()], args).await
+    }
+
+    #[tool(
         description = "Screenshot what the compositor COMPOSED, to a path on its host. Note this \
                        reads the shadow buffer AND forces a full repaint, so it shows what the \
                        seat believes and cannot show stale pixels — it repairs the frame in the \
@@ -396,7 +420,15 @@ mod tests {
     /// forced someone to delete a real leaf to make a test pass.
     #[test]
     fn read_catalog_excludes_the_write_only_verbs() {
-        for verb in ["do", "type", "key", "click", "capture", "td_mode_set"] {
+        for verb in [
+            "do",
+            "type",
+            "key",
+            "click",
+            "drag",
+            "capture",
+            "td_mode_set",
+        ] {
             assert!(
                 !LEAVES.contains(&verb),
                 "write-only verb `{verb}` must not be listed as a readable leaf"

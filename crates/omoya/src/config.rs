@@ -120,7 +120,13 @@ pub enum FocusRing {
 /// three booleans would need a cross-field rule, and a cross-field rule on the
 /// thing that draws the login screen is a rule that can refuse you a seat.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+// ★ `default` IS LOAD-BEARING (2026-09-19). Without it a partial block —
+// plo's `damage: { flush: baselined }` — was a missing-field error, and
+// because `load` refuses the WHOLE file on any error, one omitted key here
+// silently threw away every other setting: the seat ran tiling for hours with
+// `layout.mode: floating` sitting in the file. See
+// `every_section_accepts_a_partial_block`.
+#[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
 pub struct DamageConfig {
     /// How much authority the compositor's own shadow diff has over what the
     /// client declared: `off` computes nothing, `on` replaces the declaration,
@@ -679,6 +685,43 @@ mod tests {
                 "{name} tier's own remaps are refused by its own validator"
             );
         }
+    }
+
+    #[test]
+    fn every_section_accepts_a_partial_block() {
+        // ★ THE CLASS, not the instance. A struct section without
+        // `#[serde(default)]` turns "set one key" into "the whole file is
+        // rejected and the seat runs defaults" — invisible except as a WARN.
+        // An EMPTY block is the smallest partial block, so if each of these
+        // parses, a section missing `default` cannot be merged.
+        for yaml in [
+            "bar: {}\n",
+            "placement: {}\n",
+            "layout: {}\n",
+            "damage: {}\n",
+            "ukeire: {}\n",
+            "ukeire: {keymap: {}}\n",
+            "ukeire: {repeat: {}}\n",
+            "ukeire: {scroll: {}}\n",
+            "ukeire: {pointer: {}}\n",
+        ] {
+            assert!(
+                serde_yaml::from_str::<OmoyaConfig>(yaml).is_ok(),
+                "a partial `{}` must parse: {:?}",
+                yaml.trim(),
+                serde_yaml::from_str::<OmoyaConfig>(yaml).err()
+            );
+        }
+    }
+
+    #[test]
+    fn plos_rendered_config_loads_and_floats() {
+        // Byte-for-byte what nix rendered to plo's ~/.config/omoya/omoya.yaml
+        // on 2026-09-19 — the file this crate rejected.
+        let plo = "damage:\n  flush: baselined\nlayout:\n  cascade_step: 24\n  mode: floating\n  snap_threshold: 16\nukeire:\n  keymap:\n    layout: us\n    variant: ''\n";
+        let cfg: OmoyaConfig = serde_yaml::from_str(plo).expect("plo's config must load");
+        assert_eq!(cfg.layout.mode, LayoutMode::Floating);
+        assert_eq!(cfg.damage.authority, crate::truedamage::Mode::default());
     }
 
     #[test]
