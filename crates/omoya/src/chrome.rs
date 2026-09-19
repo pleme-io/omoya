@@ -68,7 +68,19 @@ pub enum Hit {
 /// covered. The layout is responsible for leaving the room; `content_for`
 /// below is the inverse it uses to do that.
 #[must_use]
-pub fn bar_rect(content: Rectangle<i32, Logical>) -> Rectangle<i32, Logical> {
+pub fn bar_rect(
+    _: crate::role::Decorated,
+    content: Rectangle<i32, Logical>,
+) -> Rectangle<i32, Logical> {
+    bar_geometry(content)
+}
+
+/// [`bar_rect`] without the proof, for this module's own drawing helpers.
+///
+/// ★ PRIVATE ON PURPOSE. The token exists to stop ANOTHER module deciding a
+/// window gets a bar; inside chrome the decision has already been made by the
+/// caller that handed us a [`crate::role::Decorated`].
+fn bar_geometry(content: Rectangle<i32, Logical>) -> Rectangle<i32, Logical> {
     Rectangle::new(
         (content.loc.x, content.loc.y - HEIGHT).into(),
         (content.size.w, HEIGHT).into(),
@@ -101,7 +113,7 @@ pub fn content_for(frame: Rectangle<i32, Logical>) -> Rectangle<i32, Logical> {
 /// that overhangs its own bar.
 #[must_use]
 pub fn buttons(content: Rectangle<i32, Logical>) -> [Rectangle<i32, Logical>; 3] {
-    let bar = bar_rect(content);
+    let bar = bar_geometry(content);
     let y = bar.loc.y + (HEIGHT - BUTTON) / 2;
     let mut out = [Rectangle::new((0, 0).into(), (0, 0).into()); 3];
     for (i, slot) in out.iter_mut().enumerate() {
@@ -132,7 +144,11 @@ pub fn fits(content: Rectangle<i32, Logical>) -> bool {
 /// source — the buttons would simply never fire — which is why the order is
 /// stated here and pinned by a test.
 #[must_use]
-pub fn hit(content: Rectangle<i32, Logical>, p: Point<f64, Logical>) -> Option<Hit> {
+pub fn hit(
+    _: crate::role::Decorated,
+    content: Rectangle<i32, Logical>,
+    p: Point<f64, Logical>,
+) -> Option<Hit> {
     #[allow(clippy::cast_possible_truncation)]
     let point = Point::<i32, Logical>::from((p.x.floor() as i32, p.y.floor() as i32));
 
@@ -148,7 +164,7 @@ pub fn hit(content: Rectangle<i32, Logical>, p: Point<f64, Logical>) -> Option<H
         }
     }
 
-    if contains(bar_rect(content), point) {
+    if contains(bar_geometry(content), point) {
         return Some(Hit::Drag);
     }
 
@@ -311,6 +327,15 @@ fn draw_text_at(
 
 #[cfg(test)]
 mod tests {
+    /// Proof of decoration for tests — the same one a managed window's policy
+    /// yields at runtime.
+    fn decorated() -> crate::role::Decorated {
+        crate::role::WindowRole::Managed
+            .policy()
+            .decorated()
+            .expect("a managed window is decorated")
+    }
+
     use super::*;
 
     fn win(x: i32, y: i32, w: i32, h: i32) -> Rectangle<i32, Logical> {
@@ -322,7 +347,7 @@ mod tests {
         // A bar that overlapped would hide the client's top row — on a
         // terminal, the prompt.
         let c = win(100, 200, 800, 600);
-        let b = bar_rect(c);
+        let b = bar_rect(decorated(), c);
         assert_eq!(
             b.loc.y + b.size.h,
             c.loc.y,
@@ -340,7 +365,7 @@ mod tests {
         // window drift apart by a few pixels every configure.
         let frame = win(10, 20, 640, 480);
         let content = content_for(frame);
-        let bar = bar_rect(content);
+        let bar = bar_geometry(content);
         assert_eq!(
             bar.loc, frame.loc,
             "the bar must start at the frame's origin"
@@ -364,7 +389,7 @@ mod tests {
                 f64::from(r.loc.x + r.size.w / 2),
                 f64::from(r.loc.y + r.size.h / 2),
             ));
-            assert_eq!(hit(c, mid), Some(want), "centre of {r:?}");
+            assert_eq!(hit(decorated(), c, mid), Some(want), "centre of {r:?}");
         }
     }
 
@@ -377,7 +402,11 @@ mod tests {
         let close = buttons(c)[0];
         let p =
             Point::<f64, Logical>::from((f64::from(close.loc.x + 1), f64::from(close.loc.y + 1)));
-        assert_eq!(hit(c, p), Some(Hit::Close), "a button must beat the bar");
+        assert_eq!(
+            hit(decorated(), c, p),
+            Some(Hit::Close),
+            "a button must beat the bar"
+        );
     }
 
     #[test]
@@ -385,7 +414,7 @@ mod tests {
         let c = win(100, 200, 800, 600);
         // Far right of the bar, well past the three left-aligned buttons.
         let p = Point::<f64, Logical>::from((700.0, f64::from(200 - HEIGHT / 2)));
-        assert_eq!(hit(c, p), Some(Hit::Drag));
+        assert_eq!(hit(decorated(), c, p), Some(Hit::Drag));
     }
 
     #[test]
@@ -394,14 +423,14 @@ mod tests {
         // would make the window unusable in the name of decorating it.
         let c = win(100, 200, 800, 600);
         let p = Point::<f64, Logical>::from((400.0, 400.0));
-        assert_eq!(hit(c, p), None);
+        assert_eq!(hit(decorated(), c, p), None);
     }
 
     #[test]
     fn a_click_outside_the_window_entirely_is_not_chrome() {
         let c = win(100, 200, 800, 600);
         for p in [(50.0, 150.0), (2000.0, 205.0), (400.0, 100.0)] {
-            assert_eq!(hit(c, p.into()), None, "at {p:?}");
+            assert_eq!(hit(decorated(), c, p.into()), None, "at {p:?}");
         }
     }
 
@@ -430,7 +459,7 @@ mod tests {
         let c = win(0, 100, min_width() - 1, 300);
         assert!(!fits(c));
         let p = Point::<f64, Logical>::from((2.0, f64::from(100 - HEIGHT / 2)));
-        assert_eq!(hit(c, p), Some(Hit::Drag));
+        assert_eq!(hit(decorated(), c, p), Some(Hit::Drag));
     }
 
     #[test]
@@ -439,7 +468,7 @@ mod tests {
         // a button outside the bar would be drawn over the desktop and still
         // be clickable — chrome for a window it is not attached to.
         let c = win(37, 211, 900, 400);
-        let bar = bar_rect(c);
+        let bar = bar_rect(decorated(), c);
         for (i, r) in buttons(c).into_iter().enumerate() {
             assert!(r.loc.x >= bar.loc.x, "button {i} starts left of the bar");
             assert!(

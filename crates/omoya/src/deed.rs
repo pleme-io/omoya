@@ -502,6 +502,11 @@ impl crate::state::Omoya {
                 let Some(w) = self.focused_window() else {
                     return DeedOutcome::Refused("no focused window to resize");
                 };
+                if !crate::role::policy_of(&w, &self.config.placement).resizable {
+                    return DeedOutcome::Refused(
+                        "this window's role is not resizable (an overlay sizes itself)",
+                    );
+                }
                 let Some(geo) = self.space.element_geometry(&w) else {
                     return DeedOutcome::Refused("the focused window is not mapped");
                 };
@@ -570,6 +575,19 @@ impl crate::state::Omoya {
             // `resize` above records why that matters: an operator reporting
             // "I cannot resize" was right twice over and no leaf could say
             // so, because the verb reported success.
+            Deed::ToggleMaximize | Deed::Minimize
+                if self.focused_window().is_some_and(|w| {
+                    !crate::role::policy_of(&w, &self.config.placement).movable
+                }) =>
+            {
+                // ★ `movable` stands in for "the operator arranges this
+                // window". An overlay is summoned and dismissed, not
+                // maximised or minimised — and a minimised launcher is a
+                // launcher you cannot summon back.
+                DeedOutcome::Refused(
+                    "this window's role is an overlay — summon and dismiss it, do not arrange it",
+                )
+            }
             Deed::ToggleMaximize => match self.focused_surface_id() {
                 Some(id) => {
                     let now = self.windows.toggle_maximize(id);
@@ -623,6 +641,11 @@ impl crate::state::Omoya {
                 let Some(w) = self.focused_window() else {
                     return DeedOutcome::Refused("no focused window to snap");
                 };
+                if !crate::role::policy_of(&w, &self.config.placement).snappable {
+                    return DeedOutcome::Refused(
+                        "this window's role is not snappable (an overlay is the seat's own panel)",
+                    );
+                }
                 match crate::snap::step(crate::snap::tile_of(&w), dir) {
                     crate::snap::Step::To(tile) => {
                         crate::snap::set(&w, tile);

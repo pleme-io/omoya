@@ -300,6 +300,10 @@ impl XdgShellHandler for Omoya {
         else {
             return;
         };
+        if !crate::role::policy_of(&window, &self.config.placement).movable {
+            tracing::debug!("move_request refused — this window's role is not movable");
+            return;
+        }
         let Some(geo) = self.space.element_geometry(&window) else {
             return;
         };
@@ -368,6 +372,10 @@ impl XdgShellHandler for Omoya {
         else {
             return;
         };
+        if !crate::role::policy_of(&window, &self.config.placement).resizable {
+            tracing::debug!("resize_request refused — this window's role is not resizable");
+            return;
+        }
         if let Some(grab) = crate::grab::ResizeGrab::begin(self, window, edges, start_data) {
             self.active_resize = Some(edges);
             pointer.set_grab(self, grab, serial, smithay::input::pointer::Focus::Clear);

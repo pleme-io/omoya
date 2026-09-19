@@ -312,14 +312,23 @@ impl PointerGrab<Omoya> for MoveGrab {
             // clamped inside the zone so it can never reach it.
             data.snap_preview = None;
             let pointer = handle.current_location();
-            let tile = data
-                .space
-                .outputs()
-                .next()
-                .and_then(|o| data.space.output_geometry(o))
-                .and_then(|screen| {
-                    crate::snap::zone_for((pointer.x as i32, pointer.y as i32).into(), screen)
-                });
+            let snappable = crate::role::policy_of(&self.window, &data.config.placement).snappable;
+            // An overlay is never snapped — it is the seat's own panel, not a
+            // window the operator arranges.
+            let tile = snappable
+                .then(|| {
+                    data.space
+                        .outputs()
+                        .next()
+                        .and_then(|o| data.space.output_geometry(o))
+                        .and_then(|screen| {
+                            crate::snap::zone_for(
+                                (pointer.x as i32, pointer.y as i32).into(),
+                                screen,
+                            )
+                        })
+                })
+                .flatten();
             if let Some(tile) = tile {
                 crate::snap::set(&self.window, Some(tile));
                 data.apply_layout();
@@ -570,12 +579,7 @@ impl Omoya {
             return None;
         }
         self.space.elements().rev().find_map(|w| {
-            if crate::placement::for_app_id_in(
-                crate::layout::app_id_of(w).as_deref(),
-                &self.config.placement,
-            )
-            .is_floating()
-            {
+            if !crate::role::policy_of(w, &self.config.placement).resizable {
                 return None;
             }
             let geo = self.space.element_geometry(w)?;

@@ -1038,13 +1038,93 @@ where
             // cursor underneath every window, where it is invisible in
             // precisely the case it matters.
             let gather_start = std::time::Instant::now();
-            let space_elements = smithay::desktop::space::space_render_elements(
-                &mut renderer,
-                [&data.state.space],
-                &output,
-                1.0,
-            )
-            .unwrap_or_default();
+            // ── ★ GATHERED PER WINDOW, SO CHROME CAN SIT WITH ITS WINDOW ──
+            //
+            // This was one `space_render_elements` call for the whole space,
+            // and the titlebars were pushed as a block BEFORE it — i.e. every
+            // bar in front of every window. A background window's bar then
+            // painted over the foreground window's content, which is exactly
+            // what the operator reported ("the bar gets on top of another
+            // screen … bar to app priority weirdness"), and what the launcher
+            // made obvious by drawing its bar across a terminal.
+            //
+            // A bar belongs directly above ITS OWN window and below every
+            // window stacked over it, so the assembly is per window and the
+            // chrome is interleaved (see the loop below). The rest of
+            // `space_render_elements`' ordering is preserved deliberately:
+            // upper layer-shell surfaces above everything, lower ones below —
+            // omoya speaks `zwlr_layer_shell_v1` (handlers.rs), so dropping
+            // that would blank any layer client.
+            let layers = smithay::desktop::layer_map_for_output(&output);
+            let (layers_upper, layers_lower): (Vec<_>, Vec<_>) = layers
+                .layers()
+                .rev()
+                .map(|s| (s.layer(), s))
+                .partition(|(l, _)| {
+                    matches!(
+                        l,
+                        smithay::wayland::shell::wlr_layer::Layer::Overlay
+                            | smithay::wayland::shell::wlr_layer::Layer::Top
+                    )
+                });
+            let layer_elements = |renderer: &mut R,
+                                  set: &[(
+                smithay::wayland::shell::wlr_layer::Layer,
+                &smithay::desktop::LayerSurface,
+            )]| {
+                set.iter()
+                    .filter_map(|(_, surface)| {
+                        layers.layer_geometry(surface).map(|geo| (geo.loc, *surface))
+                    })
+                    .flat_map(|(loc, surface)| {
+                        smithay::backend::renderer::element::AsRenderElements::<R>::render_elements::<
+                            smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement<R>,
+                        >(
+                            surface,
+                            renderer,
+                            loc.to_physical_precise_round(1.0),
+                            smithay::utils::Scale::from(1.0),
+                            1.0,
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let upper_elements = layer_elements(&mut renderer, &layers_upper);
+            let lower_elements = layer_elements(&mut renderer, &layers_lower);
+            // Front to back — `space.elements()` yields back to front.
+            let stack: Vec<smithay::desktop::Window> =
+                data.state.space.elements().rev().cloned().collect();
+            let window_elements: Vec<(
+                smithay::desktop::Window,
+                Vec<
+                    smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement<R>,
+                >,
+            )> = stack
+                .iter()
+                .map(|w| {
+                    // ★ `render_location`, NOT the map position: smithay
+                    // subtracts the window's own geometry offset (a client
+                    // with CSD shadow margins has one), and getting this
+                    // wrong shifts every window by that margin.
+                    let loc = data
+                        .state
+                        .space
+                        .element_location(w)
+                        .unwrap_or_default()
+                        - w.geometry().loc;
+                    let els = smithay::backend::renderer::element::AsRenderElements::<R>::render_elements::<
+                        smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement<R>,
+                    >(
+                        w,
+                        &mut renderer,
+                        loc.to_physical_precise_round(1.0),
+                        smithay::utils::Scale::from(1.0),
+                        1.0,
+                    );
+                    (w.clone(), els)
+                })
+                .collect();
+            drop(layers);
             // Gathering is where texture import lives — see
             // `OmoyaIntrospect::gather_us`.
             introspect.gather_us.store(
@@ -1062,8 +1142,23 @@ where
                 );
             }
 
-            let mut elements: Vec<SeatElements<R, _>> =
-                Vec::with_capacity(space_elements.len() + 6);
+            // ★ E IS PINNED NOW THAT NOTHING INFERS IT. `space_render_elements`
+            // used to fix this parameter; the per-window assembly only ever
+            // builds `SpaceRenderElements::Surface`, so the element type is a
+            // surface element and the `Element(E)` variant goes unused.
+            let mut elements: Vec<
+                SeatElements<
+                    R,
+                    smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement<R>,
+                >,
+            > =
+                Vec::with_capacity(
+                    window_elements.iter().map(|(_, e)| e.len()).sum::<usize>()
+                        + upper_elements.len()
+                        + lower_elements.len()
+                        + CHROME_WINDOWS
+                        + 6,
+                );
             // ★ PUBLISHED FROM THE UNCLAMPED VALUE, before the cursor's own
             // position is clipped to the output below. A leaf that nobody
             // writes reports null forever — the shape `route_label` was in —
@@ -1286,6 +1381,7 @@ where
                     .state
                     .space
                     .elements()
+                    .rev()
                     .take(CHROME_WINDOWS)
                     .cloned()
                     .collect();
@@ -1296,13 +1392,23 @@ where
                     let Some(id) = crate::layout::surface_id_of(&w) else {
                         continue;
                     };
+                    // ★ THE ROLE DECIDES WHETHER THERE IS A BAR AT ALL, and it
+                    // decides by TYPE: an overlay's policy yields no
+                    // `Decorated`, and `chrome::bar_rect` cannot be called
+                    // without one. The launcher therefore has no titlebar, by
+                    // construction rather than by remembering.
+                    let Some(decorated) =
+                        crate::role::policy_of(&w, &data.state.config.placement).decorated()
+                    else {
+                        continue;
+                    };
                     let title = crate::layout::title_of(&w).unwrap_or_default();
                     let is_focused = focused
                         .is_some_and(|(fx, fy, _, _)| fx == geo.loc.x && fy == geo.loc.y);
-                    let bar = crate::chrome::bar_rect(geo);
+                    let bar = crate::chrome::bar_rect(decorated, geo);
 
                     // Which button, if any, the pointer is over right now.
-                    let hovered = crate::chrome::hit(geo, data.state.pointer_location)
+                    let hovered = crate::chrome::hit(decorated, geo, data.state.pointer_location)
                         .filter(|h| *h != crate::chrome::Hit::Drag);
                     let hit = chrome_cache.iter().any(|(cid, ct, cw, cf, ch, _)| {
                         *cid == id
@@ -1337,19 +1443,8 @@ where
                             ));
                         }
                     }
-                    if let Some((.., b)) = chrome_cache.iter().find(|(cid, ..)| *cid == id)
-                        && let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
-                            &mut renderer,
-                            (f64::from(bar.loc.x), f64::from(bar.loc.y)),
-                            b,
-                            None,
-                            None,
-                            None,
-                            Kind::Unspecified,
-                        )
-                    {
-                        elements.push(SeatElements::Texture(el));
-                    }
+                    // ★ CACHED HERE, PUSHED WITH ITS WINDOW BELOW. Pushing
+                    // here is what put every bar in front of every window.
                 }
                 // A window that closed must not keep its buffer alive.
                 let live: Vec<u32> = data
@@ -1445,7 +1540,40 @@ where
                 }
             }
 
-            elements.extend(space_elements.into_iter().map(SeatElements::Space));
+            // ── ★ THE STACK, IN ORDER ───────────────────────────────────
+            // Front to back: upper layer surfaces, then each window preceded
+            // by its OWN titlebar, then lower layer surfaces. A bar sits above
+            // its window and below anything stacked over that window, which is
+            // what makes overlapping windows read correctly.
+            use smithay::backend::renderer::element::Kind;
+            use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
+            let surface = |e| {
+                SeatElements::Space(smithay::desktop::space::SpaceRenderElements::Surface(e))
+            };
+            elements.extend(upper_elements.into_iter().map(surface));
+            for (w, els) in window_elements {
+                if let Some(id) = crate::layout::surface_id_of(&w)
+                    && let Some(decorated) =
+                        crate::role::policy_of(&w, &data.state.config.placement).decorated()
+                    && let Some(geo) = data.state.space.element_geometry(&w)
+                    && let Some((.., b)) = chrome_cache.iter().find(|(cid, ..)| *cid == id)
+                {
+                    let bar = crate::chrome::bar_rect(decorated, geo);
+                    if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
+                        &mut renderer,
+                        (f64::from(bar.loc.x), f64::from(bar.loc.y)),
+                        b,
+                        None,
+                        None,
+                        None,
+                        Kind::Unspecified,
+                    ) {
+                        elements.push(SeatElements::Texture(el));
+                    }
+                }
+                elements.extend(els.into_iter().map(surface));
+            }
+            elements.extend(lower_elements.into_iter().map(surface));
             // Published so `windows` and `elements` can be compared. A window
             // exists in `Space` from creation; an element exists only once the
             // client has attached a buffer, so a gap between the two is

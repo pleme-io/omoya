@@ -39,6 +39,7 @@ mod owed;
 mod placement;
 mod protocols;
 mod remap;
+mod role;
 mod rouka;
 mod scanout;
 mod snap;

@@ -368,8 +368,13 @@ impl Omoya {
                 // they overlap constantly. Clicking the visible top window's
                 // close button would close the one behind it.
                 let chrome_hit = self.space.elements().rev().find_map(|w| {
+                    // ★ THE ROLE DECIDES, AND IT DECIDES BY TYPE. An overlay's
+                    // policy yields no `Decorated`, so `chrome::hit` cannot be
+                    // called for it — the launcher has no bar to hit.
+                    let decorated =
+                        crate::role::policy_of(w, &self.config.placement).decorated()?;
                     let geo = self.space.element_geometry(w)?;
-                    crate::chrome::hit(geo, p).map(|h| (w.clone(), geo, h))
+                    crate::chrome::hit(decorated, geo, p).map(|h| (w.clone(), geo, h))
                 });
                 if let Some((w, geo, what)) = chrome_hit {
                     self.space.raise_element(&w, true);
@@ -510,6 +515,7 @@ impl Omoya {
                 if logo_held
                     && button == 0x111
                     && self.config.layout.mode == crate::config::LayoutMode::Floating
+                    && crate::role::policy_of(&window, &self.config.placement).resizable
                 {
                     if let Some(geo) = self.space.element_geometry(&window) {
                         let p = pointer.current_location();
@@ -543,7 +549,10 @@ impl Omoya {
                         return;
                     }
                 }
-                if logo_held && button == 0x110 {
+                if logo_held
+                    && button == 0x110
+                    && crate::role::policy_of(&window, &self.config.placement).movable
+                {
                     if let Some(geo) = self.space.element_geometry(&window) {
                         let p = pointer.current_location();
                         #[allow(clippy::cast_possible_truncation)]

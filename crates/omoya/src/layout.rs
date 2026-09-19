@@ -700,7 +700,15 @@ impl crate::state::Omoya {
             // Floating only: a tiled window's chrome is a later question, and
             // shrinking tiled windows here would move every one of them for a
             // feature the tiled path does not yet draw.
-            let rect = if floating_mode && !crate::chrome::content_for(rect).size.is_empty() {
+            // ★ ONLY A DECORATED WINDOW LOSES A BAND TO ITS BAR. An overlay
+            // has no titlebar, so shrinking its frame by `chrome::HEIGHT` put
+            // its content 24 px below where the seat thought it was — which is
+            // why the launcher's bar rendered DETACHED above its panel.
+            let role_policy = crate::role::policy_of(w, &self.config.placement);
+            let rect = if floating_mode
+                && role_policy.is_decorated()
+                && !crate::chrome::content_for(rect).size.is_empty()
+            {
                 crate::chrome::content_for(rect)
             } else {
                 rect
@@ -709,7 +717,12 @@ impl crate::state::Omoya {
                 // A fixed-size client is sent NO size: `None` means "you
                 // choose", which for a window whose min and max agree is the
                 // only answer that is not a contradiction.
-                let send = client_fixed_size(w).is_none().then_some(rect.size);
+                // ★ AN OVERLAY SIZES ITSELF. `sized_by_compositor = false`
+                // means the seat places it and says nothing about how big it
+                // is; configuring a size would overrule a launcher that
+                // shrinks to its own content.
+                let send = (role_policy.sized_by_compositor && client_fixed_size(w).is_none())
+                    .then_some(rect.size);
                 t.with_pending_state(|state| {
                     state.size = send;
                 });
