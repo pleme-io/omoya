@@ -346,14 +346,36 @@ impl PointerGrab<Omoya> for MoveGrab {
                     .and_then(|o| data.space.output_geometry(o))
                     .map_or((0, 0, 0, 0), |g| (g.loc.x, g.loc.y, g.size.w, g.size.h));
                 let threshold = data.config.layout.snap_threshold;
-                let (nx, ny) = snap_rect(
-                    (geo.loc.x, geo.loc.y),
-                    (geo.size.w, geo.size.h),
+                // ── ★ THE FRAME IS WHAT ALIGNS, NOT THE CONTENT ──────────
+                // Snapping `geo` aligned the CONTENT to the screen edge, so a
+                // release near the top put the content at y = 0 and the
+                // titlebar — the only part of a window that must stay
+                // reachable — one `chrome::HEIGHT` above the screen. Same
+                // frame/content confusion that made a dragged window creep
+                // downward, one branch along. The grown-upward frame is the
+                // same one `motion` clamps, deliberately: two reference frames
+                // inside one grab is how a window snaps to one edge on drag
+                // and a different one on release.
+                let (fx, fy) = (geo.loc.x, geo.loc.y - crate::chrome::HEIGHT);
+                let (nx, fny) = snap_rect(
+                    (fx, fy),
+                    (geo.size.w, geo.size.h + crate::chrome::HEIGHT),
                     zone,
                     threshold,
                 );
-                if (nx, ny) != (geo.loc.x, geo.loc.y) {
+                if (nx, fny) != (fx, fy) {
+                    let ny = fny + crate::chrome::HEIGHT;
                     data.space.map_element(self.window.clone(), (nx, ny), true);
+                    // ★ AND REMEMBER IT. Writing only into the Space is the
+                    // exact defect `motion` records above its own
+                    // `floatpos::remember`, left open in this branch: the
+                    // Space is the layout's OUTPUT, so the next
+                    // `apply_layout` re-derived the position from `floatpos`
+                    // — still holding the last MOTION position — and put the
+                    // window straight back where the operator had not left
+                    // it. The alignment survived exactly until the next map,
+                    // unmap or resize, which is why it read as intermittent.
+                    crate::floatpos::remember(&self.window, (nx, fny).into());
                 }
             }
             data.introspect.mark(crate::owed::Owed::Windows);

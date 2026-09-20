@@ -201,7 +201,17 @@ impl Windows {
             return;
         };
         let g = &mut self.groups[gi];
+        // ★ `active` IS AN INDEX, AND REMOVING BELOW IT SHIFTS EVERY MEMBER
+        // DOWN. Only the out-of-range case was handled, so closing a tab to
+        // the LEFT of the visible one silently switched which tab was shown —
+        // the operator closed one window and a different one appeared.
+        let removed_at = g.members.iter().position(|m| *m == id);
         g.members.retain(|m| *m != id);
+        if let Some(p) = removed_at
+            && p < g.active
+        {
+            g.active -= 1;
+        }
         if g.members.len() < 2 {
             self.groups.remove(gi);
         } else if g.active >= g.members.len() {
@@ -382,6 +392,40 @@ mod tests {
             g.active < g.members.len(),
             "active {} out of range",
             g.active
+        );
+    }
+
+    #[test]
+    fn closing_a_tab_left_of_the_visible_one_does_not_switch_tabs() {
+        // ★ THE REGRESSION. `active` is an INDEX into `members`, so removing a
+        // member BELOW it shifts every later member down one and the index now
+        // names its neighbour. Only the out-of-range case was handled, so this
+        // was silent: the operator closed one window and a DIFFERENT one
+        // appeared. The witness is the visible ID, never the index — an index
+        // assertion would pass for the wrong reason if `members` changed order.
+        // ★ THE ACTIVE TAB MUST BE IN THE MIDDLE, and the first version of
+        // this test was BLIND for missing that. `join` always appends and
+        // leaves `active` at the END, where the pre-existing
+        // `active >= len` clamp happens to produce the right answer for the
+        // wrong reason — so the defect reintroduced under a red run sailed
+        // through. Cycling is what puts `active` somewhere the clamp cannot
+        // rescue.
+        let mut w = Windows::default();
+        w.join(2, 1);
+        w.join(3, 1);
+        w.join(4, 1); // members [1, 2, 3, 4], active = 3
+        w.cycle(1, true); // → 0
+        w.cycle(1, true); // → 1, i.e. id 2, strictly inside the list
+        assert_eq!(w.group_of(1).and_then(Group::visible), Some(2));
+
+        w.leave(1); // removes position 0, strictly below active
+
+        let g = w.group_of(2).expect("three members remain");
+        assert_eq!(g.members, vec![2, 3, 4]);
+        assert_eq!(
+            g.visible(),
+            Some(2),
+            "closing a tab to the left must not change which tab is shown"
         );
     }
 

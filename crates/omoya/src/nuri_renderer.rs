@@ -300,6 +300,39 @@ pub struct NuriFramebuffer<'a> {
     _mapping: smithay::backend::allocator::dmabuf::DmabufMapping,
 }
 
+/// What `render_output` was able to say about what changed.
+///
+/// ── ★ WHY THIS IS A TYPE AND NOT `&[Rectangle]` (2026-09-19) ─────────────
+/// smithay hands back `Option<&Vec<Rectangle>>`, and the call site flattened
+/// it with `.unwrap_or(&[])`. That collapses TWO DIFFERENT OBSERVATIONS into
+/// one value:
+///
+///   `None`     — no usable history for this buffer. NOTHING is known.
+///   `Some([])` — full history, and nothing changed.
+///
+/// They call for opposite work (copy everything / copy nothing) and they
+/// arrived as the same empty slice, so the flush answered the conservative
+/// one for both. The conflation is invisible: the screen is always correct,
+/// and an idle seat simply pays 8.3 MB into write-combining memory per frame
+/// for a picture that did not change — including under `FlushPolicy`
+/// `Baselined`, whose entire promise is that it does not.
+///
+/// This is the ★★ state-resolution rule applied to one value: name the
+/// resolution you have, never let an absent answer render as an empty one.
+#[derive(Debug, Clone, Copy)]
+pub enum Damage<'a> {
+    /// No usable history — the only honest answer is to copy everything.
+    Unknown,
+    /// Exactly these regions changed. ★ EMPTY MEANS NOTHING DID.
+    Exactly(&'a [Rectangle<i32, Physical>]),
+}
+
+impl<'a> From<Option<&'a [Rectangle<i32, Physical>]>> for Damage<'a> {
+    fn from(d: Option<&'a [Rectangle<i32, Physical>]>) -> Self {
+        d.map_or(Self::Unknown, Self::Exactly)
+    }
+}
+
 /// A framebuffer that composites somewhere else and must be told when to put
 /// the result on the display.
 ///
@@ -315,14 +348,15 @@ pub struct NuriFramebuffer<'a> {
 /// a no-op and says so.
 pub trait ScanoutFlush {
     /// Put everything drawn since the last flush onto the display, clipped to
-    /// `damage`. An empty slice means "everything".
+    /// `damage`. See [`Damage`] — `Unknown` means everything, and an empty
+    /// `Exactly` means nothing.
     ///
     /// Returns the BYTES actually written. ★ Returned rather than logged,
     /// because the caller is the only place that can pair it with the elapsed
     /// time it already measures — and bytes-over-time is what separates a slow
     /// copy from a descheduled thread. Counting it inside would mean the
     /// numerator and denominator lived in different places.
-    fn flush_damage(&mut self, damage: &[Rectangle<i32, Physical>]) -> u64;
+    fn flush_damage(&mut self, damage: Damage<'_>) -> u64;
 
     /// The scanout mapping's CURRENT bytes — what the display is actually
     /// showing, as opposed to what the compositor composed.
@@ -340,7 +374,7 @@ pub trait ScanoutFlush {
 }
 
 impl ScanoutFlush for NuriFramebuffer<'_> {
-    fn flush_damage(&mut self, damage: &[Rectangle<i32, Physical>]) -> u64 {
+    fn flush_damage(&mut self, damage: Damage<'_>) -> u64 {
         NuriFramebuffer::flush_damage(self, damage)
     }
 
@@ -361,17 +395,44 @@ impl NuriFramebuffer<'_> {
     /// (~32 px at 32bpp) costs MORE to skip than to write through, because
     /// stopping and restarting mid-line forces two partial-line flushes. Full
     /// rows keep every write contiguous and cache-line aligned at both ends.
-    pub fn flush_damage(&mut self, damage: &[Rectangle<i32, Physical>]) -> u64 {
+    pub fn flush_damage(&mut self, damage: Damage<'_>) -> u64 {
         let h = usize::try_from(self.height).unwrap_or(0);
         let full = self.stride.saturating_mul(h);
         let len = full.min(self.data.len()).min(self.shadow.len());
         if len == 0 {
             return 0;
         }
-        // No damage at all means a full repaint was requested (age 0) or the
-        // caller could not say — copy everything rather than leave the screen
-        // holding a stale frame.
+        // ★ "COULD NOT SAY" AND "NOTHING CHANGED" ARE DIFFERENT ANSWERS, and
+        // they used to arrive here as the same empty slice — see [`Damage`].
+        // Unknown is the only one that forces a full copy.
+        let damage = match damage {
+            Damage::Unknown => {
+                self.data[..len].copy_from_slice(&self.shadow[..len]);
+                return len as u64;
+            }
+            Damage::Exactly(d) => d,
+        };
+        // ★ NOTHING CHANGED — SKIP, BUT ONLY WHERE THE POLICY ALREADY TRUSTS
+        // THE DAMAGE SET.
+        //
+        // Under `Baselined` the operator has opted into believing what
+        // `render_output` reports, and an empty report is that belief's
+        // cheapest case: the slot's generation says this buffer already holds
+        // these pixels, so there is nothing to write. Skipping it is what
+        // `Baselined` PROMISES and, before this, never delivered for an idle
+        // frame — the empty-slice branch returned above it.
+        //
+        // Under `Full` the empty set is NOT trusted, and deliberately so:
+        // "nothing changed" is precisely the claim that was found false on
+        // 2026-08-30, when the scanout held stale content the shadow did not.
+        // `Full` means copy every frame; an idle frame is still a frame.
         if damage.is_empty() {
+            if matches!(
+                self.flush_plan,
+                Some((crate::config::FlushPolicy::Baselined, _))
+            ) {
+                return 0;
+            }
             self.data[..len].copy_from_slice(&self.shadow[..len]);
             return len as u64;
         }
@@ -1736,6 +1797,30 @@ mod tests {
     /// The property is what earns the optimization; assert it rather than
     /// trusting the geometry.
     #[test]
+    #[test]
+    fn no_history_and_nothing_changed_are_not_the_same_answer() {
+        // ★ THE REGRESSION, AT ITS ROOT. The call site wrote
+        // `drawn.as_deref().unwrap_or(&[])`, which sends BOTH of these into
+        // the flush as an empty slice — so "nothing changed" was answered
+        // with a full 8.3 MB copy, including under `Baselined`, whose whole
+        // promise is that it is not. The distinction has to survive the
+        // conversion or the flush cannot act on it.
+        let none: Option<&[Rectangle<i32, Physical>]> = None;
+        assert!(
+            matches!(Damage::from(none), Damage::Unknown),
+            "an absent damage set must stay Unknown"
+        );
+
+        let empty: &[Rectangle<i32, Physical>] = &[];
+        assert!(
+            matches!(Damage::from(Some(empty)), Damage::Exactly([])),
+            "a present-but-empty damage set means NOTHING changed"
+        );
+
+        let one = [Rectangle::<i32, Physical>::from_size((4, 4).into())];
+        assert!(matches!(Damage::from(Some(&one[..])), Damage::Exactly(d) if d.len() == 1));
+    }
+
     fn the_flush_region_only_ever_grows_with_its_damage() {
         let r = |x, y, w, h| Rectangle::<i32, Physical>::new((x, y).into(), (w, h).into());
         let base = vec![r(10, 20, 30, 40)];

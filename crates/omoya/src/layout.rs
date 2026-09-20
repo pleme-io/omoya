@@ -517,17 +517,33 @@ impl crate::state::Omoya {
         // there is otherwise no way to tell a broken split from a broken
         // placement from an early return above.
         for (window, rect) in &arranged {
-            // ★ HIDDEN IS HONOURED HERE TOO. This check existed only in the
-            // floating loop below, so in `LayoutMode::Tiling` — the DEFAULT —
-            // minimise was a silent no-op: `windowmode` recorded the window as
-            // Hidden, `minimized_count` went up, and the window stayed on
-            // screen because nothing in this loop ever asked.
-            if surface_id_of(window)
+            // ★ THE WHOLE PLACEMENT IS HONOURED HERE, NOT JUST `Hidden`.
+            //
+            // This loop once asked only about `Hidden`, so in
+            // `LayoutMode::Tiling` — the DEFAULT — minimise was a silent
+            // no-op. The identical hole was left open one arm along:
+            // MAXIMISE. `windowmode` recorded `Maximized`, `Deed::Maximize`
+            // answered `Performed`, `mode_of` read back `Maximized`, and the
+            // window stayed in its tree rect — a verb that reports success,
+            // measures as applied, and does nothing to the screen.
+            //
+            // Matched exhaustively rather than re-tested, so a third arm is
+            // a compile error here and not a third silent no-op.
+            match surface_id_of(window)
                 .map(|id| self.windows.placement_of(id))
-                .is_some_and(|p| p == crate::windowmode::Placement::Hidden)
+                .unwrap_or(crate::windowmode::Placement::AsLaidOut)
             {
-                self.space.unmap_elem(window);
-                continue;
+                crate::windowmode::Placement::Hidden => {
+                    self.space.unmap_elem(window);
+                    continue;
+                }
+                // The usable zone, exactly as the floating arm does it — one
+                // meaning of "maximised" for both modes.
+                crate::windowmode::Placement::Maximized => {
+                    self.place_frame(window, usable);
+                    continue;
+                }
+                crate::windowmode::Placement::AsLaidOut => {}
             }
             if let Some(t) = window.toplevel() {
                 t.with_pending_state(|state| {

@@ -113,6 +113,21 @@ async fn ask(path: Vec<String>, args: Vec<serde_json::Value>) -> String {
         // the COMPOSITOR IS OLDER THAN THE MCP SERVER — i.e. the seat has not
         // restarted since the last deploy, which is the single most common
         // reason a new leaf answers nothing.
+        // ★ pid 0 IS THE SYNTHETIC FALLBACK, NOT A LIVE SEAT. `forward_status`
+        // reports "nobody answered" through this same arm, carrying the
+        // fallback error this module supplies and pid 0 — so a dark seat came
+        // back as `refused` with a hint telling the reader to compare binary
+        // versions of a compositor that is not running, and the `blind`
+        // outcome below was unreachable. kotae's whole point is that those two
+        // never render the same bytes.
+        kanshou::mcp::ForwardOutcome::LiveError { pid: 0, .. } => serde_json::json!({
+            "outcome": "blind",
+            "query": path.join("/"),
+            "reason": "no live omoya reachable over kanshou on this host",
+            "hint": "omoya must be running as the seat's compositor; check `pgrep omoya` \
+                     and $XDG_RUNTIME_DIR/kanshou/omoya-<pid>.sock",
+        })
+        .to_string(),
         kanshou::mcp::ForwardOutcome::LiveError { pid, error } => serde_json::json!({
             "outcome": "refused",
             "omoya_pid": pid,

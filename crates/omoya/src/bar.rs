@@ -293,6 +293,15 @@ pub enum Clock {
     /// `warning`. An honest degraded state — a seat that silently shows UTC
     /// as if it were local is lying at a glance.
     UtcFallback(String),
+    /// The operator turned it off (`bar.clock = false`).
+    ///
+    /// ★ A THIRD ARM, NOT `Local(String::new())`. An empty string rasterizes
+    /// to the same nothing, and it also ASSERTS that local time resolved —
+    /// so `colour()`, and every later reader, would be reasoning about a
+    /// local clock that is not on screen. It also buys the thing the knob is
+    /// actually for: `BarState` stops differing once a second, so the bar
+    /// stops re-rasterizing every second for a pixel nobody asked to see.
+    Hidden,
 }
 
 impl Default for Clock {
@@ -305,13 +314,36 @@ impl Clock {
     fn text(&self) -> &str {
         match self {
             Self::Local(s) | Self::UtcFallback(s) => s,
+            Self::Hidden => "",
         }
     }
     fn colour(&self) -> irodori::Color {
         match self {
-            Self::Local(_) => role_text_muted(),
+            Self::Local(_) | Self::Hidden => role_text_muted(),
             Self::UtcFallback(_) => role_warning(),
         }
+    }
+}
+
+/// Which clock a frame shows, from the config knob and what the timezone
+/// lookup managed.
+///
+/// ★ A FUNCTION, SO THE KNOB HAS A TEST. This decision used to be three
+/// inline lines in the render loop, which is a place no unit test can reach —
+/// and that is precisely how `bar.clock` came to be declared, defaulted,
+/// documented and read by nothing at all. A pure function of two observations
+/// is testable, and the render loop keeps no rule of its own.
+#[must_use]
+pub fn clock_for(show: bool, hhmm: String, resolved: bool) -> Clock {
+    if !show {
+        // ★ CHECKED FIRST. The operator's "off" outranks a degraded timezone:
+        // showing a UTC-fallback clock to someone who asked for no clock is
+        // the knob failing loudly instead of quietly.
+        Clock::Hidden
+    } else if resolved {
+        Clock::Local(hhmm)
+    } else {
+        Clock::UtcFallback(format!("{hhmm} UTC"))
     }
 }
 
@@ -466,11 +498,15 @@ pub fn rasterize_h(state: &BarState, width: i32, height: i32) -> Option<Vec<u8>>
     // different bitmaps at two sub-pixel offsets and defeats the
     // "re-rasterize only when the text changed" rule entirely.
     let clock = state.clock.text();
-    let cw = measure(font, clock);
-    #[allow(clippy::cast_precision_loss)]
-    let centre = ((w as f32 - cw) / 2.0 / 2.0).round() * 2.0;
-    let clock_blend = Blend::new(bg, state.clock.colour());
-    draw_text(&mut buf, w, h, font, clock, centre, &clock_blend);
+    // `Clock::Hidden` renders as nothing. Skipped rather than drawn-empty so
+    // the intent is legible at the draw site too, not only in the enum.
+    if !clock.is_empty() {
+        let cw = measure(font, clock);
+        #[allow(clippy::cast_precision_loss)]
+        let centre = ((w as f32 - cw) / 2.0 / 2.0).round() * 2.0;
+        let clock_blend = Blend::new(bg, state.clock.colour());
+        draw_text(&mut buf, w, h, font, clock, centre, &clock_blend);
+    }
 
     // ── Right: the state a screenshot cannot show ────────────────────────
     //
@@ -709,6 +745,61 @@ mod tests {
                 "every bar pixel must be fully opaque"
             );
         }
+    }
+
+    #[test]
+    fn a_hidden_clock_draws_nothing_and_stops_the_bar_ticking() {
+        // ★ `bar.clock = false` was a knob with ZERO readers: declared,
+        // defaulted true, documented "Show the clock", and discarded. Two
+        // properties are asserted, because only one of them is visible.
+        let shown = BarState {
+            clock: Clock::Local("14:22".into()),
+            ..BarState::default()
+        };
+        let hidden = BarState {
+            clock: Clock::Hidden,
+            ..BarState::default()
+        };
+        assert_ne!(
+            rasterize(&shown, 800),
+            rasterize(&hidden, 800),
+            "a hidden clock must not rasterize like a shown one"
+        );
+
+        // The invisible half, and the reason the knob is worth having: a
+        // hidden clock does not differ minute to minute, so `wanted !=
+        // bar_text` stops firing and the bar stops re-rasterizing on a timer
+        // for a pixel nobody asked to see.
+        let later = BarState {
+            clock: Clock::Hidden,
+            ..BarState::default()
+        };
+        assert_eq!(hidden, later);
+        assert_ne!(
+            shown,
+            BarState {
+                clock: Clock::Local("14:23".into()),
+                ..BarState::default()
+            },
+            "a SHOWN clock still ticks — the control must not silence both"
+        );
+
+        // ★ THE KNOB ITSELF, which is the part that was missing. The three
+        // assertions above all hold with `bar.clock` still read by nobody.
+        assert_eq!(clock_for(false, "14:22".into(), true), Clock::Hidden);
+        assert_eq!(
+            clock_for(false, "14:22".into(), false),
+            Clock::Hidden,
+            "off outranks a degraded timezone"
+        );
+        assert_eq!(
+            clock_for(true, "14:22".into(), true),
+            Clock::Local("14:22".into())
+        );
+        assert_eq!(
+            clock_for(true, "14:22".into(), false),
+            Clock::UtcFallback("14:22 UTC".into())
+        );
     }
 
     #[test]

@@ -1256,11 +1256,14 @@ where
                 // disagreed about which of them was lying.
                 #[allow(clippy::cast_possible_wrap)]
                 let (hhmm, resolved) = crate::localtime::hhmm(now as i64);
-                let clock = if resolved {
-                    crate::bar::Clock::Local(hhmm)
-                } else {
-                    crate::bar::Clock::UtcFallback(format!("{hhmm} UTC"))
-                };
+                // ★ THE KNOB IS READ HERE, AND IT WAS READ NOWHERE.
+                // `bar.clock` was declared, defaulted to `true`, documented
+                // "Show the clock" — and had ZERO readers, so turning it off
+                // changed nothing at all. A config field that accepts a value
+                // and discards it is worse than an absent one: it reports
+                // success. The decision itself lives in `bar::clock_for` so
+                // it has a test; this loop only supplies the observations.
+                let clock = crate::bar::clock_for(data.state.config.bar.clock, hhmm, resolved);
                 // One cell per parcel, the focused one marked. `focus_rect`
                 // is the layout's own answer, so the bar cannot disagree with
                 // the ring on screen about which window has focus.
@@ -1524,8 +1527,30 @@ where
                 // The frame is the content grown upward by the bar; a window
                 // with no bar (an overlay, or a zero-height bar) is unchanged
                 // because `top` is then simply `fy`.
-                let top = fy - crate::chrome::HEIGHT;
-                let (top, span) = if top < fy {
+                // ★ ASK WHETHER THERE IS A BAR, do not infer it. `top < fy`
+                // is `fy - HEIGHT < fy`, i.e. `HEIGHT > 0` — a constant, true
+                // for every window — so the "no bar" branch was dead and the
+                // ring grew upward even around an undecorated window (an
+                // overlay), floating a 24 px bracket above it.
+                let ring_bar = data
+                    .state
+                    .space
+                    .elements()
+                    .find(|w| {
+                        data.state
+                            .space
+                            .element_geometry(w)
+                            .is_some_and(|g| g.loc.x == fx && g.loc.y == fy)
+                    })
+                    .map_or(crate::chrome::HEIGHT, |w| {
+                        if crate::role::policy_of(w, &data.state.config.placement).is_decorated() {
+                            crate::chrome::HEIGHT
+                        } else {
+                            0
+                        }
+                    });
+                let top = fy - ring_bar;
+                let (top, span) = if ring_bar > 0 {
                     (top, fh + crate::chrome::HEIGHT)
                 } else {
                     (fy, fh)
@@ -1565,11 +1590,18 @@ where
             };
             elements.extend(upper_elements.into_iter().map(surface));
             for (w, els) in window_elements {
+                // ★ THE LOOKUP CARRIES THE CACHE'S OWN KEY. Refreshing is
+                // capped at `CHROME_WINDOWS`, but the draw matched on id
+                // ALONE — so a window past the cap, or one that changed width
+                // or title since its entry was built, drew a STALE bar: the
+                // old title at the old width over the new geometry.
                 if let Some(id) = crate::layout::surface_id_of(&w)
                     && let Some(decorated) =
                         crate::role::policy_of(&w, &data.state.config.placement).decorated()
                     && let Some(geo) = data.state.space.element_geometry(&w)
-                    && let Some((.., b)) = chrome_cache.iter().find(|(cid, ..)| *cid == id)
+                    && let Some((.., b)) = chrome_cache.iter().find(|(cid, _, cw, ..)| {
+                        *cid == id && *cw == crate::chrome::bar_rect(decorated, geo).size.w
+                    })
                 {
                     let bar = crate::chrome::bar_rect(decorated, geo);
                     if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
@@ -1821,7 +1853,12 @@ where
                         // re-opening the damage-clipped flush is then the only
                         // move that pays.
                         let flush_start = std::time::Instant::now();
-                        let wrote = fb.flush_damage(drawn.as_deref().unwrap_or(&[]));
+                        // ★ `Option` IN, NOT A FLATTENED SLICE. `None` is
+                        // "no usable history", `Some([])` is "nothing
+                        // changed" — `.unwrap_or(&[])` made them the same
+                        // value and the flush answered the expensive one for
+                        // both. See `nuri_renderer::Damage`.
+                        let wrote = fb.flush_damage(drawn.as_deref().into());
                         let took =
                             u64::try_from(flush_start.elapsed().as_micros()).unwrap_or(u64::MAX);
                         // ★ LAST, MAX AND TOTAL — because the last value alone

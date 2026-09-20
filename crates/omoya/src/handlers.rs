@@ -405,6 +405,19 @@ impl XdgShellHandler for Omoya {
         else {
             return;
         };
+        // ★ AND OFF THE INTROSPECTION MAP. `new_decoration` inserts one entry
+        // per toplevel and nothing ever removed it, so the map grew for the
+        // life of the seat — every window ever opened, on a session that runs
+        // for weeks.
+        {
+            use smithay::reexports::wayland_server::Resource as _;
+            let key = format!("{:?}", surface.wl_surface().id());
+            self.introspect
+                .decoration_sent
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(&key);
+        }
         // Off the roster first: everything below is teardown, and a window
         // that is being destroyed must not be handed to the next layout pass.
         self.roster

@@ -305,7 +305,7 @@ impl Texture for KasaneFramebuffer<'_> {
 }
 
 impl crate::nuri_renderer::ScanoutFlush for KasaneFramebuffer<'_> {
-    fn flush_damage(&mut self, _damage: &[Rectangle<i32, Physical>]) -> u64 {
+    fn flush_damage(&mut self, _damage: crate::nuri_renderer::Damage<'_>) -> u64 {
         // ★ ZERO BYTES, AND THAT IS THE POINT OF THE WHOLE CRATE.
         //
         // nuri composites into a shadow and then copies it to the scanout
