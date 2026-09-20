@@ -429,22 +429,27 @@ impl XdgShellHandler for Omoya {
         // Hand focus to whatever survives, or the seat becomes untypeable —
         // the same failure `new_toplevel`'s focus-on-map exists to prevent,
         // reached from the other direction.
-        let next = self.tiling.focused();
-        if let Some(kb) = self.seat.get_keyboard() {
-            let serial = smithay::utils::SERIAL_COUNTER.next_serial();
-            if let Some(w) = next.as_ref() {
-                if let Some(t) = w.toplevel() {
-                    t.with_pending_state(|state| {
-                        state.states.set(xdg_toplevel::State::Activated);
-                    });
-                    t.send_pending_configure();
-                }
-            }
-            let focus = next
-                .as_ref()
-                .and_then(|w| w.toplevel().map(|t| t.wl_surface().clone()));
-            kb.set_focus(self, focus, serial);
-        }
+        //
+        // ★ FROM THE SEAT, NOT THE TREE. This asked `self.tiling.focused()`,
+        // and `apply_layout` — called three lines up — unmaps every window
+        // from the tiling tree in floating mode, clearing both the tree and
+        // its focus. So the successor was ALWAYS `None` on plo and the arm
+        // then called `set_focus(None)`: closing ANY window killed the
+        // keyboard for every surviving window, and the operator had to click
+        // one to type again. Worse when a background client exited on its
+        // own — the foreground window kept DRAWING as focused (nothing
+        // unsets `Activated` on survivors) while receiving no keys.
+        //
+        // `focus_any_visible` walks `space.elements()`, skips `Hidden`, and
+        // routes through `focus_window`, which sets the keyboard focus,
+        // raises, records `previous_focus` and deactivates the others. It is
+        // true in BOTH layout modes — the argument `focused_surface_id`'s doc
+        // already makes for reading the seat rather than the tree.
+        //
+        // And nothing clears focus any more: if no window survives, the seat
+        // keeps whatever it had rather than being handed `None`, which is the
+        // state that made a live seat untypeable.
+        self.focus_any_visible();
     }
 }
 
