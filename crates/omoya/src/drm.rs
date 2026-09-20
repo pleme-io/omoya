@@ -730,14 +730,32 @@ where
     // `SolidColorRenderElement` has no buffer to carry an id, so it must be
     // handed one explicitly. That is why one survives and the other does not.
     //
-    // `CHROME_WINDOWS` stays — it is NOT part of the dead pool. It caps the
-    // window loop at `.take(CHROME_WINDOWS)` below, so past that limit the
-    // extra windows render without chrome rather than sharing ids.
-
-    /// How many windows get chrome. Beyond this they render without it, which
-    /// is the honest degradation: two elements holding one id is the exact
-    /// confusion stable ids exist to prevent.
-    const CHROME_WINDOWS: usize = 8;
+    // ── ★ `CHROME_WINDOWS` WENT WITH IT (2026-09-19) ────────────────────
+    //
+    // The cap outlived its reason by one commit. It read: "How many windows
+    // get chrome. Beyond this they render without it, which is the honest
+    // degradation: two elements holding one id is the exact confusion stable
+    // ids exist to prevent." That hazard was the `chrome_ids` POOL deleted
+    // immediately above — with the pool gone, every cached bar carries its
+    // own id from its `MemoryRenderBuffer`, and there is no id to share.
+    //
+    // What the cap still DID, with no reason left to do it, was two defects:
+    //
+    //   * the 9th window and beyond silently lost their titlebar — no drag
+    //     handle and no buttons, on windows whose role says `decorated:
+    //     true` and `movable: true`;
+    //   * `input.rs`'s hit-test never had the cap, so those invisible
+    //     buttons stayed LIVE. Clicking the empty-looking 28 px band above a
+    //     9th window's content closed it — precisely what that call site's
+    //     own comment says must never happen ("a click that hit chrome
+    //     nobody drew would be a window closing because the operator clicked
+    //     empty desktop").
+    //
+    // Deleting it makes the drawn set and the hit set the same set BY
+    // CONSTRUCTION: both are now exactly `role::policy_of(w).decorated()`,
+    // asked in one place each, with no second limit that has to agree.
+    // Memory is bounded by live windows — `chrome_cache.retain(live)` below —
+    // at one bar buffer each, and a bar is `width x 28 x 4`.
 
     // The snap preview is ONE solid rect, so it needs one stable id of its own
     // for the same reason as the border edges below.
@@ -1156,7 +1174,12 @@ where
                     window_elements.iter().map(|(_, e)| e.len()).sum::<usize>()
                         + upper_elements.len()
                         + lower_elements.len()
-                        + CHROME_WINDOWS
+                        // One bar per window at most — `window_elements` is
+                        // the same set the chrome loop walks, now that the
+                        // cap is gone. A capacity hint, so an over-estimate
+                        // costs a few pointers and an under-estimate costs a
+                        // realloc; the over-estimate is the right direction.
+                        + window_elements.len()
                         + 6,
                 );
             // ★ PUBLISHED FROM THE UNCLAMPED VALUE, before the cursor's own
@@ -1396,7 +1419,6 @@ where
                     .space
                     .elements()
                     .rev()
-                    .take(CHROME_WINDOWS)
                     .cloned()
                     .collect();
                 for w in windows {
@@ -1590,11 +1612,13 @@ where
             };
             elements.extend(upper_elements.into_iter().map(surface));
             for (w, els) in window_elements {
-                // ★ THE LOOKUP CARRIES THE CACHE'S OWN KEY. Refreshing is
-                // capped at `CHROME_WINDOWS`, but the draw matched on id
-                // ALONE — so a window past the cap, or one that changed width
-                // or title since its entry was built, drew a STALE bar: the
-                // old title at the old width over the new geometry.
+                // ★ THE LOOKUP CARRIES THE CACHE'S OWN WIDTH. The draw
+                // matched on id ALONE, so a window whose width changed since
+                // its entry was built drew a STALE bar — the old title at the
+                // old width over the new geometry. (The other half of that,
+                // a window the refresh loop never reached, is gone with
+                // `CHROME_WINDOWS`; the width check stays because the refresh
+                // and the draw still happen at two different moments.)
                 if let Some(id) = crate::layout::surface_id_of(&w)
                     && let Some(decorated) =
                         crate::role::policy_of(&w, &data.state.config.placement).decorated()
