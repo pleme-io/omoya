@@ -400,8 +400,24 @@ impl<'a> Surface<'a> {
                     let u = x - dst_rect.x;
                     let v = y - dst_rect.y;
                     let (su, sv) = map_back(transform, u, v, dst_rect.w, dst_rect.h);
-                    let sx = src_rect.x + scale(su, dst_rect.w, src_rect.w, transform);
-                    let sy = src_rect.y + scale(sv, dst_rect.h, src_rect.h, transform);
+                    // ★ THE DENOMINATOR FOLLOWS THE TRANSFORM, and it did
+                    // not. For the four TRANSPOSING transforms `map_back`
+                    // draws `su` from the destination's HEIGHT axis and `sv`
+                    // from its WIDTH — `Rotate90 => (v, w - 1 - u)` — while
+                    // this scaled `su` by `dst.w` and `sv` by `dst.h`. Both
+                    // were the wrong axis, so an 800x600 buffer with
+                    // `set_buffer_transform(90)` sampled past the end of its
+                    // own source and `SurfaceRef::pixel` returned `None`:
+                    // roughly the bottom quarter of the window drew NOTHING
+                    // and the rest sampled the wrong column, with no error
+                    // and no log.
+                    let (su_extent, sv_extent) = if transposes(transform) {
+                        (dst_rect.h, dst_rect.w)
+                    } else {
+                        (dst_rect.w, dst_rect.h)
+                    };
+                    let sx = src_rect.x + scale(su, su_extent, src_rect.w);
+                    let sy = src_rect.y + scale(sv, sv_extent, src_rect.h);
                     let Some(px) = src.pixel(sx, sy) else {
                         continue;
                     };
@@ -516,8 +532,22 @@ const fn map_back(t: Transform, u: i32, v: i32, w: i32, h: i32) -> (i32, i32) {
     }
 }
 
+/// Does this transform swap the width and height axes?
+///
+/// ★ THE FACT THE SCALING NEEDED AND DID NOT HAVE. `scale` used to take a
+/// `Transform` as `_t` — bound, never read — which made the call sites read
+/// as though the transform had been accounted for. It had not: the parameter
+/// was the whole of the pretence, so it is gone and this is the real
+/// question, asked where it is answerable.
+const fn transposes(t: Transform) -> bool {
+    matches!(
+        t,
+        Transform::Rotate90 | Transform::Rotate270 | Transform::Flipped90 | Transform::Flipped270
+    )
+}
+
 /// Scale a mapped coordinate from destination extent to source extent.
-const fn scale(coord: i32, dst_extent: i32, src_extent: i32, _t: Transform) -> i32 {
+const fn scale(coord: i32, dst_extent: i32, src_extent: i32) -> i32 {
     if dst_extent == src_extent || dst_extent == 0 {
         coord
     } else {
@@ -991,10 +1021,81 @@ mod tests {
     }
 
     #[test]
+    /// ★ THE SQUARE TEST ABOVE CANNOT SEE THIS, which is why it survived.
+    ///
+    /// `every_transform_maps_corner_to_corner` uses a 4x4 extent, where
+    /// `dst.w == dst.h` and the axis swap is invisible. For the four
+    /// TRANSPOSING transforms `map_back` draws `su` from the destination's
+    /// HEIGHT axis and `sv` from its WIDTH, so the scaling denominators have
+    /// to swap with it — and they did not.
+    ///
+    /// A client with an 800x600 buffer calling `set_buffer_transform(90)`
+    /// presents a 600x800 destination against an 800x600 source. Under the
+    /// old pairing, destination row 799 scaled to source x = 799*800/600 =
+    /// 1065 — past the source's width — and `SurfaceRef::pixel` answers
+    /// `None`, so the pixel is skipped. Silently.
+    #[test]
+    fn a_transposing_transform_stays_inside_a_non_square_source() {
+        // dst is the transposed extent; src is the buffer's own.
+        let (dw, dh) = (600, 800);
+        let (sw, sh) = (800, 600);
+        for t in [
+            Transform::Rotate90,
+            Transform::Rotate270,
+            Transform::Flipped90,
+            Transform::Flipped270,
+        ] {
+            assert!(transposes(t), "{t:?} must be classified as transposing");
+            for (u, v) in [(0, 0), (dw - 1, 0), (0, dh - 1), (dw - 1, dh - 1)] {
+                let (su, sv) = map_back(t, u, v, dw, dh);
+                let (su_e, sv_e) = (dh, dw);
+                let sx = scale(su, su_e, sw);
+                let sy = scale(sv, sv_e, sh);
+                assert!(
+                    (0..sw).contains(&sx) && (0..sh).contains(&sy),
+                    "{t:?} mapped dst({u},{v}) to src({sx},{sy}), outside {sw}x{sh}"
+                );
+            }
+        }
+    }
+
+    /// The other half: a NON-transposing transform must keep the straight
+    /// pairing, or the fix above is a swap rather than a correction.
+    #[test]
+    fn a_non_transposing_transform_keeps_the_straight_pairing() {
+        let (dw, dh) = (800, 600);
+        let (sw, sh) = (800, 600);
+        for t in [
+            Transform::Normal,
+            Transform::Rotate180,
+            Transform::Flipped,
+            Transform::Flipped180,
+        ] {
+            assert!(
+                !transposes(t),
+                "{t:?} must NOT be classified as transposing"
+            );
+            for (u, v) in [(0, 0), (dw - 1, 0), (0, dh - 1), (dw - 1, dh - 1)] {
+                let (su, sv) = map_back(t, u, v, dw, dh);
+                let sx = scale(su, dw, sw);
+                let sy = scale(sv, dh, sh);
+                assert!(
+                    (0..sw).contains(&sx) && (0..sh).contains(&sy),
+                    "{t:?} mapped dst({u},{v}) to src({sx},{sy}), outside {sw}x{sh}"
+                );
+            }
+        }
+    }
+
     fn every_transform_maps_corner_to_corner() {
         // ★ Each of the eight must land inside the source extent — an
         // off-by-one here paints a one-pixel band of garbage along an edge,
         // which is invisible in a screenshot and obvious on a screen.
+        //
+        // ★ AND IT IS SQUARE, SO IT CANNOT SEE AN AXIS SWAP. At 4x4,
+        // `dst.w == dst.h`, and the scaling bug this test sat beside for its
+        // whole life needs them to differ. See
+        // `a_transposing_transform_stays_inside_a_non_square_source`.
         for t in [
             Transform::Normal,
             Transform::Rotate90,
