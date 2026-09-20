@@ -22,17 +22,20 @@
 //! 883x523, a 93% overlap that reads as a stack.
 //!
 //! ── ★ WHY THIS LIVES ON THE WINDOW AND NOT IN A MAP ──────────────────────
-//! The obvious shape is `HashMap<WindowId, Point>`. It would be WRONG today:
-//! `surface_id_of` returns `protocol_id`, which wayland-backend documents as
-//! per-client — *"each client has its own ID space, so this should not be
-//! used as a unique identifier"* — and every mado on the seat measures as
-//! `wl_surface#16`. Two mados would share one entry and fight over it.
-//!
 //! `Window::user_data()` is keyed by the window itself, so it needs no id and
-//! cannot collide. That makes this fix independent of the WindowId work
-//! rather than blocked behind it — which matters, because the titlebar hoist
+//! cannot collide. That made this fix independent of the WindowId work rather
+//! than blocked behind it — which mattered, because the titlebar hoist
 //! without this reads as a NEW bug ("dragging works and then undoes itself")
 //! rather than as a fix.
+//!
+//! ★ CORRECTED 2026-09-19. This note used to say a `HashMap<WindowId, Point>`
+//! "would be WRONG today: `surface_id_of` returns `protocol_id` … every mado
+//! on the seat measures as `wl_surface#16`". That was true of `protocol_id`
+//! and has not been true since `winid::of` replaced it with a minted counter
+//! (read `winid.rs`'s header for the eight sites it fixed). A map would work
+//! now; user data is still the better fit, because it needs no lifetime
+//! management and goes when the window goes. Keeping the dead hazard would
+//! send the next reader away from the primitive that solved it.
 //!
 //! ── ★ THE RULE ───────────────────────────────────────────────────────────
 //! A floating window is placed ONCE, when it first appears. After that its
@@ -114,6 +117,11 @@ pub fn forget(w: &Window) {
 /// size. Clamping the position rather than shrinking the window is deliberate:
 /// resizing a window because the screen moved would be the compositor
 /// overruling a size the client chose.
+///
+/// ★ THE DOC BELONGS TO `clamped`, and it had drifted onto `FloatSize` — the
+/// two items ended up adjacent with no blank line, so rustdoc gave this whole
+/// block to the struct and left `clamped` undocumented. Moved back.
+
 /// A window's own FREE size (the frame, titlebar included), once it has one.
 ///
 /// Absent until the operator resizes the window; the layout then uses the
@@ -138,6 +146,12 @@ pub fn remember_size(w: &Window, size: smithay::utils::Size<i32, Logical>) {
     }
 }
 
+/// Clamp a remembered frame origin back into `usable`, keeping its size.
+///
+/// See the note above `FloatSize` for why: an output that shrinks, or a bar
+/// that appears, leaves a window parked at the old bottom-right unreachable —
+/// and unlike a badly-placed new window the operator cannot drag it back,
+/// because the titlebar is the part that went off-screen.
 #[must_use]
 pub fn clamped(
     remembered: Point<i32, Logical>,

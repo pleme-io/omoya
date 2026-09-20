@@ -686,9 +686,13 @@ impl crate::state::Omoya {
                 // on plo, a 93% overlap that reads as a stack.
                 //
                 // Now the cascade decides only where a window STARTS. See
-                // `crate::floatpos`; the position lives on the window itself
-                // rather than in a map, because `surface_id_of` returns a
-                // per-client `protocol_id` and every mado on the seat is id 16.
+                // `crate::floatpos`; the position lives on the window itself,
+                // which needs no id at all. (This note used to justify that
+                // with "`surface_id_of` returns a per-client `protocol_id`
+                // and every mado on the seat is id 16" — true of
+                // `protocol_id`, and false since `winid::of` replaced it with
+                // a minted counter. The storage choice still stands on its
+                // own; the reason given for it had rotted.)
                 // The cascade is computed either way — it is a few
                 // multiplications, and it is what supplies the SIZE even when
                 // the position is recalled. `width`/`height` are fractions of
@@ -741,11 +745,41 @@ impl crate::state::Omoya {
             // small launcher lands where a small launcher should rather than
             // in the top-left of the box the seat would have given it.
             let rect = match client_fixed_size(w) {
-                Some(fixed) if floating_mode => crate::placement::snap_to_edges(
-                    Rectangle::new(crate::placement::centred_loc(usable, fixed), fixed),
-                    usable,
-                    self.config.layout.snap_threshold,
-                ),
+                // ★ THE CLIENT OWNS THE SIZE. THE OPERATOR STILL OWNS THE
+                // POSITION — and this arm used to take both.
+                //
+                // It ran AFTER the recall/remember block above and discarded
+                // its answer, so a fixed-size window (`min_size == max_size`:
+                // a dialog, a splash, a utility panel) was RE-CENTRED on every
+                // layout pass. Drag it, and the next map, unmap, commit or
+                // click put it back in the middle — the operator's original
+                // report, *"I can move it but if I click on it they snap back
+                // to their original position"*, still true for this one class
+                // of client after `floatpos` closed it for every other.
+                //
+                // Only the size comes from the client now; where it goes is
+                // recalled exactly as any other floating window's is.
+                Some(fixed) if floating_mode && !is_overlay => {
+                    let loc = match crate::floatpos::recall(w) {
+                        Some(remembered) => crate::floatpos::clamped(remembered, fixed, usable),
+                        None => {
+                            // First sight: centre it at its OWN size, tidy it
+                            // against the edges, and record that — so the very
+                            // next pass recalls instead of recomputing.
+                            let first = crate::placement::snap_to_edges(
+                                Rectangle::new(crate::placement::centred_loc(usable, fixed), fixed),
+                                usable,
+                                self.config.layout.snap_threshold,
+                            );
+                            crate::floatpos::remember(w, first.loc);
+                            first.loc
+                        }
+                    };
+                    Rectangle::new(loc, fixed)
+                }
+                // An overlay, or tiling mode: centred at the client's own size
+                // every time. For the overlay that is its role (`centred:
+                // true`) and not an oversight — it is summoned, not arranged.
                 Some(fixed) => Rectangle::new(crate::placement::centred_loc(usable, fixed), fixed),
                 None => rect,
             };
@@ -1213,10 +1247,6 @@ fn client_fixed_size(w: &smithay::desktop::Window) -> Option<smithay::utils::Siz
     })
 }
 
-/// The client's declared minimum as a FRAME size (content + titlebar), or
-/// `(0, 0)` when it declared none. `xdg_toplevel.set_min_size` is a request
-/// the compositor must honour when it picks a size — see `grab::resized`.
-#[must_use]
 /// The nearest neighbour of `from` in `dir`, by geometry.
 ///
 /// ── ★ WHY GEOMETRY AND NOT THE TREE ─────────────────────────────────────
