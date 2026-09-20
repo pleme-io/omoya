@@ -104,7 +104,21 @@ impl Omoya {
                 // `owed_vt_switches` returning to zero is how its test
                 // proves it. Recognising it and saying so is honest;
                 // pretending to handle it would not be.
-                if let Some(hk) = crate::chord::hotkey_from(modifiers, handle.modified_sym())
+                // ★ PRESSES ONLY. smithay runs this filter for BOTH
+                // directions — `input_intercept` calls it after
+                // `key_input(keycode, state)` for Pressed and Released alike —
+                // and on the release the modifiers are still held and
+                // `modified_sym()` is unchanged, so `claim_on` matched a SECOND
+                // time. One press of Ctrl+Alt+Delete took `owed_vt_switches`
+                // from 0 to 2 (nothing decrements it: `vt_of` is None for
+                // Delete), and a real VT chord invoked `sw(vt)` twice.
+                //
+                // The deed arm below has carried this guard from the start,
+                // with a comment about why feeding releases to a stateful
+                // matcher is wrong. The same reasoning was simply never
+                // applied one arm up.
+                if event_state == KeyState::Pressed
+                    && let Some(hk) = crate::chord::hotkey_from(modifiers, handle.modified_sym())
                     && let Some(claim) = state.reserved.claim_on(&hk)
                 {
                     // ★ ACT ON IT. This counted and forwarded, which
@@ -195,7 +209,16 @@ impl Omoya {
                 crate::deed::DeedOutcome::Performed => &self.introspect.chord_deeds,
                 crate::deed::DeedOutcome::Refused(reason) => {
                     tracing::info!(reason, "chord deed refused");
-                    &self.introspect.deeds_refused
+                    // ★ THE CHORD PATH'S OWN COUNTER, BOTH WAYS. The performed
+                    // arm above already uses `chord_deeds`, whose doc says
+                    // "two paths reaching one action need two counters, or the
+                    // quiet one is invisible" — and then the refusal arm merged
+                    // the two paths back into one. `deeds_performed` is written
+                    // ONLY by the kanshou drain, so an operator pressing
+                    // Logo+Left with nothing to the left made an agent read
+                    // `performed: 0, refused: 1` and conclude a deed it never
+                    // sent had been declined.
+                    &self.introspect.chord_deeds_refused
                 }
             };
             counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

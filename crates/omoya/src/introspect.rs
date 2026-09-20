@@ -514,6 +514,17 @@ pub struct OmoyaIntrospect {
     /// Two paths reaching one action need two counters, or the quiet one is
     /// invisible.
     pub chord_deeds: AtomicU64,
+    /// Deeds REFUSED from a chord — the keyboard path's other half.
+    ///
+    /// ★ ADDED 2026-09-20 BECAUSE THE PAIR WAS ASYMMETRIC. `chord_deeds`
+    /// counted the chord path's successes and the refusal arm wrote into
+    /// `deeds_refused`, which `deeds_performed`'s doc pairs with the KANSHOU
+    /// drain: "a drained deed increments exactly one of the two, so
+    /// `performed + refused` is the drain count". With the operator's
+    /// keyboard writing into one side of that pair, an agent that had issued
+    /// no write verb at all could read `performed: 0, refused: 1` and
+    /// conclude its own deed had been declined. Two paths, four counters.
+    pub chord_deeds_refused: AtomicU64,
     /// Wakes the compositor's event loop after an enqueue.
     ///
     /// ★ THE PING IS LOAD-BEARING, AND MORE SO SINCE DAMAGE TRACKING LANDED.
@@ -823,6 +834,7 @@ pub const LEAVES: &[&str] = &[
     "deeds_refused",
     "protocols",
     "chord_deeds",
+    "chord_deeds_refused",
     "focus_rect",
     "frame_us",
     "planes",
@@ -1139,6 +1151,7 @@ impl Introspect for OmoyaIntrospect {
                     .collect::<Vec<_>>(),
             })),
             "chord_deeds" => Ok(n(&self.chord_deeds)),
+            "chord_deeds_refused" => Ok(n(&self.chord_deeds_refused)),
             "focus_rect" => Ok(serde_json::json!(
                 self.focus_rect
                     .lock()

@@ -249,6 +249,33 @@ impl OmoyaMcp {
                        no compositor is running — never a zero that could be mistaken for one."
     )]
     async fn omoya_read(&self, Parameters(input): Parameters<ReadInput>) -> String {
+        // ── ★ THE CATALOG IS ENFORCED HERE, NOT MERELY PUBLISHED ─────────
+        //
+        // This forwarded ANY string to `query()`, and the dispatch on the
+        // other side has no read/write split: `head` is matched against every
+        // arm, write verbs included. Most of them happen to refuse an
+        // argument-less call, but two have DEFAULTS and therefore act —
+        // `click` defaults to BTN_LEFT and queues a press and a release, and
+        // `stale_scan` arms a scan and clears the previous result. So
+        // `omoya_read {leaf: "click"}` — a plausible guess for "read the click
+        // state", and nothing rejected it — performed a real left-click on the
+        // operator's desktop from a tool whose description is "read".
+        //
+        // `read_catalog_excludes_the_write_only_verbs` already asserted that
+        // `LEAVES` leaves them out. The catalog was right and nothing consulted
+        // it; a documented boundary that no code checks is a comment.
+        if !LEAVES.contains(&input.leaf.as_str()) {
+            return serde_json::json!({
+                "outcome": "refused",
+                "query": input.leaf,
+                "reason": "not a read leaf — omoya_read reaches only the read catalog, \
+                           and some write verbs would ACT on an argument-less call",
+                "legal": "call omoya_leaves for the catalog; write verbs go through \
+                          omoya_do, omoya_click, omoya_key, omoya_type, omoya_pointer \
+                          or omoya_drag",
+            })
+            .to_string();
+        }
         ask(vec![input.leaf], vec![]).await
     }
 
@@ -433,6 +460,17 @@ mod tests {
     /// readable leaf UNLESS it genuinely answers a read", which for this
     /// surface is `pointer` alone. Encoding the wrong rule here would have
     /// forced someone to delete a real leaf to make a test pass.
+    /// ★ AND SINCE 2026-09-20 THIS TEST IS LOAD-BEARING, not descriptive.
+    ///
+    /// `omoya_read` used to forward its `leaf` string straight to `query()`,
+    /// and the dispatch on the other side has no read/write split — `head` is
+    /// matched against every arm. Most write verbs refuse an argument-less
+    /// call, but `click` defaults to BTN_LEFT and `stale_scan` defaults to a
+    /// path, so both ACT. `omoya_read {leaf: "click"}` performed a real
+    /// left-click on the operator's desktop from a tool documented as a read.
+    ///
+    /// `omoya_read` now checks `LEAVES` before forwarding, so the catalog this
+    /// test pins is what enforces the boundary rather than describing it.
     #[test]
     fn read_catalog_excludes_the_write_only_verbs() {
         for verb in [
@@ -443,6 +481,9 @@ mod tests {
             "drag",
             "capture",
             "td_mode_set",
+            // ★ THE TWO THAT ACT ON AN EMPTY CALL, named so a future edit to
+            // the catalog cannot quietly re-admit them.
+            "stale_scan",
         ] {
             assert!(
                 !LEAVES.contains(&verb),

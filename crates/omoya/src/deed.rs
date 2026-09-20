@@ -567,16 +567,25 @@ impl crate::state::Omoya {
                 }
             }
             Deed::Close => {
-                self.close_focused();
-                DeedOutcome::Performed
+                if self.close_focused() {
+                    DeedOutcome::Performed
+                } else {
+                    DeedOutcome::Refused("no focused window to close")
+                }
             }
             Deed::SpawnTerminal => {
-                self.spawn_terminal();
-                DeedOutcome::Performed
+                if self.spawn_terminal() {
+                    DeedOutcome::Performed
+                } else {
+                    DeedOutcome::Refused("this seat has no terminal command configured")
+                }
             }
             Deed::SpawnLauncher => {
-                self.spawn_launcher();
-                DeedOutcome::Performed
+                if self.spawn_launcher() {
+                    DeedOutcome::Performed
+                } else {
+                    DeedOutcome::Refused("this seat has no launcher command configured")
+                }
             }
             // ── ★ THE FOUR CONTROLS, AND WHY EACH REFUSES BY NAME ──────────
             //
@@ -903,7 +912,18 @@ impl crate::state::Omoya {
         }
     }
 
-    fn close_focused(&mut self) {
+    /// Ask the focused window to close. `false` when there was nothing to ask.
+    ///
+    /// ★ RETURNS A BOOL BECAUSE THE CALLER LIED WITHOUT ONE. This returned
+    /// `()` and bailed on two paths — no focused surface, and no Space element
+    /// carrying that id — while `Deed::Close` answered `Performed` regardless.
+    /// That contradicts the comment eleven lines below its own arm ("every arm
+    /// needs a focused window and says so when there is none, rather than
+    /// returning `Performed` for work it did not do") and it feeds the wrong
+    /// counter: on an empty seat, Logo+Q bumped `chord_deeds` and left
+    /// `deeds_refused` still, which is the exact pair an agent reads to decide
+    /// whether the keymap is doing anything.
+    fn close_focused(&mut self) -> bool {
         // `send_close` is a REQUEST, not a kill: the client may refuse, or
         // put up a "save your work?" dialog. Killing it here would be the
         // compositor overriding a decision that belongs to the application,
@@ -913,7 +933,7 @@ impl crate::state::Omoya {
         // close was inert in exactly the mode plo runs. See
         // `focused_surface_id`.
         let Some(id) = self.focused_surface_id() else {
-            return;
+            return false;
         };
         use smithay::reexports::wayland_server::Resource as _;
         let target = self
@@ -926,24 +946,28 @@ impl crate::state::Omoya {
             .cloned();
         if let Some(t) = target.as_ref().and_then(smithay::desktop::Window::toplevel) {
             t.send_close();
+            return true;
         }
+        // Focus names a window the Space does not hold. A real state on a seat
+        // mid-teardown, and not one to report as a close.
+        false
     }
 
-    fn spawn_terminal(&mut self) {
+    fn spawn_terminal(&mut self) -> bool {
         self.spawn_configured(
             self.session_command.clone(),
             "terminal",
             "Logo+Return pressed but this seat has no terminal command",
-        );
+        )
     }
 
-    fn spawn_launcher(&mut self) {
+    fn spawn_launcher(&mut self) -> bool {
         self.spawn_configured(
             self.launcher_command.clone(),
             "launcher",
             "Ctrl+Space pressed but this seat has no launcher command \
              (start omoya with --launcher <cmd>)",
-        );
+        )
     }
 
     /// Spawn one of the seat's own configured commands into its own display.
@@ -958,18 +982,31 @@ impl crate::state::Omoya {
     /// Takes the resolved command rather than reaching for a field, so the
     /// only thing that decides WHICH command runs is the caller's arm in
     /// `perform` — there is no place for a lookup to pick the wrong one.
-    fn spawn_configured(&self, cmd: Option<Vec<String>>, what: &'static str, absent: &str) {
+    /// Spawn `cmd` into the seat. `false` when the seat has no such command.
+    ///
+    /// ★ ALSO RETURNS A BOOL, AND FOR THE SAME REASON. "Nothing to spawn is a
+    /// real state" — and the caller was never told, so `omoya_do spawn-launcher`
+    /// on a seat started without `--launcher` answered `queued` and bumped
+    /// `deeds_performed`. A `tracing::warn!` in the journal is not an answer to
+    /// the caller who asked.
+    fn spawn_configured(&self, cmd: Option<Vec<String>>, what: &'static str, absent: &str) -> bool {
         let Some(cmd) = cmd else {
             // Nothing to spawn is a real state, not an error: omoya can be
             // run with no `-- <cmd>` at all. Logged rather than silent,
             // because a chord that does nothing is otherwise indistinguishable
             // from a chord that is not bound.
             tracing::warn!("{absent}");
-            return;
+            return false;
         };
         // ★ ONE spawn path, so the "no zombie can form" guarantee installed at
         // startup covers everything this seat starts. See `crate::spawn`.
         crate::spawn::into_seat(&cmd, &self.socket_name, what);
+        // Known limit, stated rather than papered over: `into_seat` returns
+        // `()` and swallows an empty argv and a `spawn()` error (ENOENT on a
+        // mistyped command). So `true` means "a command was configured and
+        // handed to the spawner", not "a process exists". Threading that
+        // answer back is a separate change to `spawn`.
+        true
     }
 }
 

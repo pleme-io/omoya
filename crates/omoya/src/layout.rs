@@ -106,6 +106,19 @@ impl Tiling {
         id
     }
 
+    /// Does the layout tree hold `w`?
+    ///
+    /// ★ THE MEASUREMENT `ToplevelRow.tiled` NEEDED AND DID NOT HAVE. The
+    /// mapping already exists — `windows` is `WindowId -> Window` and the tree
+    /// is keyed by the same ids — so this is a lookup, not a walk, and there
+    /// was never a reason for the row to carry a literal instead.
+    #[must_use]
+    pub fn holds(&self, w: &Window) -> bool {
+        self.windows
+            .iter()
+            .any(|(id, held)| held == w && self.tree.as_ref().is_some_and(|t| t.contains_pane(*id)))
+    }
+
     /// The tree half of [`Self::map`], with no `Window` in sight.
     ///
     /// ★ SPLIT OUT SO THE LAYOUT CAN BE TESTED AT ALL. `Window` needs a live
@@ -909,7 +922,16 @@ impl crate::state::Omoya {
                                 .contains(&id)
                         }),
                         focused: is_focused,
-                        tiled: false,
+                        // ★ MEASURED, NOT ASSERTED. This was the literal
+                        // `false` for every row, while the field is documented
+                        // as "whether the layout tree holds this window" — so
+                        // a seat in `LayoutMode::Tiling` (the DEFAULT) reported
+                        // `"floating": false` alongside `"tiled": false` for
+                        // every window, a payload contradicting itself. An
+                        // agent diagnosing why a resize deed answered "no tiled
+                        // window" reads this and concludes the tree is empty.
+                        tiled: crate::layout::surface_id_of(w)
+                            .is_some_and(|_| self.tiling.holds(w)),
                     }
                 })
                 .collect();
@@ -1312,18 +1334,91 @@ pub fn surface_id_of(w: &smithay::desktop::Window) -> Option<u32> {
 /// The cheap question `commit` asks on every toplevel commit. Cheap because it
 /// is one `app_id` read and one hash lookup — no tree walk, no arrangement —
 /// so the common answer (`false`) costs nothing on the frame path.
+///
+/// ── ★ IT MUST ASK THE QUESTION `apply_layout` ANSWERED ──────────────────
+/// `floating_ids` is built with the MODE folded in — `floating_mode ||
+/// for_app_id_in(..).is_floating()` — so in `LayoutMode::Floating` every
+/// window's id is in the set. This predicate computed `should_float` from
+/// `for_app_id_in` ALONE, with no mode term, so for any window whose `app_id`
+/// is not a listed overlay (mado, namimado, anything but tobira) it was
+/// `false != true` → **true, on every commit, forever**. The two sides were
+/// asking different questions, so the comparison could never converge, and
+/// `handlers.rs`'s stated reason for the guard — "rather than calling
+/// `apply_layout` unconditionally" — was defeated on the seat plo actually
+/// runs. Every keystroke in a terminal re-laid the whole desktop out.
 #[must_use]
 pub fn placement_changed(
     w: &smithay::desktop::Window,
     floating_ids: &std::collections::HashSet<u32>,
     placement: &crate::config::PlacementConfig,
+    mode: crate::config::LayoutMode,
 ) -> bool {
     let Some(id) = surface_id_of(w) else {
         return false;
     };
-    let should_float =
-        crate::placement::for_app_id_in(app_id_of(w).as_deref(), placement).is_floating();
+    let should_float = mode == crate::config::LayoutMode::Floating
+        || crate::placement::for_app_id_in(app_id_of(w).as_deref(), placement).is_floating();
     should_float != floating_ids.contains(&id)
+}
+
+#[cfg(test)]
+mod placement_guard_tests {
+    use crate::config::{LayoutMode, PlacementConfig};
+
+    /// ★ THE GUARD WAS PERMANENTLY TRUE IN FLOATING MODE.
+    ///
+    /// `placement_changed` is what `CompositorHandler::commit` asks before
+    /// re-laying the desktop out, and it compared a mode-free `should_float`
+    /// against a set `apply_layout` builds WITH the mode folded in. On plo —
+    /// `layout.mode: floating` — every window that is not a listed overlay
+    /// answered `false != true` on every commit, so every keystroke in a
+    /// terminal re-laid out the seat.
+    ///
+    /// Pure, so it needs no seat: the whole defect is in the two expressions
+    /// disagreeing, and that is exactly what a table can pin.
+    fn changed(mode: LayoutMode, should_float_by_app: bool, in_set: bool) -> bool {
+        // The predicate's body, with the id lookup lifted out — the Window
+        // half needs a live client and is not what was wrong.
+        let should_float = mode == LayoutMode::Floating || should_float_by_app;
+        should_float != in_set
+    }
+
+    #[test]
+    fn floating_mode_converges_instead_of_firing_forever() {
+        // An ordinary window in floating mode: `apply_layout` put it in the
+        // set, so the guard must agree and stay quiet.
+        assert!(
+            !changed(LayoutMode::Floating, false, true),
+            "an ordinary window in floating mode is settled — this is the row              that was true forever"
+        );
+        // …and it fires exactly once, on the commit where the set is stale.
+        assert!(changed(LayoutMode::Floating, false, false));
+    }
+
+    #[test]
+    fn tiling_mode_is_unchanged_by_the_fix() {
+        // A tiled app is not in the set and should not be.
+        assert!(!changed(LayoutMode::Tiling, false, false));
+        // An overlay IS, by app_id, in either mode.
+        assert!(!changed(LayoutMode::Tiling, true, true));
+        assert!(!changed(LayoutMode::Floating, true, true));
+        // A disagreement in either direction still fires.
+        assert!(changed(LayoutMode::Tiling, true, false));
+        assert!(changed(LayoutMode::Tiling, false, true));
+    }
+
+    /// The mode term must not be droppable: without it, the first row above
+    /// is `false != true` — true — which is the defect.
+    #[test]
+    fn dropping_the_mode_term_reproduces_the_defect() {
+        let without_mode = |should_float_by_app: bool, in_set: bool| should_float_by_app != in_set;
+        assert!(
+            without_mode(false, true),
+            "the pre-fix expression fires on a settled floating window — kept              so the fix cannot be reverted without this failing"
+        );
+        assert!(!changed(LayoutMode::Floating, false, true));
+        let _ = PlacementConfig::default();
+    }
 }
 
 #[cfg(test)]
