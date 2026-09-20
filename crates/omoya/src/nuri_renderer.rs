@@ -300,36 +300,52 @@ pub struct NuriFramebuffer<'a> {
     _mapping: smithay::backend::allocator::dmabuf::DmabufMapping,
 }
 
-/// What `render_output` was able to say about what changed.
+/// What `render_output` said about what changed.
 ///
-/// ── ★ WHY THIS IS A TYPE AND NOT `&[Rectangle]` (2026-09-19) ─────────────
-/// smithay hands back `Option<&Vec<Rectangle>>`, and the call site flattened
-/// it with `.unwrap_or(&[])`. That collapses TWO DIFFERENT OBSERVATIONS into
-/// one value:
+/// ── ★ THIS TYPE WAS INTRODUCED INVERTED, AND THE FIX IS THE CORRECTION ──
+/// It landed on 2026-09-20 documenting smithay's `Option<&Vec<Rectangle>>` as
 ///
-///   `None`     — no usable history for this buffer. NOTHING is known.
-///   `Some([])` — full history, and nothing changed.
+///     `None`     — no usable history. NOTHING is known.
+///     `Some([])` — full history, and nothing changed.
 ///
-/// They call for opposite work (copy everything / copy nothing) and they
-/// arrived as the same empty slice, so the flush answered the conservative
-/// one for both. The conflation is invisible: the screen is always correct,
-/// and an idle seat simply pays 8.3 MB into write-combining memory per frame
-/// for a picture that did not change — including under `FlushPolicy`
-/// `Baselined`, whose entire promise is that it does not.
+/// Both halves are wrong, and the vendored source settles it. `render_output`
+/// returns `RenderOutputResult::skipped(states)` — whose `damage` is `None` —
+/// from exactly ONE place: `if self.damage.is_empty() { trace!("no damage,
+/// skipping rendering"); return ... }` (smithay-0.7.0
+/// backend/renderer/damage/mod.rs:354-357, with `skipped` at :222-230 and no
+/// other caller). Its only other exit is `damage: Some(&self.damage)` after a
+/// successful render, where that vector is non-empty by the same early
+/// return. So:
 ///
-/// This is the ★★ state-resolution rule applied to one value: name the
-/// resolution you have, never let an absent answer render as an empty one.
+///   * `None` means NOTHING CHANGED — not "unknown";
+///   * `Some(&[])` never occurs, so the branch written to exploit it was dead.
+///
+/// The consequence was the exact cost the type was added to remove: an idle
+/// frame took the `Unknown` arm and copied the whole 8.3 MB shadow into
+/// write-combining memory. Worse than merely wasteful — `drm.rs` sets
+/// `presented = drawn.is_some()` and flips only when `presented`, so those
+/// bytes went into a back buffer that was never shown. The comment beside
+/// that flip says "NOTHING CHANGED ⇒ NO FLIP": the codebase already had the
+/// semantics right forty lines from a type whose doc had them backwards.
+///
+/// ★ AND THE SKIP IS UNCONDITIONAL, not gated on `FlushPolicy`. The first
+/// version gated it on `Baselined` out of respect for the 2026-08-30
+/// stale-pixel incident, and that caution does not apply here: that incident
+/// was a PARTIAL copy against an under-reporting damage set, while this frame
+/// copies nothing AND is never flipped, so the image on screen is untouched
+/// by construction. A buffer skipped now is fully rewritten by the next frame
+/// that does change, because `Full` always copies everything.
 #[derive(Debug, Clone, Copy)]
 pub enum Damage<'a> {
-    /// No usable history — the only honest answer is to copy everything.
-    Unknown,
-    /// Exactly these regions changed. ★ EMPTY MEANS NOTHING DID.
+    /// `render_output` rendered nothing, because nothing changed.
+    Nothing,
+    /// Exactly these regions changed. Non-empty, by smithay's construction.
     Exactly(&'a [Rectangle<i32, Physical>]),
 }
 
 impl<'a> From<Option<&'a [Rectangle<i32, Physical>]>> for Damage<'a> {
     fn from(d: Option<&'a [Rectangle<i32, Physical>]>) -> Self {
-        d.map_or(Self::Unknown, Self::Exactly)
+        d.map_or(Self::Nothing, Self::Exactly)
     }
 }
 
@@ -402,40 +418,19 @@ impl NuriFramebuffer<'_> {
         if len == 0 {
             return 0;
         }
-        // ★ "COULD NOT SAY" AND "NOTHING CHANGED" ARE DIFFERENT ANSWERS, and
-        // they used to arrive here as the same empty slice — see [`Damage`].
-        // Unknown is the only one that forces a full copy.
-        let damage = match damage {
-            Damage::Unknown => {
-                self.data[..len].copy_from_slice(&self.shadow[..len]);
-                return len as u64;
-            }
-            Damage::Exactly(d) => d,
+        // ★ NOTHING CHANGED ⇒ NOTHING TO WRITE. See [`Damage`]: this is
+        // smithay's `skipped` path, the caller does not flip on it, and the
+        // image on screen is therefore untouched whatever this buffer holds.
+        let Damage::Exactly(damage) = damage else {
+            return 0;
         };
-        // ★ NOTHING CHANGED — SKIP, BUT ONLY WHERE THE POLICY ALREADY TRUSTS
-        // THE DAMAGE SET.
-        //
-        // Under `Baselined` the operator has opted into believing what
-        // `render_output` reports, and an empty report is that belief's
-        // cheapest case: the slot's generation says this buffer already holds
-        // these pixels, so there is nothing to write. Skipping it is what
-        // `Baselined` PROMISES and, before this, never delivered for an idle
-        // frame — the empty-slice branch returned above it.
-        //
-        // Under `Full` the empty set is NOT trusted, and deliberately so:
-        // "nothing changed" is precisely the claim that was found false on
-        // 2026-08-30, when the scanout held stale content the shadow did not.
-        // `Full` means copy every frame; an idle frame is still a frame.
-        if damage.is_empty() {
-            if matches!(
-                self.flush_plan,
-                Some((crate::config::FlushPolicy::Baselined, _))
-            ) {
-                return 0;
-            }
-            self.data[..len].copy_from_slice(&self.shadow[..len]);
-            return len as u64;
-        }
+        // Non-empty by smithay's construction, and an empty set would be a
+        // whole-screen copy rather than a skip — the conservative direction —
+        // so the invariant is documented here rather than asserted.
+        debug_assert!(
+            !damage.is_empty(),
+            "render_output returns `skipped` for an empty damage set, never `Some([])`"
+        );
 
         // ── ★ THE PARTIAL COPY IS OFF BY DEFAULT (plo, 2026-08-30) ──────────
         //
@@ -1797,28 +1792,36 @@ mod tests {
     /// The property is what earns the optimization; assert it rather than
     /// trusting the geometry.
     #[test]
+    /// ★ `None` IS "NOTHING CHANGED", AND THIS TEST ASSERTED THE OPPOSITE.
+    ///
+    /// The first version of it read `matches!(Damage::from(none),
+    /// Damage::Unknown)` — a test pinning an inverted reading of smithay's
+    /// API. The vendored source is unambiguous:
+    /// `RenderOutputResult::skipped`, whose `damage` is `None`, is returned
+    /// from exactly one place, `if self.damage.is_empty()`, and the only
+    /// other exit carries `Some(&self.damage)` with that vector non-empty.
+    ///
+    /// Kept pointing at the corrected reading, with the old one named, so the
+    /// next person who reads `Option<&Vec<Rectangle>>` and guesses does not
+    /// have to guess.
     #[test]
-    fn no_history_and_nothing_changed_are_not_the_same_answer() {
-        // ★ THE REGRESSION, AT ITS ROOT. The call site wrote
-        // `drawn.as_deref().unwrap_or(&[])`, which sends BOTH of these into
-        // the flush as an empty slice — so "nothing changed" was answered
-        // with a full 8.3 MB copy, including under `Baselined`, whose whole
-        // promise is that it is not. The distinction has to survive the
-        // conversion or the flush cannot act on it.
+    fn an_absent_damage_set_means_nothing_changed() {
         let none: Option<&[Rectangle<i32, Physical>]> = None;
         assert!(
-            matches!(Damage::from(none), Damage::Unknown),
-            "an absent damage set must stay Unknown"
-        );
-
-        let empty: &[Rectangle<i32, Physical>] = &[];
-        assert!(
-            matches!(Damage::from(Some(empty)), Damage::Exactly([])),
-            "a present-but-empty damage set means NOTHING changed"
+            matches!(Damage::from(none), Damage::Nothing),
+            "smithay returns `damage: None` from its `self.damage.is_empty()` \
+             early return — it is the skipped frame, not an unknown one"
         );
 
         let one = [Rectangle::<i32, Physical>::from_size((4, 4).into())];
         assert!(matches!(Damage::from(Some(&one[..])), Damage::Exactly(d) if d.len() == 1));
+
+        // `Some(&[])` is unreachable from `render_output`, and the conversion
+        // is total anyway: it maps to `Exactly([])`, which the flush answers
+        // with a whole-screen copy rather than a skip. The conservative
+        // direction, for a shape smithay does not produce.
+        let empty: &[Rectangle<i32, Physical>] = &[];
+        assert!(matches!(Damage::from(Some(empty)), Damage::Exactly([])));
     }
 
     fn the_flush_region_only_ever_grows_with_its_damage() {
