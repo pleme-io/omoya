@@ -720,13 +720,24 @@ impl Omoya {
                 let scroll = self.config.ukeire.scroll;
                 let mul = scroll.v120_multiplier();
                 let sign = scroll.direction.sign();
+                // ★ AND A WHEEL'S `amount()` TAKES THE FACTOR TOO (2026-09-19).
+                // The asymmetry above is right for a TRACKPAD and wrong for the
+                // only device on this seat: evdev's `amount()` returns `Some`
+                // for a wheel as well — the raw detent count, 1.0 per click —
+                // so the live path was always `a * sign` and
+                // `ukeire.scroll.factor` multiplied nothing at all. The knob
+                // was inert on the only shipping backend. A wheel is discrete,
+                // so lines-per-detent applies to it whichever accessor carries
+                // the value; `Finger`/`Continuous` sources keep direction only.
+                let wheel = event.source() == AxisSource::Wheel;
+                let lines = if wheel { scroll.factor.get() } else { 1.0 };
                 let horizontal = event.amount(Axis::Horizontal).map_or_else(
                     || event.amount_v120(Axis::Horizontal).unwrap_or(0.0) * mul,
-                    |a| a * sign,
+                    |a| a * sign * lines,
                 );
                 let vertical = event.amount(Axis::Vertical).map_or_else(
                     || event.amount_v120(Axis::Vertical).unwrap_or(0.0) * mul,
-                    |a| a * sign,
+                    |a| a * sign * lines,
                 );
 
                 let mut frame = AxisFrame::new(event.time_msec()).source(event.source());
@@ -737,7 +748,12 @@ impl Omoya {
                     );
                     frame = frame.value(Axis::Horizontal, horizontal);
                     if let Some(v120) = event.amount_v120(Axis::Horizontal) {
-                        frame = frame.v120(Axis::Horizontal, v120 as i32);
+                        // ★ THE SAME SIGN AS THE VALUE ABOVE. This took the
+                        // device's v120 verbatim while `value` was multiplied
+                        // by `direction.sign()`, so with natural scrolling ONE
+                        // axis frame carried two opposite directions and a
+                        // client reading v120 scrolled the wrong way.
+                        frame = frame.v120(Axis::Horizontal, (v120 * sign) as i32);
                     }
                 }
                 if vertical != 0.0 {
@@ -747,7 +763,12 @@ impl Omoya {
                     );
                     frame = frame.value(Axis::Vertical, vertical);
                     if let Some(v120) = event.amount_v120(Axis::Vertical) {
-                        frame = frame.v120(Axis::Vertical, v120 as i32);
+                        // ★ THE SAME SIGN AS THE VALUE ABOVE. This took the
+                        // device's v120 verbatim while `value` was multiplied
+                        // by `direction.sign()`, so with natural scrolling ONE
+                        // axis frame carried two opposite directions and a
+                        // client reading v120 scrolled the wrong way.
+                        frame = frame.v120(Axis::Vertical, (v120 * sign) as i32);
                     }
                 }
                 if event.source() == AxisSource::Finger {
