@@ -155,6 +155,7 @@ impl CompositorHandler for Omoya {
         }
 
         handle_commit(&mut self.popups, &self.space, surface);
+        self.commit_layer_surface(surface);
     }
 
     /// ★ RELEASE THE SHADOW. `truedamage` keeps a full copy of each surface's
@@ -568,17 +569,20 @@ impl smithay::wayland::shell::wlr_layer::WlrLayerShellHandler for Omoya {
         // space instead of being drawn over the windows.
         self.apply_layout();
 
-        // ★ AND HAND OVER THE KEYBOARD IF IT ASKED FOR IT. A launcher or lock
-        // screen requests `keyboard_interactivity = Exclusive`; until this
-        // call existed the field was never read anywhere in the tree, so such
-        // a surface appeared, was visible, and accepted no keystrokes — which
-        // from outside is indistinguishable from a hung client, and on a lock
-        // screen is the difference between locked and merely opaque.
+        // ★ THE KEYBOARD QUESTION IS ASKED AT COMMIT, NOT HERE.
         //
-        // No-op for a bar or wallpaper, which ask for `None`.
-        if self.focus_exclusive_layer() {
-            tracing::info!("a layer surface took the keyboard (exclusive)");
-        }
+        // It used to be asked on this line, and could never say yes.
+        // `focus_exclusive_layer` reads `cached_state().keyboard_interactivity`,
+        // i.e. the CURRENT (committed) state — and smithay dispatches this
+        // handler synchronously from the `get_layer_surface` request itself,
+        // before the client has sent `set_keyboard_interactivity` and before
+        // any commit. So `current()` was always `None` and a launcher or lock
+        // screen that asked for `Exclusive` appeared, was visible, and
+        // accepted no keystrokes: indistinguishable from a hung client, and on
+        // a lock screen the difference between locked and merely opaque.
+        //
+        // `commit_layer_surface` asks after each commit, which is the first
+        // moment the answer exists.
     }
 
     fn layer_destroyed(&mut self, surface: smithay::wayland::shell::wlr_layer::LayerSurface) {
@@ -640,6 +644,52 @@ pub fn handle_commit(popups: &mut PopupManager, space: &Space<Window>, surface: 
 }
 
 impl Omoya {
+    /// Configure a layer surface, and hand it the keyboard if it asked.
+    ///
+    /// ── ★ NOTHING EVER SENT A LAYER SURFACE ITS INITIAL CONFIGURE ────────
+    /// `handle_commit` had exactly two arms, xdg toplevel and xdg popup, and
+    /// every `send_configure` in the crate was on one of those two types.
+    /// smithay will not do it for you — `LayerMap::arrange` refuses on
+    /// purpose, because the spec makes the compositor responsible for the
+    /// first one. So `zwlr_layer_shell_v1` was ADVERTISED and structurally
+    /// unusable: any stock client (swaybg, waybar, fuzzel) called
+    /// `get_layer_surface`, committed with no buffer, and blocked forever in
+    /// `wl_display_roundtrip` waiting for a configure that was never coming.
+    fn commit_layer_surface(&mut self, surface: &WlSurface) {
+        let Some(output) = self.space.outputs().next().cloned() else {
+            return;
+        };
+        let held = {
+            let map = smithay::desktop::layer_map_for_output(&output);
+            map.layers().find(|l| l.wl_surface() == surface).cloned()
+        };
+        let Some(layer) = held else {
+            return;
+        };
+        let configured = with_states(surface, |states| {
+            states
+                .data_map
+                .get::<smithay::wayland::shell::wlr_layer::LayerSurfaceData>()
+                .is_some_and(|d| {
+                    d.lock()
+                        .expect("layer surface data mutex poisoned")
+                        .initial_configure_sent
+                })
+        });
+        if !configured {
+            // Arrange FIRST: the configure carries a size, and an unarranged
+            // layer has none — a client told `0x0` either picks its own size
+            // (a bar that does not span the screen) or refuses to map.
+            smithay::desktop::layer_map_for_output(&output).arrange();
+            layer.layer_surface().send_configure();
+        }
+        // Asked on every commit, not only the first: a client may change its
+        // interactivity later, and this is one `cached_state()` read.
+        if self.focus_exclusive_layer() {
+            tracing::info!("a layer surface took the keyboard (exclusive)");
+        }
+    }
+
     fn unconstrain_popup(&self, popup: &PopupSurface) {
         let Ok(root) = find_popup_root_surface(&PopupKind::Xdg(popup.clone())) else {
             return;

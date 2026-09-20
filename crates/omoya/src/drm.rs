@@ -620,9 +620,25 @@ where
     // origin the arrow sits in the corner underneath the bar, which is
     // exactly where an operator does not look — and "I cannot find the
     // mouse" is indistinguishable from "there is no mouse".
+    //
+    // ★ THROUGH `pointer_motion`, NOT BY ASSIGNMENT. Writing the field moved
+    // OMOYA's idea of the pointer and nothing else: smithay's own
+    // `PointerHandle` keeps a separate location, starts at `(0,0)`, and is
+    // written only by `pointer.motion(..)`. The render path reads omoya's
+    // field (the drawn arrow, the `pointer_pos` leaf) and every CLICK path
+    // reads smithay's (`current_location()` for the titlebar scan,
+    // `border_under`, `element_under`) — so on a fresh seat the arrow was
+    // drawn and REPORTED at the centre while a press before the first motion
+    // hit-tested at the top-left corner, and reached no client at all because
+    // no pointer focus had ever been set.
+    //
+    // `pointer_motion` is the one path that keeps the two in step, and its
+    // own doc says so: "extracted so the evdev backend and the kanshou write
+    // surface move the pointer by the same code". This site was the third
+    // caller and did not use it.
     if data.state.pointer_location == (0.0, 0.0).into() {
-        data.state.pointer_location =
-            (f64::from(mode.size.w) / 2.0, f64::from(mode.size.h) / 2.0).into();
+        let centre = (f64::from(mode.size.w) / 2.0, f64::from(mode.size.h) / 2.0);
+        data.state.pointer_motion(centre.0, centre.1, 0);
     }
 
     let mut blit_counters: Option<(
@@ -1287,23 +1303,25 @@ where
                 // success. The decision itself lives in `bar::clock_for` so
                 // it has a test; this loop only supplies the observations.
                 let clock = crate::bar::clock_for(data.state.config.bar.clock, hhmm, resolved);
-                // One cell per parcel, the focused one marked. `focus_rect`
-                // is the layout's own answer, so the bar cannot disagree with
-                // the ring on screen about which window has focus.
-                let focused = *introspect
-                    .focus_rect
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
+                // One cell per parcel, the focused one marked.
+                //
+                // ★ BY ID, NOT BY CORNER. This compared each window's
+                // `element_geometry` origin against `focus_rect`'s, which is
+                // not an identity: two maximised windows share one exactly and
+                // every floating window gets the same size, so the strip could
+                // mark the wrong cell — or two. `focused_id` is the layout's
+                // own answer to the question actually being asked.
+                let focused_id = introspect
+                    .focused_id
+                    .load(std::sync::atomic::Ordering::Relaxed);
                 let parcels: Vec<bool> = data
                     .state
                     .space
                     .elements()
                     .map(|w| {
-                        data.state.space.element_geometry(w).is_some_and(|g| {
-                            focused.is_some_and(|(x, y, _, _)| {
-                                g.loc.x == x && g.loc.y == y
-                            })
-                        })
+                        focused_id != 0
+                            && crate::layout::surface_id_of(w)
+                                .is_some_and(|id| u64::from(id) == focused_id)
                     })
                     .collect();
                 // ── ★ THE INVISIBLE STATE, READ FROM THE SAME PLACE THE
@@ -1410,10 +1428,9 @@ where
             if data.state.config.layout.mode == crate::config::LayoutMode::Floating {
                 use smithay::backend::renderer::element::Kind;
                 use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
-                let focused = *introspect
-                    .focus_rect
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
+                let chrome_focused_id = introspect
+                    .focused_id
+                    .load(std::sync::atomic::Ordering::Relaxed);
                 let windows: Vec<_> = data
                     .state
                     .space
@@ -1439,8 +1456,11 @@ where
                         continue;
                     };
                     let title = crate::layout::title_of(&w).unwrap_or_default();
-                    let is_focused = focused
-                        .is_some_and(|(fx, fy, _, _)| fx == geo.loc.x && fy == geo.loc.y);
+                    // ★ BY ID. Same defect as the bar's parcel strip: an
+                    // origin comparison made two windows at one position
+                    // indistinguishable, so both drew a focused titlebar.
+                    let is_focused = chrome_focused_id != 0
+                        && u64::from(id) == chrome_focused_id;
                     let bar = crate::chrome::bar_rect(decorated, geo);
 
                     // Which button, if any, the pointer is over right now.

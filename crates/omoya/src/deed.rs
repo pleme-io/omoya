@@ -799,8 +799,13 @@ impl crate::state::Omoya {
         Some(crate::winid::of(&surface))
     }
 
-    /// The focused WINDOW, matched by surface — never by `winid`, which is
-    /// per-client and collides (every mado is 16).
+    /// The focused WINDOW, matched by surface.
+    ///
+    /// (This said "never by `winid`, which is per-client and collides (every
+    /// mado is 16)". True of `protocol_id`, and not of `winid::of`, which
+    /// replaced it with a minted counter — the fourth copy of that stale
+    /// reason, corrected 2026-09-20. Matching by surface is still right; it
+    /// is simply not a workaround for anything.)
     #[must_use]
     pub fn focused_window(&self) -> Option<smithay::desktop::Window> {
         let surface = self.seat.get_keyboard()?.current_focus()?;

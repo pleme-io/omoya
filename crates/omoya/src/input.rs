@@ -771,12 +771,19 @@ impl Omoya {
                     );
                     frame = frame.value(Axis::Horizontal, horizontal);
                     if let Some(v120) = event.amount_v120(Axis::Horizontal) {
-                        // ★ THE SAME SIGN AS THE VALUE ABOVE. This took the
-                        // device's v120 verbatim while `value` was multiplied
-                        // by `direction.sign()`, so with natural scrolling ONE
-                        // axis frame carried two opposite directions and a
-                        // client reading v120 scrolled the wrong way.
-                        frame = frame.v120(Axis::Horizontal, (v120 * sign) as i32);
+                        // ★ THE SAME SIGN *AND THE SAME FACTOR* AS THE VALUE
+                        // ABOVE. The sign half was fixed on 2026-09-19 and the
+                        // factor half was not, which left `ukeire.scroll.factor`
+                        // still inert for every client that reads the discrete
+                        // channel — and that is every client: winit "prefer[s]
+                        // the discrete values if they are present" and DISCARDS
+                        // the absolute delta, and GTK4/Qt6/Chromium all bind
+                        // wl_pointer v8 and read `axis_value120`. omoya
+                        // advertises wl_seat v9, so both channels are live, and
+                        // one detent at the default factor emitted `value = 3.0`
+                        // beside `v120 = 120`: two contradictory magnitudes in
+                        // ONE frame.
+                        frame = frame.v120(Axis::Horizontal, (v120 * sign * lines) as i32);
                     }
                 }
                 if vertical != 0.0 {
@@ -786,12 +793,9 @@ impl Omoya {
                     );
                     frame = frame.value(Axis::Vertical, vertical);
                     if let Some(v120) = event.amount_v120(Axis::Vertical) {
-                        // ★ THE SAME SIGN AS THE VALUE ABOVE. This took the
-                        // device's v120 verbatim while `value` was multiplied
-                        // by `direction.sign()`, so with natural scrolling ONE
-                        // axis frame carried two opposite directions and a
-                        // client reading v120 scrolled the wrong way.
-                        frame = frame.v120(Axis::Vertical, (v120 * sign) as i32);
+                        // The same sign and the same factor — see the
+                        // horizontal arm above for why both halves matter.
+                        frame = frame.v120(Axis::Vertical, (v120 * sign * lines) as i32);
                     }
                 }
                 if event.source() == AxisSource::Finger {

@@ -255,6 +255,24 @@ pub struct OmoyaIntrospect {
     /// Read by the render loop to draw the focus border, and queryable so an
     /// agent can ask "where is focus" without inferring it from pixels.
     pub focus_rect: Mutex<Option<(i32, i32, i32, i32)>>,
+    /// The `winid` of the focused window, or 0 for none.
+    ///
+    /// ── ★ PUBLISHED BECAUSE THREE RENDERERS WERE RE-DERIVING IT FROM THE
+    /// RECTANGLE ABOVE (2026-09-20) ──────────────────────────────────────
+    /// `focus_rect` answers WHERE the focus ring goes. Three separate sites
+    /// then asked WHICH WINDOW has focus by scanning `space.elements()` for
+    /// one whose geometry equals it: the `toplevels` row builder, the bar's
+    /// parcel strip, and the chrome cache's `is_focused`. A rectangle is not
+    /// an identity — two maximised windows share one exactly, and every
+    /// floating window gets the same `float_width`/`float_height` — so the
+    /// answer went to whichever matched first, which is the BACKMOST
+    /// (`space.elements()` yields back-to-front). The `toplevels` builder
+    /// additionally compared against the PREVIOUS pass's value, since the
+    /// current one is written eighty lines later.
+    ///
+    /// Focus is a fact the seat owns; `focused_surface_id()` is the one place
+    /// that knows it. This publishes that answer so no renderer has to guess.
+    pub focused_id: std::sync::atomic::AtomicU64,
     /// How many RENDER ELEMENTS the last frame actually had.
     ///
     /// ★ NOT THE SAME AS `windows`, AND THE GAP IS THE DIAGNOSIS. `windows`
@@ -836,6 +854,7 @@ pub const LEAVES: &[&str] = &[
     "chord_deeds",
     "chord_deeds_refused",
     "focus_rect",
+    "focused_id",
     "frame_us",
     "planes",
     "route_cpu_bytes",
@@ -1161,6 +1180,7 @@ impl Introspect for OmoyaIntrospect {
                         |(x, y, w, h)| format!("{x},{y} {w}x{h}")
                     )
             )),
+            "focused_id" => Ok(n(&self.focused_id)),
             "frame_us" => Ok(n(&self.frame_us)),
             "blit_fast" => Ok(n(&self.blit_fast)),
             "blit_slow" => Ok(n(&self.blit_slow)),

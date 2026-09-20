@@ -864,17 +864,18 @@ impl crate::state::Omoya {
                 .decoration_sent
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
-            // Resolved once: the id of whatever currently holds focus.
-            let focused_id = self
-                .space
-                .elements()
-                .find(|w| {
-                    self.space
-                        .element_geometry(w)
-                        .map(|g| (g.loc.x, g.loc.y, g.size.w, g.size.h))
-                        == *focused
-                })
-                .and_then(crate::layout::surface_id_of);
+            // ★ ASK THE SEAT. This scanned `space.elements()` for a window
+            // whose CURRENT geometry equals the PREVIOUS pass's `focus_rect`,
+            // which is wrong twice over: a rectangle is not an identity (two
+            // maximised windows share one exactly), and `find` takes the first
+            // match, which is the BACKMOST since `elements()` yields
+            // back-to-front. The row comparison below was already fixed to go
+            // by identity — and was handed an id produced by a rectangle
+            // match, so the defect simply moved up one line.
+            //
+            // `focused_surface_id` reads the keyboard's current focus, which
+            // is the fact itself rather than a projection of it.
+            let focused_id = self.focused_surface_id();
             let rows: Vec<crate::introspect::ToplevelRow> = seen
                 .iter()
                 .enumerate()
@@ -943,6 +944,14 @@ impl crate::state::Omoya {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner()) = rows;
         }
+
+        // WHICH window has focus, published beside WHERE it is. The renderers
+        // need both and only the rect was published, so each of them derived
+        // the identity by comparing rectangles — see `focused_id`'s doc.
+        self.introspect.focused_id.store(
+            u64::from(self.focused_surface_id().unwrap_or(0)),
+            std::sync::atomic::Ordering::Relaxed,
+        );
 
         // Where focus is, for the border the render loop draws and for anyone
         // who asks. Published from here because this is where geometry is
