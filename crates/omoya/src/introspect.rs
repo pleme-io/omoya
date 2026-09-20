@@ -97,6 +97,72 @@ pub struct CaptureRequest {
     pub hash_only: bool,
 }
 
+/// A capture request that has been TAKEN, and therefore OWES a result.
+///
+/// ── ★ WHY A DROP GUARD AND NOT A CODE PATH ──────────────────────────────
+/// Taking the request clears the slot, so from that instant the only record
+/// that a client is waiting is this value. In `drm.rs` the take happens
+/// before the damage age is chosen, and the readback happens ~340 lines
+/// later with the framebuffer bound — and between them sit three `?`
+/// operators (the dmabuf bind, the render, the damage submit), each of which
+/// returns from the whole frame.
+///
+/// Before this type, that path dropped the request on the floor: the request
+/// slot was empty, no result was ever written, and `omoya_capture` polled a
+/// `request_id` that nothing could ever answer. The client saw a HANG — the
+/// one outcome kotae has no word for, because it is the absence of an answer
+/// rather than any of the four.
+///
+/// So the answer is owed by `Drop`. Every exit from the frame publishes
+/// something: `?`, an early return, a panic during composition. A caller
+/// that simply forgets gets the abandoned verdict rather than silence, and
+/// "the request vanished" stops being constructible instead of being
+/// guarded at each of the three sites — which is the shape that rots, since
+/// the fourth `?` added later would not know it had joined a protocol.
+pub struct CaptureInFlight {
+    pub request: CaptureRequest,
+    owner: Arc<OmoyaIntrospect>,
+    answered: bool,
+}
+
+impl CaptureInFlight {
+    /// Publish the outcome for this request and consume the debt.
+    pub fn answer(mut self, outcome: String) {
+        self.publish(&outcome);
+        self.answered = true;
+    }
+
+    /// ★ STAMPED WITH THE REQUEST ID, in ONE place. A result without one is
+    /// anonymous, and a client that reconnects reads a predecessor's success
+    /// as its own — observed. The stamping used to live at the call site,
+    /// where the abandoned path could not reach it.
+    fn publish(&self, outcome: &str) {
+        *self
+            .owner
+            .capture_result
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(
+            serde_json::json!({
+                "request_id": self.request.id,
+                "outcome": outcome,
+            })
+            .to_string(),
+        );
+    }
+}
+
+impl Drop for CaptureInFlight {
+    fn drop(&mut self) {
+        if !self.answered {
+            // Named precisely: the frame did not get far enough to read the
+            // buffer back. That is a different fact from "the capture ran and
+            // failed", which `answer` reports with the renderer's own error,
+            // and a caller that cannot tell them apart retries the wrong one.
+            self.publish("error: the frame was abandoned before the capture ran");
+        }
+    }
+}
+
 /// One toplevel, with the protocol side and the pixel side in the same row.
 ///
 /// ★ `Option` is load-bearing on the P-side field: "the client was told
@@ -791,6 +857,24 @@ pub struct OmoyaIntrospect {
 }
 
 impl OmoyaIntrospect {
+    /// Take the pending capture request, as a debt that must be answered.
+    ///
+    /// The only way to get a [`CaptureRequest`] out of the slot — the field
+    /// is private to this module's take, so a caller cannot help itself to
+    /// the request and skip the obligation.
+    pub fn take_capture_request(self: &Arc<Self>) -> Option<CaptureInFlight> {
+        let request = self
+            .capture_request
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()?;
+        Some(CaptureInFlight {
+            request,
+            owner: Arc::clone(self),
+            answered: false,
+        })
+    }
+
     #[must_use]
     pub fn new() -> Arc<Self> {
         Arc::new(Self::default())
@@ -1916,6 +2000,84 @@ mod capture_identity_tests {
     /// gets whatever a PREVIOUS client's request left, and without an identity
     /// on the answer it cannot tell that from its own — a stale success read
     /// as fresh, which is the worst shape a diagnostic can take.
+    /// A frame that dies before the readback still ANSWERS.
+    ///
+    /// ★ The red run for the bug this type exists for: the three `?` in the
+    /// frame body between the take and the capture used to drop the request
+    /// silently, leaving `omoya_capture` polling a request id nothing could
+    /// ever resolve. Dropping the guard is exactly what those paths do.
+    #[test]
+    fn an_abandoned_frame_still_publishes_a_result_for_the_request() {
+        let i = OmoyaIntrospect::new();
+        *i.capture_request.lock().unwrap() = Some(CaptureRequest {
+            id: 77,
+            path: "/tmp/x.ppm".into(),
+            region: None,
+            hash_only: false,
+        });
+
+        // Take it and let it die the way an early `?` would.
+        drop(i.take_capture_request().expect("a request was pending"));
+
+        let got = i
+            .capture_result
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("an abandoned request must still produce a result — a \
+                     client polling this slot has no other way to learn the \
+                     frame gave up");
+        let v: serde_json::Value = serde_json::from_str(&got).unwrap();
+        assert_eq!(v["request_id"], 77, "the result must name ITS request");
+        let outcome = v["outcome"].as_str().unwrap();
+        assert!(
+            outcome.contains("abandoned"),
+            "the abandoned verdict must be distinguishable from a capture \
+             that ran and failed — a caller retries them differently: {outcome}"
+        );
+    }
+
+    /// The answered path stamps the same id, from the same place.
+    #[test]
+    fn an_answered_capture_publishes_its_outcome_under_its_own_id() {
+        let i = OmoyaIntrospect::new();
+        *i.capture_request.lock().unwrap() = Some(CaptureRequest {
+            id: 9,
+            path: "/tmp/y.ppm".into(),
+            region: Some((0, 0, 4, 4)),
+            hash_only: true,
+        });
+
+        let inflight = i.take_capture_request().unwrap();
+        assert_eq!(inflight.request.region, Some((0, 0, 4, 4)), "region lost");
+        inflight.answer("hash: abc123".into());
+
+        let v: serde_json::Value =
+            serde_json::from_str(&i.capture_result.lock().unwrap().clone().unwrap()).unwrap();
+        assert_eq!(v["request_id"], 9);
+        assert_eq!(v["outcome"], "hash: abc123");
+        assert!(
+            !v["outcome"].as_str().unwrap().contains("abandoned"),
+            "answering must SUPPRESS the drop verdict, or every success is \
+             immediately overwritten by a failure"
+        );
+    }
+
+    /// Taking from an empty slot writes nothing — the anti-vacuity half.
+    ///
+    /// Without this, a guard constructed unconditionally would publish an
+    /// "abandoned" result on every idle frame, and the slot a client reads
+    /// would be a stream of failures for requests nobody made.
+    #[test]
+    fn taking_no_request_publishes_no_result() {
+        let i = OmoyaIntrospect::new();
+        assert!(i.take_capture_request().is_none());
+        assert!(
+            i.capture_result.lock().unwrap().is_none(),
+            "an idle frame must not manufacture a verdict"
+        );
+    }
+
     #[test]
     fn every_request_gets_a_distinct_id() {
         let i = OmoyaIntrospect::default();

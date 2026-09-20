@@ -1747,11 +1747,16 @@ where
                 // `damage_output_internal` answers it by damaging the whole
                 // output. So the request is expressed in the vocabulary the
                 // tracker already has rather than by reaching past it.
-                let requested = introspect
-                    .capture_request
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .take();
+                // ★ TAKEN AS A DEBT, NOT AS AN OPTION. Between here and the
+                // readback ~340 lines below sit three `?` operators, each of
+                // which returns from the whole frame. A bare `Option` was
+                // simply dropped on those paths: the request slot was already
+                // cleared, so nothing retried and nothing answered, and
+                // `omoya_capture` polled a request id forever. `CaptureInFlight`
+                // publishes on Drop, so every exit from this frame — including
+                // one added later by someone who never read this comment —
+                // resolves the request.
+                let requested = introspect.take_capture_request();
                 let age = if requested.is_some() {
                     0
                 } else {
@@ -2087,7 +2092,8 @@ where
                     // Taking the request CLEARS it (above), so this is one-shot
                     // by construction: a capture every frame would fill the
                     // disk and change the timing it exists to observe.
-                    if let Some(req) = requested {
+                    if let Some(inflight) = requested {
+                        let req = &inflight.request;
                         let path = req.path.clone();
                         let size = (mode.size.w, mode.size.h);
                         let outcome =
@@ -2117,19 +2123,11 @@ where
                                     format!("error: {e}")
                                 }
                             };
-                        // ★ STAMPED WITH THE REQUEST ID. A result without one
-                        // is anonymous, and a client that reconnects reads a
-                        // predecessor's success as its own -- observed.
-                        *introspect
-                            .capture_result
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner()) = Some(
-                            serde_json::json!({
-                                "request_id": req.id,
-                                "outcome": outcome,
-                            })
-                            .to_string(),
-                        );
+                        // Stamping with the request id now lives in
+                        // `CaptureInFlight::publish`, so the abandoned path
+                        // gets it too — it could not reach a call site that
+                        // the `?` above had already jumped past.
+                        inflight.answer(outcome);
                     }
 
                     // Published so the cost of a frame is a number anyone
