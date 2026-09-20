@@ -540,7 +540,6 @@ mod tests {
         assert_eq!(changed_rows(&a, &a, 8, 99).rows(), None);
     }
 
-    #[test]
     /// ★ THE INVARIANT, AND THE BUG IT CLOSES.
     ///
     /// Two commits between two presents. The first changes row 1, the second

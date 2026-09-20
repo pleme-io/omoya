@@ -1791,7 +1791,14 @@ mod tests {
     /// damage set's SHAPE, so one dropped rect would become one stale band.
     /// The property is what earns the optimization; assert it rather than
     /// trusting the geometry.
-    #[test]
+    ///
+    /// (Its `#[test]` sat here, above a doc block belonging to the test
+    /// BELOW — litter from an insertion of mine earlier today. Rust tolerates
+    /// two `#[test]` on one item, so both tests ran throughout and nothing
+    /// was silently skipped; a hunt reported otherwise and `cargo test --
+    /// --list` refuted it. Tidied, and the refutation recorded, so the next
+    /// reader does not re-open it.)
+    ///
     /// ★ `None` IS "NOTHING CHANGED", AND THIS TEST ASSERTED THE OPPOSITE.
     ///
     /// The first version of it read `matches!(Damage::from(none),
