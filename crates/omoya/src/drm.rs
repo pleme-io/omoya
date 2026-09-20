@@ -1585,7 +1585,20 @@ where
                             .is_some_and(|g| g.loc.x == fx && g.loc.y == fy)
                     })
                     .map_or(crate::chrome::HEIGHT, |w| {
-                        if crate::role::policy_of(w, &data.state.config.placement).is_decorated() {
+                        // ★ AND THE MODE, which this asked and the three
+                        // sites it has to agree with all ask. Every `Managed`
+                        // window is decorated in EVERY mode, but the chrome is
+                        // only PAINTED under `mode == Floating` (a few hundred
+                        // lines up), the layout only reserves room for it
+                        // under the same condition, and input only hit-tests
+                        // it there. So in tiling mode the ring grew 24 px
+                        // upward over a band holding no titlebar — a gap of
+                        // desktop framed as though it belonged to the window.
+                        if data.state.config.layout.mode
+                            == crate::config::LayoutMode::Floating
+                            && crate::role::policy_of(w, &data.state.config.placement)
+                                .is_decorated()
+                        {
                             crate::chrome::HEIGHT
                         } else {
                             0

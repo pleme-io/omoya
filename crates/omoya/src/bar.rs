@@ -53,6 +53,13 @@ const GUTTER: f32 = 8.0;
 /// A parcel cell's side, and the slot it occupies.
 const CELL: f32 = 20.0;
 
+/// How many parcel cells the strip has room for.
+///
+/// Named rather than the bare `9` it was, because the slide above has to know
+/// it and two spellings of a cell count is how a strip ends up drawing ten
+/// cells into nine slots.
+const PARCEL_CELLS: usize = 9;
+
 // ── ROLES, NOT BAND INDEXES ──────────────────────────────────────────────
 //
 // ★ Every colour below is named for the JOB it does. A band index at a call
@@ -437,6 +444,21 @@ pub fn rasterize_h(state: &BarState, width: i32, height: i32) -> Option<Vec<u8>>
 
     let w = usize::try_from(width).ok()?;
     let h = usize::try_from(height).ok()?;
+    // ★ `bar.height: 0` PANICKED THE COMPOSITOR ON ITS FIRST FRAME. The
+    // bottom hairline indexes `(h - 1) * w`, which at `h == 0` is
+    // `0usize - 1`: a subtract-with-overflow panic under debug assertions and
+    // an out-of-bounds index into a zero-length buffer under release.
+    // `BarConfig::height` is a bare `i32` with no clamp anywhere between the
+    // yaml and this line.
+    //
+    // `None` rather than a clamp, because `None` already MEANS "no bar" to
+    // every caller — `drm.rs` simply pushes no element — so `height: 0` now
+    // does the sane thing an operator writing it would expect, instead of
+    // taking the seat down. 2 is the floor: one row of ground and one of
+    // hairline.
+    if w == 0 || h < 2 {
+        return None;
+    }
     let bg = role_surface();
 
     // ARGB8888 little-endian is B,G,R,A in memory order.
@@ -470,8 +492,46 @@ pub fn rasterize_h(state: &BarState, width: i32, height: i32) -> Option<Vec<u8>>
     let muted = Blend::new(bg, role_text_muted());
     let bright = Blend::new(bg, role_text());
     let mut x = PAD;
-    for (idx, focused) in state.parcels.iter().take(9).enumerate() {
-        let digit = char::from(b'1' + u8::try_from(idx).unwrap_or(8));
+    // ── ★ THE FOCUSED PARCEL IS ALWAYS ONE OF THE CELLS DRAWN ───────────
+    //
+    // This was a bare `.take(9)`, and the accent underline — the seat's ONLY
+    // "here" marker — is drawn inside this loop. With ten windows open and
+    // the tenth focused, `parcels` is `[false; 9] + [true]`, the `true` was
+    // dropped, and the strip rasterized byte-identically to "nothing is
+    // focused". The file's own test asserts those two must differ.
+    //
+    // So the window slides: the first eight cells, then the focused one. The
+    // digit still names the parcel's real position, which is the fact an
+    // operator is reading it for — a renumbered cell would be a second lie
+    // fixing the first.
+    let shown: Vec<(usize, bool)> = {
+        let focused_at = state.parcels.iter().position(|f| *f);
+        let n = state.parcels.len();
+        if n <= PARCEL_CELLS {
+            state.parcels.iter().copied().enumerate().collect()
+        } else {
+            let keep = focused_at.filter(|i| *i >= PARCEL_CELLS);
+            state
+                .parcels
+                .iter()
+                .copied()
+                .enumerate()
+                .take(if keep.is_some() {
+                    PARCEL_CELLS - 1
+                } else {
+                    PARCEL_CELLS
+                })
+                .chain(keep.map(|i| (i, true)))
+                .collect()
+        }
+    };
+    for (idx, focused) in shown {
+        let focused = &focused;
+        // ★ THE PARCEL'S REAL POSITION, so a slid window still names the
+        // window it points at. Past nine the glyph runs off the digits and
+        // becomes a letter, which reads as "more than the strip can show" —
+        // honest, and better than a renumbered `9`.
+        let digit = char::from(b'1'.saturating_add(u8::try_from(idx).unwrap_or(u8::MAX)));
         let blend = if *focused { &bright } else { &muted };
         // Centre the digit in its cell so the row is a rhythm of fixed slots
         // rather than a string whose length depends on its content.
@@ -743,6 +803,54 @@ mod tests {
             assert!(
                 b.chunks_exact(4).all(|px| px[3] == 0xff),
                 "every bar pixel must be fully opaque"
+            );
+        }
+    }
+
+    /// ★ `bar.height: 0` PANICKED THE COMPOSITOR on its first frame — the
+    /// hairline indexes `(h - 1) * w`, which is `0usize - 1`. A bare `i32`
+    /// with no clamp between the yaml and that line.
+    #[test]
+    fn a_degenerate_bar_height_yields_no_bar_rather_than_a_panic() {
+        let st = BarState::default();
+        assert!(rasterize_h(&st, 1920, 0).is_none(), "0 means no bar");
+        assert!(
+            rasterize_h(&st, 1920, 1).is_none(),
+            "1 has no room for the hairline"
+        );
+        assert!(rasterize_h(&st, 0, 28).is_none(), "and a zero WIDTH too");
+        assert!(
+            rasterize_h(&st, 1920, 28).is_some(),
+            "a real bar still rasterizes"
+        );
+    }
+
+    /// ★ THE ACCENT VANISHED PAST NINE WINDOWS, rendering byte-identical to
+    /// "nothing is focused" — and the accent is the seat's only "here"
+    /// marker. A bare `.take(9)` dropped the only `true` in
+    /// `[false; 9] + [true]`.
+    #[test]
+    fn the_focused_parcel_is_drawn_however_many_windows_there_are() {
+        let shown = |n: usize, focus: usize| {
+            let mut parcels = vec![false; n];
+            parcels[focus] = true;
+            BarState {
+                parcels,
+                ..BarState::default()
+            }
+        };
+        let nothing_focused = BarState {
+            parcels: vec![false; 12],
+            ..BarState::default()
+        };
+        let blank = rasterize(&nothing_focused, 800).expect("rasterizes");
+
+        // Within the strip, and well past it.
+        for focus in [0usize, 8, 9, 11] {
+            let px = rasterize(&shown(12, focus), 800).expect("rasterizes");
+            assert_ne!(
+                px, blank,
+                "with window {focus} focused the strip must not look like nothing is focused"
             );
         }
     }

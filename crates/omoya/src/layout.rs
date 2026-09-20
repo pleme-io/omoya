@@ -337,13 +337,30 @@ impl crate::state::Omoya {
         w: &smithay::desktop::Window,
         frame: smithay::utils::Rectangle<i32, smithay::utils::Logical>,
     ) {
-        let content = crate::chrome::content_for(frame);
-        let content = if content.size.is_empty() {
-            frame
+        // ── ★ THE SAME TWO QUESTIONS THE MAIN PLACEMENT PATH ASKS ───────
+        //
+        // This subtracted a titlebar UNCONDITIONALLY, while its sibling guards
+        // the identical inset with `floating_mode && is_decorated()` and sends
+        // no size at all when `sized_by_compositor` is false. Nothing else
+        // reached it in tiling mode — until maximise started working there
+        // (2026-09-20), which routes straight through here: Logo+F on a
+        // terminal configured the client 24 px short and mapped it 24 px low,
+        // under a bar that tiling mode never draws.
+        //
+        // An overlay was the other exposure: `sized_by_compositor` is false
+        // for one precisely so the seat does not overrule a client about its
+        // own content, and this sent a size regardless.
+        let policy = crate::role::policy_of(w, &self.config.placement);
+        let floating_mode = self.config.layout.mode == crate::config::LayoutMode::Floating;
+        let content = if floating_mode && policy.is_decorated() {
+            let c = crate::chrome::content_for(frame);
+            if c.size.is_empty() { frame } else { c }
         } else {
-            content
+            frame
         };
-        if let Some(t) = w.toplevel() {
+        if policy.sized_by_compositor
+            && let Some(t) = w.toplevel()
+        {
             t.with_pending_state(|st| st.size = Some(content.size));
             t.send_pending_configure();
         }
