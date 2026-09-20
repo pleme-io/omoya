@@ -488,8 +488,15 @@ impl crate::state::Omoya {
     pub fn perform(&mut self, deed: Deed) -> DeedOutcome {
         match deed {
             Deed::Focus(dir) => {
-                self.focus_direction(dir);
-                DeedOutcome::Performed
+                // ★ THE ANSWER IS REPORTED. This discarded `focus_direction`'s
+                // result and always said Performed — so a chord that moved
+                // nothing counted as a performance, in a codebase whose whole
+                // deed surface exists to tell those apart.
+                if self.focus_direction(dir) {
+                    DeedOutcome::Performed
+                } else {
+                    DeedOutcome::Refused("no window in that direction")
+                }
             }
             Deed::Resize(dir) if self.config.layout.mode == crate::config::LayoutMode::Floating => {
                 // ── ★ FLOATING: THE KEYBOARD RESIZES THE FOCUSED WINDOW ───────
@@ -684,12 +691,50 @@ impl crate::state::Omoya {
         }
     }
 
-    fn focus_direction(&mut self, dir: Direction) {
+    /// Move focus to the neighbour in `dir`. Returns whether focus MOVED.
+    fn focus_direction(&mut self, dir: Direction) -> bool {
+        // ── ★ FLOATING WINDOWS HAVE NO TREE TO WALK ──────────────────────
+        // `apply_layout` unmaps every window from the kukaku tree in floating
+        // mode, so the tree path below always answered None and Logo+h/j/k/l
+        // was a silent no-op on a floating seat — the mode plo runs. Floating
+        // windows have positions, so the neighbour is found by geometry
+        // (`layout::nearest_in_direction`, tested without a seat).
+        if self.config.layout.mode == crate::config::LayoutMode::Floating {
+            let Some(focused) = self.focused_window() else {
+                // Nothing focused: the first visible window is a better answer
+                // than nothing, and it is what an operator pressing a
+                // direction on an unfocused seat means.
+                let first = self.space.elements().next_back().cloned();
+                if let Some(w) = first {
+                    self.focus_window(&w);
+                    return true;
+                }
+                return false;
+            };
+            let Some(from) = self.space.element_geometry(&focused) else {
+                return false;
+            };
+            let others: Vec<(
+                smithay::desktop::Window,
+                smithay::utils::Rectangle<i32, smithay::utils::Logical>,
+            )> = self
+                .space
+                .elements()
+                .filter(|w| **w != focused)
+                .filter_map(|w| self.space.element_geometry(w).map(|g| (w.clone(), g)))
+                .collect();
+            let pairs: Vec<_> = others.iter().map(|(w, g)| (w, *g)).collect();
+            let Some(next) = crate::layout::nearest_in_direction(from, &pairs, dir).cloned() else {
+                return false;
+            };
+            self.focus_window(&next);
+            return true;
+        }
         let Some(output) = self.space.outputs().next().cloned() else {
-            return;
+            return false;
         };
         let Some(geo) = self.space.output_geometry(&output) else {
-            return;
+            return false;
         };
         // Same zone the layout used — asking for a neighbour inside a
         // different rectangle than the one the windows were placed in gives
@@ -707,9 +752,10 @@ impl crate::state::Omoya {
             // Nothing that way. A finding, not a failure — the operator
             // pressed a direction at the edge of the screen, and the right
             // response is to do nothing quietly rather than wrap around.
-            return;
+            return false;
         };
         self.focus_window(&window);
+        true
     }
 
     /// The focused window's surface id — FROM THE SEAT, not from the tree.

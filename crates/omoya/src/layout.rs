@@ -1152,6 +1152,43 @@ fn client_fixed_size(w: &smithay::desktop::Window) -> Option<smithay::utils::Siz
 /// `(0, 0)` when it declared none. `xdg_toplevel.set_min_size` is a request
 /// the compositor must honour when it picks a size — see `grab::resized`.
 #[must_use]
+/// The nearest neighbour of `from` in `dir`, by geometry.
+///
+/// ── ★ WHY GEOMETRY AND NOT THE TREE ─────────────────────────────────────
+/// `Tiling::focus_direction` walks the kukaku tree, and `apply_layout` unmaps
+/// EVERY window from that tree in floating mode — so directional focus was a
+/// silent no-op on a floating seat (plo), while the deed reported
+/// `Performed`. Floating windows have no tree to walk; they have positions.
+///
+/// A candidate must lie in `dir`: its centre strictly beyond `from`'s centre
+/// on that axis. Among those, the nearest wins, with sideways distance
+/// weighted DOUBLE — a window straight ahead beats a closer one far off to
+/// the side, which is what "focus right" means to a person looking at a
+/// screen.
+#[must_use]
+pub fn nearest_in_direction<T: Copy>(
+    from: Rectangle<i32, Logical>,
+    others: &[(T, Rectangle<i32, Logical>)],
+    dir: Direction,
+) -> Option<T> {
+    let centre = |r: Rectangle<i32, Logical>| (r.loc.x + r.size.w / 2, r.loc.y + r.size.h / 2);
+    let (fx, fy) = centre(from);
+    others
+        .iter()
+        .filter_map(|(t, r)| {
+            let (cx, cy) = centre(*r);
+            let (along, across) = match dir {
+                Direction::Left => (fx - cx, (cy - fy).abs()),
+                Direction::Right => (cx - fx, (cy - fy).abs()),
+                Direction::Above => (fy - cy, (cx - fx).abs()),
+                Direction::Below => (cy - fy, (cx - fx).abs()),
+            };
+            (along > 0).then_some((along + across * 2, *t))
+        })
+        .min_by_key(|(score, _)| *score)
+        .map(|(_, t)| t)
+}
+
 pub fn client_min_frame(w: &smithay::desktop::Window) -> (i32, i32) {
     use smithay::wayland::compositor::with_states;
     use smithay::wayland::shell::xdg::SurfaceCachedState;
@@ -1251,6 +1288,93 @@ mod roster_input_tests {
             !window.contains(".space") && !window.contains("space.elements"),
             "`seen` mentions the Space. The layout's input must be the roster \
              (what EXISTS); the Space is its output (where things SIT)."
+        );
+    }
+
+    #[test]
+    fn directional_focus_picks_the_neighbour_in_that_direction() {
+        use kukaku::Direction;
+        let r = |x, y, w, h| {
+            smithay::utils::Rectangle::<i32, smithay::utils::Logical>::new(
+                (x, y).into(),
+                (w, h).into(),
+            )
+        };
+        let from = r(100, 100, 200, 200); // centre (200, 200)
+        let right = r(500, 100, 200, 200);
+        let left = r(-300, 100, 200, 200);
+        let below = r(100, 500, 200, 200);
+        let others = [("right", right), ("left", left), ("below", below)];
+        assert_eq!(
+            crate::layout::nearest_in_direction(from, &others, Direction::Right),
+            Some("right")
+        );
+        assert_eq!(
+            crate::layout::nearest_in_direction(from, &others, Direction::Left),
+            Some("left")
+        );
+        assert_eq!(
+            crate::layout::nearest_in_direction(from, &others, Direction::Below),
+            Some("below")
+        );
+        // Nothing above: a direction with no candidate answers None, which is
+        // what makes the deed able to report "no window in that direction"
+        // instead of claiming a performance.
+        assert_eq!(
+            crate::layout::nearest_in_direction(from, &others, Direction::Above),
+            None
+        );
+    }
+
+    #[test]
+    fn straight_ahead_beats_closer_but_off_to_the_side() {
+        use kukaku::Direction;
+        let r = |x, y, w, h| {
+            smithay::utils::Rectangle::<i32, smithay::utils::Logical>::new(
+                (x, y).into(),
+                (w, h).into(),
+            )
+        };
+        let from = r(0, 0, 100, 100); // centre (50, 50)
+        // `askew` is nearer on the x axis but far off the y axis; `ahead` is
+        // level with the focused window. A person pressing "right" means the
+        // one level with them.
+        let ahead = r(400, 0, 100, 100); // centre (450, 50):  along 400, across 0
+        let askew = r(300, 600, 100, 100); // centre (350, 650): along 300, across 600
+        let others = [("askew", askew), ("ahead", ahead)];
+        assert_eq!(
+            crate::layout::nearest_in_direction(from, &others, Direction::Right),
+            Some("ahead")
+        );
+    }
+
+    #[test]
+    fn a_window_behind_you_is_never_the_neighbour_ahead() {
+        use kukaku::Direction;
+        let r = |x, y, w, h| {
+            smithay::utils::Rectangle::<i32, smithay::utils::Logical>::new(
+                (x, y).into(),
+                (w, h).into(),
+            )
+        };
+        let from = r(500, 0, 100, 100);
+        let behind = r(0, 0, 100, 100);
+        assert_eq!(
+            crate::layout::nearest_in_direction(from, &[("behind", behind)], Direction::Right),
+            None
+        );
+        assert_eq!(
+            crate::layout::nearest_in_direction(from, &[("behind", behind)], Direction::Left),
+            Some("behind")
+        );
+        // An empty field has no neighbour in any direction.
+        let none: [(
+            &str,
+            smithay::utils::Rectangle<i32, smithay::utils::Logical>,
+        ); 0] = [];
+        assert_eq!(
+            crate::layout::nearest_in_direction(from, &none, Direction::Left),
+            None
         );
     }
 }
