@@ -226,10 +226,9 @@ impl PointerGrab<Omoya> for MoveGrab {
             .is_some_and(|id| data.windows.mode_of(id) == crate::windowmode::Mode::Maximized);
         if crate::snap::tile_of(&self.window).is_some() || maximised {
             let before = data.space.element_geometry(&self.window);
-            crate::snap::set(&self.window, None);
-            if maximised && let Some(id) = crate::layout::surface_id_of(&self.window) {
-                data.windows.toggle_maximize(id);
-            }
+            // The shared release — this path always got it right and is now
+            // the only spelling of it. See `release_geometry_claims`.
+            data.release_geometry_claims(&self.window);
             data.apply_layout();
             if let (Some(old), Some(new)) = (before, data.space.element_geometry(&self.window)) {
                 if old.size.w > 0 {
@@ -573,9 +572,14 @@ impl PointerGrab<Omoya> for ResizeGrab {
         event: &MotionEvent,
     ) {
         handle.motion(data, None, event);
-        // A resize frees the tile — on the first MOTION, so a click that never
-        // moves leaves the window snapped where it was.
-        crate::snap::set(&self.window, None);
+        // A resize frees the tile AND the maximised state — on the first
+        // MOTION, so a click that never moves leaves the window where it was.
+        //
+        // ★ THE MAXIMISED HALF WAS MISSING. Only the tile was released, so
+        // resizing a maximised window followed the pointer for the whole drag
+        // and snapped back to the usable zone at the next layout pass — a
+        // revert that reads as a compositing glitch, not as an ignored verb.
+        data.release_geometry_claims(&self.window);
         #[allow(clippy::cast_possible_truncation)]
         let (dx, dy) = (
             (event.location.x - self.start_data.location.x) as i32,

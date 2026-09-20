@@ -14,11 +14,19 @@
 //! tested without a compositor. `layout.rs` places a snapped window, `grab.rs`
 //! decides the tile on release, `deed.rs` maps the chord.
 //!
-//! ── ★ STATE LIVES ON THE WINDOW, NEVER IN AN ID-KEYED MAP ────────────────
-//! `winid::of` is a per-CLIENT protocol id — every mado on the seat is 16 — so
-//! a `HashMap<u32, Tile>` would snap every terminal the moment one snapped.
-//! `floatpos` learnt this first; the tile rides in the window's user data the
-//! same way.
+//! ── ★ STATE LIVES ON THE WINDOW ─────────────────────────────────────────
+//! The tile rides in the window's user data, the way `floatpos` keeps a
+//! remembered position — no lookup, no lifetime to manage, gone when the
+//! window is.
+//!
+//! ★ CORRECTED 2026-09-19: this note used to say `winid::of` "is a per-CLIENT
+//! protocol id — every mado on the seat is 16", which is exactly backwards.
+//! `surface.id().protocol_id()` was that, and `winid::of` is the module
+//! written to REPLACE it: a monotonic counter stored on the surface, unique
+//! across clients by construction (read `winid.rs`'s header for the eight
+//! sites it fixed). A `HashMap<u32, Tile>` keyed by `winid::of` would be
+//! sound — `windowmode` is exactly that and is correct. The note would have
+//! sent the next reader away from the one primitive that solved this.
 
 use kukaku::Direction;
 use smithay::desktop::Window;

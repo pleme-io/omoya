@@ -343,6 +343,42 @@ impl crate::state::Omoya {
         self.space.map_element(w.clone(), content.loc, activate);
     }
 
+    /// Release every standing claim on `w`'s geometry, so a rectangle the
+    /// caller is about to write is the one that survives the next
+    /// `apply_layout`.
+    ///
+    /// ── ★ WHY THIS IS ONE FUNCTION (2026-09-19) ─────────────────────────
+    /// A window's position can be claimed from three places, and
+    /// `apply_layout` resolves them by PRIORITY: `Maximized` beats a snap
+    /// tile beats the remembered float position. That order is right, and it
+    /// means any site about to write an explicit rectangle must first drop
+    /// the claims above it — otherwise the write is overruled on the very
+    /// next layout pass.
+    ///
+    /// Four sites write explicit geometry. **One of them knew.**
+    ///
+    /// | site | tile | maximised |
+    /// |---|---|---|
+    /// | `MoveGrab::motion` (drag) | freed | freed |
+    /// | `ResizeGrab::motion` (edge drag) | freed | **kept** |
+    /// | `Deed::MoveFloat` / keyboard resize | freed | **kept** |
+    /// | `Deed::Snap` (Logo+Arrow) | **kept** | **kept** |
+    ///
+    /// Each miss is a silent no-op that reports `Performed`, and the resize
+    /// one is worse than silent: the window visibly follows the pointer for
+    /// the whole drag and then jumps back at the next map, unmap or commit,
+    /// which reads as a compositing glitch rather than as an ignored verb.
+    ///
+    /// Having the drag path get it right is what makes this an oversight
+    /// rather than a policy — so the answer is one function every site calls,
+    /// not three repaired call sites free to diverge again.
+    pub fn release_geometry_claims(&mut self, w: &smithay::desktop::Window) {
+        crate::snap::set(w, None);
+        if let Some(id) = surface_id_of(w) {
+            self.windows.unmaximize(id);
+        }
+    }
+
     /// Re-place every window according to the layout tree.
     ///
     /// ★ TWO HALVES, AND ONLY ONE OF THEM IS OBVIOUS. Moving the element in

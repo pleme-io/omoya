@@ -144,6 +144,20 @@ impl Windows {
         next
     }
 
+    /// Drop `id` out of `Maximized`, and do nothing otherwise.
+    ///
+    /// ★ NOT `toggle_maximize` BEHIND AN `if`. Three call sites want "stop
+    /// being maximised" and each spelled it as a guarded toggle, which is a
+    /// setter written as its own inverse: correct only while the guard and
+    /// the toggle agree, and silently a MAXIMISE the day one of them is
+    /// edited. A minimised window is left minimised — this releases a
+    /// geometry claim, it does not make a window visible.
+    pub fn unmaximize(&mut self, id: u32) {
+        if self.mode_of(id) == Mode::Maximized {
+            self.set_mode(id, Mode::Normal);
+        }
+    }
+
     /// Hide a window without closing it.
     pub fn minimize(&mut self, id: u32) {
         self.set_mode(id, Mode::Minimized);
@@ -393,6 +407,32 @@ mod tests {
             "active {} out of range",
             g.active
         );
+    }
+
+    #[test]
+    fn unmaximize_releases_a_claim_and_is_not_a_toggle() {
+        let mut w = Windows::default();
+
+        w.toggle_maximize(1);
+        assert_eq!(w.mode_of(1), Mode::Maximized);
+        w.unmaximize(1);
+        assert_eq!(w.mode_of(1), Mode::Normal);
+
+        // ★ THE ARM THAT MATTERS. Three call sites spelled this as a guarded
+        // `toggle_maximize`, i.e. a setter written as its own inverse — one
+        // edit away from MAXIMISING a window that was asked to stop being
+        // maximised. Idempotence is the property, not the round trip.
+        w.unmaximize(1);
+        assert_eq!(w.mode_of(1), Mode::Normal, "unmaximize must not maximise");
+        w.unmaximize(999);
+        assert_eq!(w.mode_of(999), Mode::Normal, "nor an unknown window");
+
+        // Releasing a GEOMETRY claim is not the same as making a window
+        // visible: a minimised window stays hidden.
+        w.minimize(2);
+        w.unmaximize(2);
+        assert_eq!(w.mode_of(2), Mode::Minimized);
+        assert_eq!(w.placement_of(2), Placement::Hidden);
     }
 
     #[test]

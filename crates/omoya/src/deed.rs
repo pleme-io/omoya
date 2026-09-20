@@ -534,7 +534,10 @@ impl crate::state::Omoya {
                 };
                 let next =
                     crate::grab::resized(frame, edges, dx, dy, crate::layout::client_min_frame(&w));
-                crate::snap::set(&w, None);
+                // ★ BOTH CLAIMS, not just the tile: a maximised window took
+                // this whole computation and then had it overruled by
+                // `apply_layout`, while the deed answered `Performed`.
+                self.release_geometry_claims(&w);
                 crate::floatpos::remember(&w, next.loc);
                 crate::floatpos::remember_size(&w, next.size);
                 self.apply_layout();
@@ -655,6 +658,14 @@ impl crate::state::Omoya {
                 }
                 match crate::snap::step(crate::snap::tile_of(&w), dir) {
                     crate::snap::Step::To(tile) => {
+                        // ★ THE MAXIMISED STATE OUTRANKS A TILE IN
+                        // `apply_layout`, so snapping a maximised window set
+                        // a tile nothing would ever read and reported
+                        // `Performed`. Released first, then claimed — the
+                        // step table above already decided which tile, and it
+                        // reads `tile_of`, which a maximised window does not
+                        // change.
+                        self.release_geometry_claims(&w);
                         crate::snap::set(&w, tile);
                         self.apply_layout();
                         DeedOutcome::Performed
