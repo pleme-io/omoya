@@ -242,11 +242,34 @@ impl Omoya {
     /// claims about the same code. That is the entire diagnostic value of
     /// this surface; a shortcut here would answer a question nobody asked.
     pub fn apply_step(&mut self, step: crate::synth::Step) {
-        // Synthetic events carry the seat's own clock. Real events carry the
-        // device's; the two are the same monotonic base, so a client cannot
-        // tell them apart by timestamp — which is what we want.
+        // ── ★ THE SAME BASE AS A REAL EVENT, WHICH THIS WAS NOT ─────────
+        //
+        // The comment here used to assert "the two are the same monotonic
+        // base, so a client cannot tell them apart by timestamp" and the code
+        // said otherwise. Synthetic events were stamped
+        // `start_time.elapsed()` — ms since the compositor started — while a
+        // real event carries `Event::time_msec()`, which for this backend is
+        // `evdev`'s `timestamp()`: a `SystemTime`, i.e. CLOCK_REALTIME,
+        // because omoya never issues `EVIOCSCLOCKID`.
+        //
+        // Both go into the same `wl_pointer`/`wl_keyboard` time field, so the
+        // first synthetic event after a real one moved the clock BACKWARDS by
+        // ~1.6e9 ms inside a single focus. Toolkits difference successive
+        // timestamps for double-click and key-repeat.
+        //
+        // ★ THE DESTINATION IS CLOCK_MONOTONIC FOR BOTH, and this is not it.
+        // The protocol wants a monotonic base, and getting the DEVICE onto one
+        // means `EVIOCSCLOCKID` — an ioctl the `evdev` crate does not expose,
+        // so a raw `_IOW('E', 0xa0, int)` and a new unsafe seam, or projecting
+        // each device stamp onto `start_time` (which needs that `Instant`
+        // threaded into `EvdevBackend`). Either is a real change. Until one
+        // lands, matching the device's base removes the DIVERGENCE, which is
+        // the part a client can actually see: an NTP step now moves both paths
+        // together instead of separating them forever.
         #[allow(clippy::cast_possible_truncation)]
-        let time = self.start_time.elapsed().as_millis() as u32;
+        let time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as u32);
         match step {
             crate::synth::Step::Key { code, state } => {
                 // The `+8`, applied here exactly as `KeyboardKeyEvent::key_code`
