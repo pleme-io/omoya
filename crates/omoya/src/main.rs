@@ -660,7 +660,7 @@ fn attach_session<S, N>(
     let handle = event_loop.handle();
     match event_loop
         .handle()
-        .insert_source(notifier, move |event, (), _data| {
+        .insert_source(notifier, move |event, (), data| {
             use smithay::backend::session::Event as SessionEvent;
             match event {
                 SessionEvent::ActivateSession => {
@@ -686,6 +686,16 @@ fn attach_session<S, N>(
                             );
                         }
                     }
+                    // ★ AND DROP THE MODIFIERS THE SEAT NEVER SAW RELEASED.
+                    // Ctrl+Alt+F2 hands the seat away between the press and
+                    // the release, so `xkb_state` comes back still holding
+                    // both — and every keystroke after that is a chord. The
+                    // operator returns to a keyboard that types nothing.
+                    #[allow(clippy::cast_possible_truncation)]
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |d| d.as_millis() as u32);
+                    data.state.release_all_keys(now);
                     tracing::info!("session ACTIVATED — the seat is ours again");
                 }
                 SessionEvent::PauseSession => {

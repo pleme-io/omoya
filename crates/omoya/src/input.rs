@@ -60,6 +60,43 @@ impl Omoya {
         // remapping the keysym later would leave the chord layer still
         // matching CapsLock, so bindings and fingers would disagree.
         let code = crate::remap::apply_table(code, &self.remaps);
+        self.key_remapped(code, state, time);
+    }
+
+    /// Release every key the seat still believes is held.
+    ///
+    /// ── ★ CALLED ON VT RESUME, BECAUSE THE RELEASES NEVER ARRIVED ────────
+    /// Ctrl+Alt+F2 hands the seat away between the PRESS and the RELEASE:
+    /// logind pauses the devices, the releases go to the other VT, and
+    /// `xkb_state` comes back still holding Ctrl and Alt down. Every
+    /// subsequent keystroke is then a chord — the operator returns to a
+    /// keyboard that types nothing and looks broken, and the only cure is
+    /// tapping both modifiers to "un-stick" them, which nobody guesses.
+    ///
+    /// Routed through `key_remapped`, not `key`: `pressed_keys()` holds codes
+    /// that have ALREADY been through the remap table, and re-applying it
+    /// would double-map any chain an operator configured (the default
+    /// CapsLock→Escape happens to be idempotent, which is exactly the kind of
+    /// accident that makes this bite someone else later).
+    pub fn release_all_keys(&mut self, time: u32) {
+        let Some(keyboard) = self.seat.get_keyboard() else {
+            return;
+        };
+        let held: Vec<Keycode> = keyboard.pressed_keys().into_iter().collect();
+        if held.is_empty() {
+            return;
+        }
+        tracing::info!(
+            count = held.len(),
+            "releasing keys the seat still believed were held"
+        );
+        for code in held {
+            self.key_remapped(code, KeyState::Released, time);
+        }
+    }
+
+    /// [`Self::key`] with the remap already applied.
+    fn key_remapped(&mut self, code: Keycode, state: KeyState, time: u32) {
         let serial = SERIAL_COUNTER.next_serial();
         let event_state = state;
         let Some(keyboard) = self.seat.get_keyboard() else {
