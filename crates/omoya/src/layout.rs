@@ -334,7 +334,13 @@ impl crate::state::Omoya {
             t.with_pending_state(|st| st.size = Some(content.size));
             t.send_pending_configure();
         }
-        self.space.map_element(w.clone(), content.loc, true);
+        // ★ ACTIVATE ONLY THE FOCUSED WINDOW. `map_element(.., true)` RAISES,
+        // so activating every window a layout pass touches rewrote the whole
+        // stacking order — silently undoing click-to-raise on the next pass.
+        // Focus is granted by `focus_window` / `new_toplevel`, which raise on
+        // their own; the layout only places.
+        let activate = self.focused_window().as_ref() == Some(w);
+        self.space.map_element(w.clone(), content.loc, activate);
     }
 
     /// Re-place every window according to the layout tree.
@@ -466,6 +472,8 @@ impl crate::state::Omoya {
             .lock()
             .unwrap_or_else(|e| e.into_inner()) =
             if floating_mode { "floating" } else { "tiling" }.to_owned();
+        // Read once: `map_element` below activates exactly this window.
+        let focused_window = self.focused_window();
         let floats: Vec<smithay::desktop::Window> = seen
             .iter()
             .filter(|(_, id)| {
@@ -728,10 +736,13 @@ impl crate::state::Omoya {
                 });
                 t.send_pending_configure();
             }
-            // `true` — activate. A launcher that appears without focus is a
-            // launcher you have to click before you can type into, which
-            // defeats summoning it from the keyboard.
-            self.space.map_element(w.clone(), rect.loc, true);
+            // ★ ONLY THE FOCUSED WINDOW IS ACTIVATED. This passed `true` for
+            // every window, and `map_element(.., true)` RAISES — so every
+            // layout pass re-stacked the seat in roster order and undid
+            // click-to-raise. A new toplevel is raised by `new_toplevel` and
+            // focus by `focus_window`, so nothing here needs to.
+            let activate = focused_window.as_ref() == Some(w);
+            self.space.map_element(w.clone(), rect.loc, activate);
         }
 
         // ── ★ PUBLISHED AFTER THE PASS, NOT BEFORE IT (2026-09-03) ────
@@ -861,11 +872,13 @@ impl crate::state::Omoya {
                     .map(|(_, r)| (r.loc.x, r.loc.y, r.size.w, r.size.h))
             });
             tiled.or_else(|| {
-                // The last-mapped float is the focused one: `map_element(.., true)`
-                // above activates each float as it is placed, so the final
-                // one holds focus. Reading the space rather than tracking a
-                // second focus field keeps one source of truth.
-                let w = floats.last()?;
+                // ★ THE FOCUSED WINDOW, ASKED DIRECTLY. This took
+                // `floats.last()` on the reasoning that the last-mapped float
+                // holds focus — true only while every float was activated as
+                // it was placed, which was itself the re-stacking defect above.
+                // It named the NEWEST window, so the focus ring sat on the
+                // wrong one whenever focus was not the most recent map.
+                let w = focused_window.as_ref()?;
                 let g = self.space.element_geometry(w)?;
                 Some((g.loc.x, g.loc.y, g.size.w, g.size.h))
             })
