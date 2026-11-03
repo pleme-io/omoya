@@ -341,6 +341,7 @@ mod tests {
     use super::*;
     use crate::config::FlushPolicy;
     use crate::nuri_renderer::{ArmFlush, NuriRenderer};
+    use crate::scanout::SlotAges;
 
     const RED: [u8; 4] = [0, 0, 0xff, 0xff];
     const GREEN: [u8; 4] = [0, 0xff, 0, 0xff];
@@ -677,7 +678,7 @@ mod tests {
     }
 
     impl Slot {
-        fn new(path: PathBuf, width: i32, height: i32) -> Self {
+        fn new(path: PathBuf, width: i32, height: i32, format: Fourcc) -> Self {
             let file = std::fs::File::options()
                 .read(true)
                 .write(true)
@@ -689,7 +690,7 @@ mod tests {
                 .expect("a slot length");
             let mut builder = Dmabuf::builder(
                 (width, height),
-                Fourcc::Argb8888,
+                format,
                 Modifier::Linear,
                 DmabufFlags::empty(),
             );
@@ -721,16 +722,18 @@ mod tests {
 
     struct Chain {
         slots: [Slot; 2],
-        back: usize,
-        presented: u64,
-        drawn: [Option<u64>; 2],
+        ages: SlotAges,
     }
 
     impl Chain {
-        fn age(&self) -> usize {
-            self.drawn[self.back].map_or(0, |when| {
-                usize::try_from(self.presented - when + 1).expect("an age")
-            })
+        fn new(dir: &Path, format: Fourcc) -> Self {
+            Self {
+                slots: [
+                    Slot::new(dir.join("slot0"), W, H, format),
+                    Slot::new(dir.join("slot1"), W, H, format),
+                ],
+                ages: SlotAges::default(),
+            }
         }
 
         fn frame(
@@ -739,18 +742,18 @@ mod tests {
             tracker: &mut OutputDamageTracker,
             elements: &[MemoryRenderBufferRenderElement<NuriRenderer>],
         ) -> Option<u64> {
-            let age = self.age();
+            let age = self.ages.age();
             renderer.arm_flush(
                 if age == 0 {
                     FlushPolicy::Full
                 } else {
                     FlushPolicy::Baselined
                 },
-                self.drawn[self.back],
+                self.ages.generation(),
             );
             let wrote = {
                 let mut fb = renderer
-                    .bind(&mut self.slots[self.back].buffer)
+                    .bind(&mut self.slots[self.ages.back()].buffer)
                     .expect("a bound slot");
                 let result = tracker
                     .render_output(
@@ -767,9 +770,7 @@ mod tests {
                 drawn.map(|_| wrote)
             };
             if wrote.is_some() {
-                self.presented += 1;
-                self.drawn[self.back] = Some(self.presented);
-                self.back = 1 - self.back;
+                self.ages.presented();
             }
             wrote
         }
@@ -824,15 +825,7 @@ mod tests {
 
         let mut renderer = NuriRenderer::new();
         let mut tracker = OutputDamageTracker::new((W, H), 1.0, Transform::Normal);
-        let mut chain = Chain {
-            slots: [
-                Slot::new(dir.join("slot0"), W, H),
-                Slot::new(dir.join("slot1"), W, H),
-            ],
-            back: 0,
-            presented: 0,
-            drawn: [None; 2],
-        };
+        let mut chain = Chain::new(&dir, Fourcc::Argb8888);
         let full = u64::try_from(W * H * 4).expect("a size");
         let buffer = |side: usize, px: [u8; 4]| {
             MemoryRenderBuffer::from_slice(
@@ -946,6 +939,64 @@ mod tests {
             chain.slots[0].bytes(),
             overlay(&flat, &[(4, 3, 2, 2, WHITE), (4, 1, 1, 1, BLACK)])
         );
+    }
+
+    fn picture() -> Image {
+        image(
+            usize::try_from(W).expect("w"),
+            usize::try_from(H).expect("h"),
+            |x, y| {
+                [
+                    u8::try_from(x * 20 + 40).expect("a byte"),
+                    u8::try_from(y * 30 + 40).expect("a byte"),
+                    90,
+                    0xff,
+                ]
+            },
+        )
+    }
+
+    fn ground_of(dir: &Path, source: &Image) -> Ground {
+        let path = dir.join("g.png");
+        write_image(&path, source);
+        let mut ground = Ground::default();
+        assert!(ground.refresh(Some(&path), W, H).repaint);
+        ground
+    }
+
+    #[test]
+    fn either_scanout_format_composes_and_captures_the_same_pixels() {
+        for (name, format) in [
+            ("format-xrgb", Fourcc::Xrgb8888),
+            ("format-argb", Fourcc::Argb8888),
+        ] {
+            let dir = scratch(name);
+            let source = picture();
+            let mut ground = ground_of(&dir, &source);
+            let mut renderer = NuriRenderer::new();
+            let mut tracker = OutputDamageTracker::new((W, H), 1.0, Transform::Normal);
+            adopt(&mut ground, &mut renderer, &mut tracker);
+            let mut chain = Chain::new(&dir, format);
+            let none: [MemoryRenderBufferRenderElement<NuriRenderer>; 0] = [];
+            assert!(chain.frame(&mut renderer, &mut tracker, &none).is_some());
+            assert_eq!(chain.slots[0].bytes(), source.bgra, "{name}");
+
+            let ppm = dir.join("capture.ppm");
+            {
+                let fb = renderer
+                    .bind(&mut chain.slots[0].buffer)
+                    .expect("a bound slot");
+                crate::drm::capture(&mut renderer, &fb, (W, H), &ppm, None, false, format)
+                    .expect("a capture");
+            }
+            let written = std::fs::read(&ppm).expect("the capture file");
+            let rgb: Vec<u8> = source
+                .bgra
+                .chunks_exact(4)
+                .flat_map(|px| [px[2], px[1], px[0]])
+                .collect();
+            assert!(written.ends_with(&rgb), "{name}");
+        }
     }
 
     #[test]

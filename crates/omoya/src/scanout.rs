@@ -62,15 +62,17 @@ struct Slot {
     framebuffer: <DrmDeviceFd as ExportFramebuffer<DumbBuffer>>::Framebuffer,
 }
 
-/// A double-buffered scanout over one CRTC.
-///
-/// ★ TWO BUFFERS, NOT ONE. Rendering into the buffer currently being scanned
-/// out produces tearing that looks like a renderer bug — a torn frame and a
-/// wrongly-composited frame are indistinguishable in a screenshot. Two is the
-/// minimum that makes the class impossible rather than unlikely.
-pub struct DirectScanout {
-    surface: DrmSurface,
-    slots: [Slot; 2],
+#[must_use]
+pub fn format_for(offered: impl IntoIterator<Item = Fourcc>) -> Fourcc {
+    if offered.into_iter().any(|code| code == Fourcc::Xrgb8888) {
+        Fourcc::Xrgb8888
+    } else {
+        Fourcc::Argb8888
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct SlotAges {
     /// Which slot is safe to draw into.
     back: usize,
     /// Frames presented so far. Only ever used to derive buffer AGE.
@@ -90,6 +92,44 @@ pub struct DirectScanout {
     /// fresh buffer and the reason age is an Option-shaped 0 rather than a
     /// guess.
     last_drawn: [Option<u64>; 2],
+}
+
+impl SlotAges {
+    #[must_use]
+    pub const fn back(&self) -> usize {
+        self.back
+    }
+
+    #[must_use]
+    pub fn age(&self) -> usize {
+        match self.last_drawn[self.back] {
+            None => 0,
+            Some(when) => usize::try_from(self.presented.saturating_sub(when) + 1).unwrap_or(0),
+        }
+    }
+
+    #[must_use]
+    pub const fn generation(&self) -> Option<u64> {
+        self.last_drawn[self.back]
+    }
+
+    pub fn presented(&mut self) {
+        self.presented += 1;
+        self.last_drawn[self.back] = Some(self.presented);
+        self.back = 1 - self.back;
+    }
+}
+
+/// A double-buffered scanout over one CRTC.
+///
+/// ★ TWO BUFFERS, NOT ONE. Rendering into the buffer currently being scanned
+/// out produces tearing that looks like a renderer bug — a torn frame and a
+/// wrongly-composited frame are indistinguishable in a screenshot. Two is the
+/// minimum that makes the class impossible rather than unlikely.
+pub struct DirectScanout {
+    surface: DrmSurface,
+    slots: [Slot; 2],
+    ages: SlotAges,
     /// ★ HAS THE CRTC EVER BEEN MODESET?
     ///
     /// `page_flip` documents itself as *"This will not cause the crtc to
@@ -164,9 +204,7 @@ impl DirectScanout {
         Ok(Self {
             surface,
             slots,
-            back: 0,
-            presented: 0,
-            last_drawn: [None; 2],
+            ages: SlotAges::default(),
             modeset: false,
         })
     }
@@ -180,10 +218,7 @@ impl DirectScanout {
     /// a fallback — it is the protocol's own way of saying so.
     #[must_use]
     pub fn back_buffer_age(&self) -> usize {
-        match self.last_drawn[self.back] {
-            None => 0,
-            Some(when) => usize::try_from(self.presented.saturating_sub(when) + 1).unwrap_or(0),
-        }
+        self.ages.age()
     }
 
     /// The generation the back slot's CONTENTS belong to — `None` when it has
@@ -201,11 +236,11 @@ impl DirectScanout {
     /// nothing has established.
     #[must_use]
     pub fn back_buffer_generation(&self) -> Option<u64> {
-        self.last_drawn[self.back]
+        self.ages.generation()
     }
 
     pub fn back_buffer(&mut self) -> &mut DumbBuffer {
-        &mut self.slots[self.back].buffer
+        &mut self.slots[self.ages.back()].buffer
     }
 
     /// Present the back buffer and swap.
@@ -244,7 +279,7 @@ impl DirectScanout {
     }
 
     pub fn flip(&mut self) -> Result<(), Error> {
-        let slot = &self.slots[self.back];
+        let slot = &self.slots[self.ages.back()];
         let (w, h) = (
             i32::from(slot.buffer.size().w as u16),
             i32::from(slot.buffer.size().h as u16),
@@ -297,9 +332,58 @@ impl DirectScanout {
         // display is actively scanning out.
         // Record that this slot now holds a presented frame, THEN swap. The
         // order matters: `back` still names the slot we just drew into.
-        self.presented += 1;
-        self.last_drawn[self.back] = Some(self.presented);
-        self.back = 1 - self.back;
+        self.ages.presented();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_scanout_format_is_xrgb_when_offered_and_argb_otherwise() {
+        assert_eq!(format_for([Fourcc::Xrgb8888]), Fourcc::Xrgb8888);
+        assert_eq!(
+            format_for([Fourcc::Argb8888, Fourcc::Xrgb8888]),
+            Fourcc::Xrgb8888
+        );
+        assert_eq!(
+            format_for([Fourcc::Rgb565, Fourcc::Argb8888]),
+            Fourcc::Argb8888
+        );
+        assert_eq!(format_for([]), Fourcc::Argb8888);
+    }
+
+    #[test]
+    fn every_read_of_the_scanout_names_the_format_it_chose() {
+        let source = include_str!("drm.rs");
+        let live = source
+            .split_once("#[cfg(test)]")
+            .map_or(source, |(live, _)| live);
+        assert!(
+            !live.contains("DrmFourcc::Argb8888"),
+            "drm.rs still hardcodes the scanout format"
+        );
+        assert!(live.contains("crate::scanout::format_for("));
+        assert!(live.matches("scanout_format").count() >= 4);
+    }
+
+    #[test]
+    fn a_slot_ages_as_the_other_is_shown() {
+        let mut ages = SlotAges::default();
+        assert_eq!((ages.back(), ages.age(), ages.generation()), (0, 0, None));
+        ages.presented();
+        assert_eq!((ages.back(), ages.age(), ages.generation()), (1, 0, None));
+        ages.presented();
+        assert_eq!(
+            (ages.back(), ages.age(), ages.generation()),
+            (0, 2, Some(1))
+        );
+        ages.presented();
+        assert_eq!(
+            (ages.back(), ages.age(), ages.generation()),
+            (1, 2, Some(2))
+        );
     }
 }

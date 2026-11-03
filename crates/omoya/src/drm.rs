@@ -329,8 +329,8 @@ pub fn output_for(target: &ScanoutTarget) -> (Output, OutputMode) {
 ///
 /// ★ CORRECTED 2026-08-20, ON THE SCREEN. This passed `true` — "a DRM scanout
 /// target is sRGB-encoded" — and that is FALSE for this path. The scanout
-/// buffer is `DRM_FORMAT_ARGB8888` (see the `copy_framebuffer` call and
-/// `scanout.rs`), a plain format with no sRGB conversion: the display
+/// buffer is `DRM_FORMAT_XRGB8888` or `DRM_FORMAT_ARGB8888` (see
+/// `scanout::format_for`), plain formats with no sRGB conversion: the display
 /// interprets those bytes directly. Writing LINEAR values into it renders
 /// everything about six times too dark.
 ///
@@ -594,6 +594,9 @@ where
     for<'fb> R::Framebuffer<'fb>: crate::nuri_renderer::ScanoutFlush,
 {
     let surface = device.create_surface(target.crtc, target.mode, &[target.connector])?;
+    let scanout_format =
+        crate::scanout::format_for(surface.plane_info().formats.iter().map(|format| format.code));
+    tracing::info!(format = ?scanout_format, "scanout format");
     let (output, mode) = output_for(target);
 
     // The output has to exist as a Wayland GLOBAL, not just as a local value —
@@ -889,7 +892,7 @@ where
         &mut allocator,
         fd,
         (u32::from(mode.size.w as u16), u32::from(mode.size.h as u16)),
-        DrmFourcc::Argb8888,
+        scanout_format,
     )?;
 
     // ★ M3a — publish the plane inventory, so the direct-scanout premise is a
@@ -1862,7 +1865,7 @@ where
                             .copy_framebuffer(
                                 &fb,
                                 smithay::utils::Rectangle::from_size((w, h).into()),
-                                DrmFourcc::Argb8888,
+                                scanout_format,
                             )
                             .ok()
                             .and_then(|m| renderer.map_texture(&m).ok().map(<[u8]>::to_vec))
@@ -1981,7 +1984,7 @@ where
                         let verdict = match renderer.copy_framebuffer(
                             &fb,
                             smithay::utils::Rectangle::from_size((w, h).into()),
-                            DrmFourcc::Argb8888,
+                            scanout_format,
                         ) {
                             Ok(m) => match renderer.map_texture(&m) {
                                 Ok(shadow) => {
@@ -2107,6 +2110,7 @@ where
                                 std::path::Path::new(&path),
                                 req.region,
                                 req.hash_only,
+                                scanout_format,
                             ) {
                                 Ok(v) => {
                                     tracing::info!(path = %path, "captured");
@@ -2500,6 +2504,7 @@ pub fn capture<R>(
     // a detector of the clock.
     region: Option<(i32, i32, i32, i32)>,
     hash_only: bool,
+    format: DrmFourcc,
 ) -> Result<String, Box<dyn std::error::Error>>
 where
     R: smithay::backend::renderer::ExportMem,
@@ -2516,7 +2521,7 @@ where
     let rw = rw.clamp(1, size.0 - rx);
     let rh = rh.clamp(1, size.1 - ry);
     let rect = smithay::utils::Rectangle::new((rx, ry).into(), (rw, rh).into());
-    let mapping = renderer.copy_framebuffer(framebuffer, rect, DrmFourcc::Argb8888)?;
+    let mapping = renderer.copy_framebuffer(framebuffer, rect, format)?;
     let bytes = renderer.map_texture(&mapping)?;
 
     if hash_only {
@@ -2590,7 +2595,7 @@ mod tests {
         // merely fail to catch a regression: it actively preserves the wrong
         // expectation, in writing, where a reader takes it for a measurement.
         //
-        // DRM_FORMAT_ARGB8888 applies no conversion, so the bytes written must
+        // Neither scanout format applies a conversion, so the bytes written must
         // ALREADY be sRGB.
         //
         // ★ THE EXPECTED VALUE CHANGED ON 2026-09-03 and the hazard got
