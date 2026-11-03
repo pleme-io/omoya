@@ -317,12 +317,18 @@ impl crate::nuri_renderer::ScanoutFlush for KasaneFramebuffer<'_> {
         0
     }
 
-    fn scanout_bytes(&self) -> &[u8] {
+    fn scanout(&self) -> Option<crate::nuri_renderer::ScanoutView<'_>> {
         // The scanout buffer is device memory this renderer never maps —
         // mapping it is precisely the cost being removed. A reader wanting
         // pixels goes through `ExportMem`, which is explicit about paying for
         // a readback.
-        &[]
+        //
+        // ★ `None`, NOT `&[]`. This returned an empty slice, and every caller
+        // that compares the scanout against the shadow counts differences —
+        // so the empty slice produced zero mismatches and reported a PERFECT
+        // display from a renderer that had not looked at one. `None` forces
+        // the caller to say `blind`, which is the true answer.
+        None
     }
 }
 

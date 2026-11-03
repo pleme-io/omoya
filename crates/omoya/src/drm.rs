@@ -1941,15 +1941,35 @@ where
 
                     // ── ★ THE STALE SCAN — AFTER THE FLUSH, BEFORE THE FLIP ──
                     //
-                    // Placement is the whole correctness of this check. After
-                    // `flush_damage` the back buffer holds exactly what is
-                    // about to be scanned out: whatever it kept from two
-                    // frames ago, plus this frame's damage copied over it. If
-                    // the damage was under-reported, the difference against
-                    // the shadow IS the stale content the operator sees.
+                    // ── WHAT THIS ACTUALLY COMPARES, corrected ──────────
+                    // This comment used to claim that placement after the
+                    // flush was "the whole correctness of this check", and
+                    // that the difference found here "IS the stale content
+                    // the operator sees". Both were false, and plausibly so,
+                    // which is why they survived.
                     //
-                    // A frame earlier and the flush has not happened; a frame
-                    // later and the buffers have swapped and the evidence is
+                    // The scan reads `copy_framebuffer`, and nuri's
+                    // `copy_framebuffer` deliberately reads the SHADOW, not
+                    // the mapping (see its header: a write-combining read
+                    // costs ~1000x). `flush_damage` writes only the mapping.
+                    // So the shadow-vs-shadow comparison below is byte-for-
+                    // byte identical whether it runs before or after the
+                    // flush — placement is irrelevant to it.
+                    //
+                    // What it genuinely detects is the DAMAGE-TRACKING class:
+                    // `baseline` is the natural-age composition, the second
+                    // render at age 0 is the ground truth, and a difference
+                    // means the natural-age pass failed to redraw something.
+                    // That is a real and valuable class. It is simply not the
+                    // one the old comment named.
+                    //
+                    // The FLUSH class — shadow correct, mapping wrong — is a
+                    // different failure and is checked separately below,
+                    // against `scanout`, which is the only read of that
+                    // memory in the codebase.
+                    //
+                    // Placement does still matter for one thing: a frame
+                    // later the buffers have swapped and the evidence is
                     // gone.
                     // ★ `blind` is an ANSWER. If the baseline snapshot failed
                     // the probe still consumed the request, and reporting nothing
@@ -2029,6 +2049,67 @@ where
                                         h,
                                     });
                                     crate::stale::attribute(&mut rep, &named);
+
+                                    // ── ★ THE FLUSH POSTCONDITION ───────
+                                    //
+                                    // This frame rendered at age 0, so the
+                                    // damage is the whole output and
+                                    // `flush_damage` must have copied the
+                                    // ENTIRE shadow into the mapping. That
+                                    // makes `mapping == shadow` a known
+                                    // equality rather than a hope — the one
+                                    // frame where the relationship is exact,
+                                    // which is what makes this a positive
+                                    // control and not a vacuous one.
+                                    //
+                                    // A mismatch is a `flush_damage` bug, and
+                                    // nothing else in the codebase can see it:
+                                    // every other reader goes through
+                                    // `copy_framebuffer`, which reads the
+                                    // shadow. Until this call existed
+                                    // `scanout` had ZERO callers while its own
+                                    // doc claimed the stale-pixel class "lives
+                                    // HERE and nowhere else".
+                                    //
+                                    // Row-at-a-time against the mapping's own
+                                    // stride: the scanout is padded to the
+                                    // device's pitch, and comparing flat would
+                                    // shear every row after the first and
+                                    // report a perfect display as totally
+                                    // stale.
+                                    let flush = match crate::stale::compare_flush(
+                                        fb.scanout().map(|v| (v.bytes, v.stride)),
+                                        shadow,
+                                        wu,
+                                        hu,
+                                    ) {
+                                        crate::stale::FlushVerdict::Blind { reason } => {
+                                            serde_json::json!({
+                                                "outcome": "blind",
+                                                "reason": reason,
+                                            })
+                                        }
+                                        crate::stale::FlushVerdict::Clean { rows } => {
+                                            serde_json::json!({
+                                                "outcome": "clean",
+                                                "differing_bytes": 0,
+                                                // The denominator travels with
+                                                // the verdict, same discipline
+                                                // as the scan above.
+                                                "rows_compared": rows,
+                                                "rows_total": hu,
+                                            })
+                                        }
+                                        crate::stale::FlushVerdict::Lost { bytes, rows } => {
+                                            serde_json::json!({
+                                                "outcome": "flush-lost-bytes",
+                                                "differing_bytes": bytes,
+                                                "rows_compared": rows,
+                                                "rows_total": hu,
+                                            })
+                                        }
+                                    };
+
                                     let img =
                                         crate::stale::render_mask(shadow, &baseline, wu, hu);
                                     let wrote = std::fs::write(&mask_path, &img).is_ok();
@@ -2063,6 +2144,25 @@ where
                                         "regions_total": rep.regions.len(),
                                         "regions": regions,
                                         "mask": if wrote { Some(mask_path.clone()) } else { None },
+                                        // The separate, genuinely-scanout-side
+                                        // class. See THE FLUSH POSTCONDITION.
+                                        "flush": flush,
+                                        // ★ THE PROBE REPAIRS WHAT IT MEASURES.
+                                        //
+                                        // Measuring forces a render at age 0,
+                                        // and that full repaint is what the
+                                        // flush then copies to the display. So
+                                        // running this scan REPAINTS the
+                                        // screen, and a second run comes back
+                                        // clean because the first one fixed it
+                                        // — not because the defect went away.
+                                        //
+                                        // Stated in the verdict rather than in
+                                        // a doc nobody reads at 2am: an
+                                        // operator who scans a visibly stale
+                                        // seat twice would otherwise conclude
+                                        // it healed itself.
+                                        "repainted_by_this_scan": true,
                                     })
                                     .to_string()
                                 }

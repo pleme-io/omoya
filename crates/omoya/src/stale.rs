@@ -295,8 +295,172 @@ pub fn render_mask(expected: &[u8], actual: &[u8], w: usize, h: usize) -> Vec<u8
     out
 }
 
+/// What the FLUSH did, as opposed to what the compositor composed.
+///
+/// ★ A distinct class from [`StaleReport`], and the distinction is the point.
+/// `StaleReport` compares two compositions and catches a damage-TRACKING
+/// failure — a region the natural-age pass forgot to redraw. This catches a
+/// COPY failure: the shadow is right and the mapping never received it. A
+/// reader handed one number cannot tell which subsystem to look at.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FlushVerdict {
+    /// The mapping matches the shadow across every row compared.
+    Clean { rows: u64 },
+    /// Bytes on the display that the shadow does not agree with.
+    Lost { bytes: u64, rows: u64 },
+    /// Nothing could be compared. ★ NEVER collapsed into `Clean`: a renderer
+    /// that maps no scanout, or a stride that makes the first row unreadable,
+    /// yields zero differences — and zero differences from zero comparisons
+    /// is the shape that reports a perfect display from a probe that looked
+    /// at nothing.
+    Blind { reason: &'static str },
+}
+
+/// Compare the scanout mapping against the shadow it should hold.
+///
+/// Valid only on a frame rendered at age 0, where full damage means
+/// `flush_damage` must have copied the whole shadow — that is what makes the
+/// equality exact rather than approximate, and the check a positive control.
+///
+/// `scanout` is `None` when the renderer does not map its scanout at all (the
+/// GPU arm); that is [`FlushVerdict::Blind`], not a clean bill of health.
+///
+/// Row-at-a-time against the mapping's own stride. The scanout is padded to
+/// the device's row pitch, so a flat comparison shears every row after the
+/// first and reports a correct display as entirely lost.
+#[must_use]
+pub fn compare_flush(
+    scanout: Option<(&[u8], usize)>,
+    shadow: &[u8],
+    w: usize,
+    h: usize,
+) -> FlushVerdict {
+    let Some((bytes, stride)) = scanout else {
+        return FlushVerdict::Blind {
+            reason: "this renderer does not map its scanout",
+        };
+    };
+    let row = w * 4;
+    if row == 0 || h == 0 {
+        return FlushVerdict::Blind {
+            reason: "zero-sized output",
+        };
+    }
+    if stride < row {
+        // A stride narrower than a row is not a padded buffer, it is a
+        // different geometry than the caller believes. Comparing anyway would
+        // read neighbouring rows as corruption.
+        return FlushVerdict::Blind {
+            reason: "stride is narrower than a row",
+        };
+    }
+    let mut lost = 0u64;
+    let mut rows = 0u64;
+    for y in 0..h {
+        let (ms, ss) = (y * stride, y * row);
+        let (Some(m), Some(sh)) = (bytes.get(ms..ms + row), shadow.get(ss..ss + row)) else {
+            break;
+        };
+        rows += 1;
+        lost += m.iter().zip(sh).filter(|(a, b)| a != b).count() as u64;
+    }
+    if rows == 0 {
+        return FlushVerdict::Blind {
+            reason: "no row was readable in both buffers",
+        };
+    }
+    if lost == 0 {
+        FlushVerdict::Clean { rows }
+    } else {
+        FlushVerdict::Lost { bytes: lost, rows }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::{compare_flush, FlushVerdict};
+
+    /// A renderer that maps no scanout is BLIND, never clean.
+    ///
+    /// ★ The whole reason this function exists. The GPU arm used to answer
+    /// `&[]` to "show me the scanout", every caller counted differences, and
+    /// zero differences read as a flawless display from a probe that had not
+    /// looked at one.
+    #[test]
+    fn an_unmapped_scanout_is_blind_and_not_clean() {
+        let shadow = vec![0u8; 4 * 4 * 4];
+        let v = compare_flush(None, &shadow, 4, 4);
+        assert!(
+            matches!(v, FlushVerdict::Blind { .. }),
+            "a renderer that maps nothing must not report a healthy flush: {v:?}"
+        );
+        assert_ne!(v, FlushVerdict::Clean { rows: 4 });
+    }
+
+    /// An empty byte slice is blind too — the same collapse, one layer in.
+    #[test]
+    fn an_empty_mapping_is_blind_and_not_clean() {
+        let shadow = vec![7u8; 4 * 4 * 4];
+        let v = compare_flush(Some((&[], 16)), &shadow, 4, 4);
+        assert!(
+            matches!(v, FlushVerdict::Blind { .. }),
+            "zero readable rows is zero evidence, not zero defects: {v:?}"
+        );
+    }
+
+    /// A padded scanout that matches is clean — the stride must be honoured.
+    #[test]
+    fn a_padded_mapping_that_matches_is_clean() {
+        let (w, h) = (4usize, 3usize);
+        let row = w * 4;
+        let stride = row + 8; // device pitch padding
+        let shadow: Vec<u8> = (0..(row * h)).map(|i| (i % 251) as u8).collect();
+        let mut map = vec![0xAAu8; stride * h];
+        for y in 0..h {
+            map[y * stride..y * stride + row].copy_from_slice(&shadow[y * row..(y + 1) * row]);
+        }
+        assert_eq!(
+            compare_flush(Some((&map, stride)), &shadow, w, h),
+            FlushVerdict::Clean { rows: 3 },
+            "padding between rows is not corruption; comparing flat would \
+             shear every row after the first"
+        );
+    }
+
+    /// One byte the flush failed to copy is reported, with its denominator.
+    #[test]
+    fn a_byte_the_flush_lost_is_counted() {
+        let (w, h) = (4usize, 3usize);
+        let row = w * 4;
+        let stride = row + 8;
+        let shadow: Vec<u8> = (0..(row * h)).map(|i| (i % 251) as u8).collect();
+        let mut map = vec![0xAAu8; stride * h];
+        for y in 0..h {
+            map[y * stride..y * stride + row].copy_from_slice(&shadow[y * row..(y + 1) * row]);
+        }
+        map[2 * stride + 5] ^= 0xFF; // the flush missed one byte on row 2
+
+        assert_eq!(
+            compare_flush(Some((&map, stride)), &shadow, w, h),
+            FlushVerdict::Lost { bytes: 1, rows: 3 },
+            "a lost byte must survive as a count, with the rows it was found \
+             among — a bare `stale: true` cannot be acted on"
+        );
+    }
+
+    /// A stride narrower than a row is a geometry disagreement, not damage.
+    #[test]
+    fn a_stride_narrower_than_a_row_is_blind() {
+        let shadow = vec![0u8; 4 * 4 * 4];
+        let map = vec![0u8; 4 * 4 * 4];
+        let v = compare_flush(Some((&map, 8)), &shadow, 4, 4);
+        assert!(
+            matches!(v, FlushVerdict::Blind { .. }),
+            "comparing under a wrong stride reads neighbouring rows as \
+             corruption and blames the flush for the caller's mistake: {v:?}"
+        );
+    }
+
     use super::*;
 
     fn buf(w: usize, h: usize, v: u8) -> Vec<u8> {

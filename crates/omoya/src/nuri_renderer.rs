@@ -386,7 +386,37 @@ pub trait ScanoutFlush {
     ///
     /// So this exists, it is called only on an explicit operator request, and
     /// it must never be called from the frame path. See `crate::stale`.
-    fn scanout_bytes(&self) -> &[u8];
+    ///
+    /// ── ★ `Option`, AND WHY IT IS NOT A DETAIL ───────────────────────────
+    /// This returned a bare `&[u8]`, and the GPU arm answered `&[]` — it maps
+    /// no scanout, and the empty slice was its way of saying so. Every
+    /// plausible caller compares this against the shadow and counts
+    /// differences, so `&[]` yields ZERO mismatches and reads as a clean
+    /// display on a renderer that looked at nothing. That is the `empty`
+    /// versus `blind` collapse kotae exists to forbid, one layer down in a
+    /// return type.
+    ///
+    /// `None` means *this renderer cannot see its own scanout* and a caller
+    /// must report `blind`. It is not a failure to handle; it is the honest
+    /// answer for a GPU that draws straight into device memory.
+    ///
+    /// The stride travels WITH the bytes because a caller needs both to
+    /// index a row, and two accessors could be paired wrongly at a call site
+    /// — which is a silent off-by-a-row, the least visible kind of wrong.
+    fn scanout(&self) -> Option<ScanoutView<'_>>;
+}
+
+/// The scanout mapping as a caller can actually read it: bytes plus the
+/// stride needed to find a row in them.
+///
+/// ★ One value rather than two accessors. A padded scanout is normal — the
+/// mapping's row pitch is the device's, not `width * 4` — so a caller that
+/// obtained the bytes without the stride would read a correct buffer as
+/// progressively sheared garbage and report every pixel stale.
+#[derive(Debug, Clone, Copy)]
+pub struct ScanoutView<'a> {
+    pub bytes: &'a [u8],
+    pub stride: usize,
 }
 
 impl ScanoutFlush for NuriFramebuffer<'_> {
@@ -394,8 +424,11 @@ impl ScanoutFlush for NuriFramebuffer<'_> {
         NuriFramebuffer::flush_damage(self, damage)
     }
 
-    fn scanout_bytes(&self) -> &[u8] {
-        self.data
+    fn scanout(&self) -> Option<ScanoutView<'_>> {
+        Some(ScanoutView {
+            bytes: self.data,
+            stride: self.stride,
+        })
     }
 }
 
