@@ -90,10 +90,103 @@ impl Owed {
     }
 }
 
+const FIRST_RETRY: std::time::Duration = std::time::Duration::from_millis(50);
+const LAST_RETRY: std::time::Duration = std::time::Duration::from_secs(5);
+
+#[derive(Debug, Default)]
+pub struct FrameRetry {
+    failures: u32,
+    not_before: Option<std::time::Instant>,
+}
+
+impl FrameRetry {
+    #[must_use]
+    pub fn ready(&self, now: std::time::Instant) -> bool {
+        self.not_before.is_none_or(|at| now >= at)
+    }
+
+    #[must_use]
+    pub fn failed(&mut self, now: std::time::Instant) -> bool {
+        let doublings = self.failures.min(16);
+        let wait = FIRST_RETRY.saturating_mul(1 << doublings).min(LAST_RETRY);
+        self.not_before = Some(now + wait);
+        self.failures = self.failures.saturating_add(1);
+        self.failures == 1
+    }
+
+    pub fn forgive(&mut self) -> u32 {
+        self.not_before = None;
+        std::mem::take(&mut self.failures)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::Owed;
+    use super::{FrameRetry, Owed};
     use mekuri::Cause as _;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn a_refused_frame_logs_once_and_backs_off() {
+        let start = Instant::now();
+        let mut retry = FrameRetry::default();
+        let (mut attempts, mut logged) = (0_u32, 0_u32);
+        for tick in 0..75_u64 * 60 {
+            let now = start + Duration::from_millis(tick * 1000 / 75);
+            if retry.ready(now) {
+                attempts += 1;
+                if retry.failed(now) {
+                    logged += 1;
+                }
+            }
+        }
+        assert_eq!(logged, 1, "one streak, one line");
+        assert!(attempts < 25, "{attempts} composites in a minute");
+    }
+
+    #[test]
+    fn the_first_retry_is_prompt_and_the_longest_is_bounded() {
+        let start = Instant::now();
+        let mut retry = FrameRetry::default();
+        assert!(retry.ready(start), "nothing has failed yet");
+        let _ = retry.failed(start);
+        assert!(!retry.ready(start));
+        assert!(retry.ready(start + Duration::from_millis(50)));
+
+        for _ in 0..1000 {
+            let _ = retry.failed(start);
+        }
+        assert!(!retry.ready(start + Duration::from_millis(4999)));
+        assert!(retry.ready(start + Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn forgiving_reports_the_streak_and_starts_over() {
+        let start = Instant::now();
+        let mut retry = FrameRetry::default();
+        assert_eq!(retry.forgive(), 0);
+        assert!(retry.failed(start));
+        assert!(!retry.failed(start));
+        assert!(!retry.failed(start));
+        assert_eq!(retry.forgive(), 3);
+        assert!(retry.ready(start), "a forgiven streak holds nothing back");
+        assert!(retry.failed(start), "a new streak logs again");
+    }
+
+    #[test]
+    fn the_render_loop_goes_through_the_retry() {
+        let source = include_str!("drm.rs");
+        let live = source
+            .split_once("#[cfg(test)]")
+            .map_or(source, |(live, _)| live);
+        for wire in [
+            "frame_retry.ready(",
+            "frame_retry.failed(",
+            "frame_retry.forgive()",
+        ] {
+            assert!(live.contains(wire), "drm.rs does not call `{wire}`");
+        }
+    }
 
     #[test]
     fn every_cause_has_a_distinct_bit() {

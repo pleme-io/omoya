@@ -498,6 +498,28 @@ pub fn frame_interval(target: &ScanoutTarget) -> Duration {
 // a second, subtly different render path that nobody exercises; MODULARIZE,
 // DON'T DELETE governs configured-off FEATURES, not uncalled functions.
 
+fn next_interval(
+    deadline: std::time::Instant,
+    interval: Duration,
+) -> smithay::reexports::calloop::timer::TimeoutAction {
+    let mut next = deadline + interval;
+    let now = std::time::Instant::now();
+    if next <= now {
+        next = now + interval;
+    }
+    smithay::reexports::calloop::timer::TimeoutAction::ToInstant(next)
+}
+
+fn idle_tick(
+    introspect: &crate::introspect::OmoyaIntrospect,
+    data: &crate::CalloopData,
+    deadline: std::time::Instant,
+    interval: Duration,
+) -> smithay::reexports::calloop::timer::TimeoutAction {
+    introspect.tick(data.state.space.elements().count() as u64);
+    next_interval(deadline, interval)
+}
+
 /// M4b — the persistent scanout loop.
 ///
 /// M4a painted one frame and exited, which proved the DRM path but is not a
@@ -946,6 +968,7 @@ where
     // report, so it is derived once here rather than twice with two chances to
     // disagree.
     let refresh_interval = interval;
+    let mut frame_retry = crate::owed::FrameRetry::default();
 
     // A TIMER, not vblank, and that is an honest shortcut rather than a design.
     // The correct pacing source is the DRM device's own vblank event, which is
@@ -958,6 +981,10 @@ where
     event_loop.handle().insert_source(
         smithay::reexports::calloop::timer::Timer::from_duration(interval),
         move |deadline, _, data| {
+            if !frame_retry.ready(std::time::Instant::now()) {
+                return idle_tick(&introspect, data, deadline, interval);
+            }
+
             // ★ DO NOT COMPOSE A FRAME THE DISPLAY CANNOT TAKE. A flip issued
             // while the previous is pending returns EBUSY, and the whole frame
             // — a full-screen CPU composite — is wasted producing an error.
@@ -1048,12 +1075,7 @@ where
             // skip, drew anyway" has no shape to write here.
             let verdict = data.state.owed.open();
             let mekuri::Verdict::Draw(pass) = verdict else {
-                let mut next = deadline + interval;
-                let now = std::time::Instant::now();
-                if next <= now {
-                    next = now + interval;
-                }
-                return smithay::reexports::calloop::timer::TimeoutAction::ToInstant(next);
+                return next_interval(deadline, interval);
             };
             crate::ground::adopt(&mut data.state.ground, &mut renderer, &mut damage_tracker);
             // Publish why, for the `owed` leaf. Cheap: a decode of one u64
@@ -2238,11 +2260,21 @@ where
                 }
                 Ok(())
             })());
-            if let Err(e) = frame_result {
+            match frame_result {
+                Ok(()) => {
+                    let failures = frame_retry.forgive();
+                    if failures > 0 {
+                        tracing::info!(failures, "frames reach the display again");
+                    }
+                }
                 // The causes are already back on the ledger — `spend` did it
                 // on the `Err`. Nothing to re-mark here, and re-marking would
                 // be wrong: it would owe the frame twice.
-                tracing::error!(error = %e, "frame failed — still owed, retrying next tick");
+                Err(e) => {
+                    if frame_retry.failed(std::time::Instant::now()) {
+                        tracing::error!(error = %e, "frame failed — still owed, retrying with backoff");
+                    }
+                }
             }
 
             // Tell clients their buffers were consumed, or they will never draw
