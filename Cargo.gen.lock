@@ -1,8 +1,8 @@
 {
   "schema_version": 2,
-  "cargo_lock_sha256": "ca9d02ec57452b122a4c63e9bf16d1c7796fa7409869971a5cd3cf7923056320",
+  "cargo_lock_sha256": "67bfd680139aa9846983ed155112b92f1bde9205f24e01d6b70c053b47f4956d",
   "manifest_sha256": {
-    "Cargo.toml": "d1ee12352d93f719e0fe4bc89149c06c062da888b95b9f128d822c6599b35f8a",
+    "Cargo.toml": "9377871098b4e585e5bbcc9f2b361558d06a377a38cb4306bb0d9c9f365ebe85",
     "crates/hairetsu/Cargo.toml": "67a784b3f0dc716e74f9257bed09bef7c637618269586ecf20b1ff223114b0da",
     "crates/kasane/Cargo.toml": "369669a052055aaa3c836309e6f1cb667e7740f7e74e84b96a9d4dd64dc8ddff",
     "crates/nuri/Cargo.toml": "3116435ecbd4619097d2879f5a26924834f5550aa4c732e667c3617e28d2865d",
@@ -3104,7 +3104,7 @@
           "std"
         ]
       },
-      "nuri-0.1.130": {
+      "nuri-0.1.131": {
         "runtime_dependencies": [
           {
             "name": "thiserror",
@@ -3125,7 +3125,7 @@
         "build_dependencies": [],
         "features": []
       },
-      "omoya-0.1.130": {
+      "omoya-0.1.131": {
         "runtime_dependencies": [
           {
             "name": "awase",
@@ -3209,7 +3209,7 @@
           },
           {
             "name": "kasane",
-            "package_key": "kasane-0.1.130",
+            "package_key": "kasane-0.1.131",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -3249,7 +3249,7 @@
           },
           {
             "name": "nuri",
-            "package_key": "nuri-0.1.130",
+            "package_key": "nuri-0.1.131",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -3259,7 +3259,7 @@
           },
           {
             "name": "omoya_spec",
-            "package_key": "omoya-spec-0.1.130",
+            "package_key": "omoya-spec-0.1.131",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -3434,7 +3434,7 @@
           "default"
         ]
       },
-      "omoya-spec-0.1.130": {
+      "omoya-spec-0.1.131": {
         "runtime_dependencies": [
           {
             "name": "thiserror",
@@ -7969,7 +7969,7 @@
               "fallback"
             ]
           },
-          "kasane-0.1.130": {
+          "kasane-0.1.131": {
             "runtime_dependencies": [
               {
                 "name": "thiserror",
@@ -8420,7 +8420,7 @@
             "build_dependencies": [],
             "features": []
           },
-          "kasane-0.1.130": {
+          "kasane-0.1.131": {
             "runtime_dependencies": [
               {
                 "name": "ash",
@@ -9021,7 +9021,7 @@
             "build_dependencies": [],
             "features": []
           },
-          "kasane-0.1.130": {
+          "kasane-0.1.131": {
             "runtime_dependencies": [
               {
                 "name": "ash",
@@ -9556,7 +9556,7 @@
               "fallback"
             ]
           },
-          "kasane-0.1.130": {
+          "kasane-0.1.131": {
             "runtime_dependencies": [
               {
                 "name": "thiserror",
@@ -9981,7 +9981,7 @@
             "build_dependencies": [],
             "features": []
           },
-          "kasane-0.1.130": {
+          "kasane-0.1.131": {
             "runtime_dependencies": [
               {
                 "name": "ash",
@@ -10556,7 +10556,7 @@
             "build_dependencies": [],
             "features": []
           },
-          "kasane-0.1.130": {
+          "kasane-0.1.131": {
             "runtime_dependencies": [
               {
                 "name": "ash",
@@ -11294,7 +11294,7 @@
       "edition": "2024",
       "proc_macro": true
     },
-    "kasane-0.1.130": {
+    "kasane-0.1.131": {
       "edition": "2024",
       "build_script": "build.rs",
       "lib_target": {
@@ -11370,7 +11370,7 @@
       "edition": "2021",
       "build_script": "build.rs"
     },
-    "nuri-0.1.130": {
+    "nuri-0.1.131": {
       "edition": "2024",
       "lib_target": {
         "name": "nuri",
@@ -11380,7 +11380,7 @@
     "okiba-0.2.1": {
       "edition": "2024"
     },
-    "omoya-0.1.130": {
+    "omoya-0.1.131": {
       "edition": "2024",
       "binaries": [
         {
@@ -11389,7 +11389,7 @@
         }
       ]
     },
-    "omoya-spec-0.1.130": {
+    "omoya-spec-0.1.131": {
       "edition": "2024",
       "lib_target": {
         "name": "omoya_spec",
