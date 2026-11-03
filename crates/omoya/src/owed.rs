@@ -30,9 +30,10 @@ pub enum Owed {
     /// A deed ran — a focus change, a layout verb, a VT switch.
     Deed,
     /// The status bar's text changed. Driven by a once-a-second timer that
-    /// marks ONLY when the rendered minute differs, so an idle seat presents
-    /// zero frames per second rather than one.
+    /// marks ONLY when the rendered minute or the status line differs, so an
+    /// idle seat presents zero frames per second rather than one.
     Chrome,
+    Ground,
     /// A screenshot was requested over `kanshou`. Without this the capture
     /// would wait for someone to move the mouse: the request arrives on
     /// another thread, and an idle gate would skip the tick that serves it.
@@ -53,6 +54,7 @@ impl mekuri::Cause for Owed {
             Owed::Chrome => 4,
             Owed::Capture => 5,
             Owed::Resume => 6,
+            Owed::Ground => 7,
         }
     }
 
@@ -65,6 +67,7 @@ impl mekuri::Cause for Owed {
             Owed::Chrome,
             Owed::Capture,
             Owed::Resume,
+            Owed::Ground,
         ]
     }
 }
@@ -82,6 +85,7 @@ impl Owed {
             Owed::Chrome => "chrome",
             Owed::Capture => "capture",
             Owed::Resume => "resume",
+            Owed::Ground => "ground",
         }
     }
 }
@@ -113,6 +117,6 @@ mod tests {
         // `all()` is what the leaf enumerates and what `bits_are_distinct`
         // checks. A variant missing from it is invisible to both, so its
         // count is pinned: adding a variant without listing it fails here.
-        assert_eq!(Owed::all().len(), 7, "a new Owed variant must join all()");
+        assert_eq!(Owed::all().len(), 8, "a new Owed variant must join all()");
     }
 }

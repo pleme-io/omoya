@@ -734,6 +734,7 @@ pub struct NuriRenderer {
     /// reported `windows: 1` the whole time, because the window WAS mapped in
     /// the space — it just never survived texture lookup.
     context: smithay::backend::renderer::ContextId<NuriTexture>,
+    ground: Option<crate::ground::Painted>,
 }
 
 impl Default for NuriRenderer {
@@ -759,6 +760,7 @@ impl NuriRenderer {
             shadow_pool: Arc::new(std::sync::Mutex::new(Vec::new())),
             next_flush_plan: None,
             context: smithay::backend::renderer::ContextId::new(),
+            ground: None,
         }
     }
 
@@ -830,6 +832,7 @@ impl Renderer for NuriRenderer {
                 framebuffer.stride,
             )?,
             context: self.context.clone(),
+            ground: self.ground.as_ref(),
             _marker: std::marker::PhantomData,
         })
     }
@@ -854,6 +857,7 @@ pub struct NuriFrame<'frame, 'buffer> {
     /// the frame's id must match the renderer's or the same cache miss happens
     /// one layer down.
     context: smithay::backend::renderer::ContextId<NuriTexture>,
+    ground: Option<&'frame crate::ground::Painted>,
     _marker: std::marker::PhantomData<&'buffer ()>,
 }
 
@@ -865,6 +869,14 @@ impl std::fmt::Debug for NuriFrame<'_, '_> {
 
 const fn to_rect(r: Rectangle<i32, Physical>) -> nuri::Rect {
     nuri::Rect::new(r.loc.x, r.loc.y, r.size.w, r.size.h)
+}
+
+fn publish_tally(tally: nuri::BlitTally) {
+    if let Some(c) = BLIT_COUNTS.get() {
+        c.0.fetch_add(tally.rows_copied, std::sync::atomic::Ordering::Relaxed);
+        c.1.fetch_add(tally.rows_blended, std::sync::atomic::Ordering::Relaxed);
+        c.2.fetch_add(tally.pixels_general, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 impl Frame for NuriFrame<'_, '_> {
@@ -880,6 +892,27 @@ impl Frame for NuriFrame<'_, '_> {
         color: Color32F,
         at: &[Rectangle<i32, Physical>],
     ) -> Result<(), Self::Error> {
+        if let Some(ground) = self.ground {
+            let src = nuri::SurfaceRef::new(
+                ground.bgra(),
+                ground.width(),
+                ground.height(),
+                ground.stride(),
+            )?;
+            let whole = nuri::Rect::new(0, 0, ground.width(), ground.height());
+            let damage: Vec<nuri::Rect> = at.iter().map(|r| to_rect(*r)).collect();
+            let tally = self.surface.blit(
+                &src,
+                whole,
+                whole,
+                nuri::Transform::Normal,
+                1.0,
+                &damage,
+                nuri::OpaqueHint::Opaque,
+            );
+            publish_tally(tally);
+            return Ok(());
+        }
         for r in at {
             self.surface
                 .fill(to_rect(*r), nuri::Rgba(color.components()));
@@ -1000,11 +1033,7 @@ impl Frame for NuriFrame<'_, '_> {
         );
         // Published once per blit, never per row: a `fetch_add` in the inner
         // loop would cost more than the branch it is measuring.
-        if let Some(c) = BLIT_COUNTS.get() {
-            c.0.fetch_add(tally.rows_copied, std::sync::atomic::Ordering::Relaxed);
-            c.1.fetch_add(tally.rows_blended, std::sync::atomic::Ordering::Relaxed);
-            c.2.fetch_add(tally.pixels_general, std::sync::atomic::Ordering::Relaxed);
-        }
+        publish_tally(tally);
         Ok(())
     }
 
@@ -1436,6 +1465,16 @@ impl AdvertisesDmabuf for NuriRenderer {
         // nuri MAPS AND COPIES. See the trait docs: this is a measurement of
         // what nuri does, not a policy that could be flipped by config.
         false
+    }
+}
+
+pub trait PaintsGround {
+    fn set_ground(&mut self, ground: Option<crate::ground::Painted>);
+}
+
+impl PaintsGround for NuriRenderer {
+    fn set_ground(&mut self, ground: Option<crate::ground::Painted>) {
+        self.ground = ground;
     }
 }
 

@@ -223,6 +223,14 @@ Requires compositing every window every frame *plus* a downscale per window. nur
 ### 5.10 A wallpaper
 Contrarian, and stated with the number. A solid `background` fill measures **0.070 ms** (LLVM vectorizes nuri's fill loop into a memset); a full-screen wallpaper blit measures **0.626 ms** — **9× more expensive for the same pixels**, and only free at exactly 1:1 (off `one_to_one`, nuri does a transform map-back plus two divisions per pixel with nearest-neighbour sampling). With 8 px gaps the wallpaper is visible only as thin lines between windows and a 4 px band under noki, where a photo reads as noise along every window edge. **The ground is a flat `background` fill.** An empty, arranged room is the point.
 
+**Amended 2026-11-03: `ground.image` paints a PNG where the flat fill would go, for a per-person seat that asks for one.** The flat ground stays the default and the prescription above stands. The shape was chosen so the costs above stay honest:
+
+- **It paints inside `Frame::clear`, not as an element.** `clear` receives exactly the damaged rects no opaque element covers, so the blit is clipped by the tracker and a fully covered ground costs nothing. An element would be simpler and worse: smithay's tracker damages an element whose `z_index` changed, and a ground element sits last in the slice, so every popup, window or hidden pointer above it would repaint the whole output.
+- **Scaled once, on decode.** Cover scaling (fill, keep aspect, centre crop) runs once and bilinear, so every frame is a 1:1 row copy with the opacity hint already known, never `pending-nuri-filtering`'s nearest-neighbour path. Transparent pixels are composited onto the flat ground at decode, which is what makes that hint true.
+- **Polled by the clock's one-second tick, and only for a stat.** `Owed::Ground` is marked only when the file changed, so an idle seat still presents nothing. With no `ground.image` the tick makes no syscall at all. The decode runs on that tick, so a change stalls the loop once for as long as the decode takes.
+- **The stamp is device, inode and mtime.** A nix store file's mtime is always 1, so a symlink moved to a new generation's image keeps its mtime. Mtime alone would never see it.
+- **A change replaces the damage tracker.** A fresh tracker has no history, so each scanout slot repaints whole on its next frame and neither can hold the old image. That holds under `damage.flush: baselined`, whose copy is bounded by the same damage.
+
 ### 5.11 Noise / dithering
 Only needed where a gradient bands. shitsurai has no gradients — every surface is a flat opaque fill. Keep the 64×64 blue-noise tile in pocket for the day a gradient is genuinely wanted; do not build it now.
 

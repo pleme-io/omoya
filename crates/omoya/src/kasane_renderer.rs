@@ -603,6 +603,10 @@ impl crate::nuri_renderer::AdvertisesDmabuf for KasaneRenderer {
     }
 }
 
+impl crate::nuri_renderer::PaintsGround for KasaneRenderer {
+    fn set_ground(&mut self, _ground: Option<crate::ground::Painted>) {}
+}
+
 impl crate::nuri_renderer::ArmFlush for KasaneRenderer {
     fn arm_flush(&mut self, _policy: crate::config::FlushPolicy, _generation: Option<u64>) {
         // ★ DELIBERATELY EMPTY, AND WRITTEN OUT RATHER THAN INHERITED.
@@ -1116,6 +1120,7 @@ mod tests {
                 + smithay::backend::renderer::Bind<Dmabuf>
                 + crate::nuri_renderer::ArmFlush
                 + crate::nuri_renderer::AdvertisesDmabuf
+                + crate::nuri_renderer::PaintsGround
                 + smithay::backend::renderer::ExportMem
                 + 'static,
             R::TextureId: Clone + Send + Texture + 'static,

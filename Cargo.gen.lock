@@ -1,17 +1,22 @@
 {
   "schema_version": 2,
-  "cargo_lock_sha256": "4cf6fb9d52f99fcaaf09ec46e1db9321ffd6cef921eb50693490dc6cfbfb09d7",
+  "cargo_lock_sha256": "ca9d02ec57452b122a4c63e9bf16d1c7796fa7409869971a5cd3cf7923056320",
   "manifest_sha256": {
     "Cargo.toml": "d1ee12352d93f719e0fe4bc89149c06c062da888b95b9f128d822c6599b35f8a",
     "crates/hairetsu/Cargo.toml": "67a784b3f0dc716e74f9257bed09bef7c637618269586ecf20b1ff223114b0da",
     "crates/kasane/Cargo.toml": "369669a052055aaa3c836309e6f1cb667e7740f7e74e84b96a9d4dd64dc8ddff",
     "crates/nuri/Cargo.toml": "3116435ecbd4619097d2879f5a26924834f5550aa4c732e667c3617e28d2865d",
     "crates/omoya-spec/Cargo.toml": "75cd6d31f2ef617df89556610445abab8cf9cddb49d7bbf04c28ac5b7fc89031",
-    "crates/omoya/Cargo.toml": "805c1127e8c3d6039d26f7617c891e53d424f1969a567f8ad8d0f945422d8be1",
+    "crates/omoya/Cargo.toml": "b869a4d5c7ec069d68019d54f1544db58da36ff9dc9fa1df220e5fa4150a318d",
     "crates/xkbcommon-hairetsu/Cargo.toml": "47e976fa1c8c185b17a5c2ced9fcec14a3fa5521a7bc9c046f3d23cf94af19b2"
   },
   "target_resolves": {
     "base": {
+      "adler2-2.0.1": {
+        "runtime_dependencies": [],
+        "build_dependencies": [],
+        "features": []
+      },
       "aho-corasick-1.1.5": {
         "runtime_dependencies": [],
         "build_dependencies": [],
@@ -651,6 +656,25 @@
         "build_dependencies": [],
         "features": []
       },
+      "crc32fast-1.5.4": {
+        "runtime_dependencies": [
+          {
+            "name": "cfg_if",
+            "package_key": "cfg-if-1.0.4",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": [
+          "default",
+          "std"
+        ]
+      },
       "crypto-common-0.1.7": {
         "runtime_dependencies": [
           {
@@ -1199,6 +1223,22 @@
           "std"
         ]
       },
+      "fdeflate-0.3.7": {
+        "runtime_dependencies": [
+          {
+            "name": "simd_adler32",
+            "package_key": "simd-adler32-0.3.10",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": []
+      },
       "figment-0.10.19": {
         "runtime_dependencies": [
           {
@@ -1277,6 +1317,40 @@
         "runtime_dependencies": [],
         "build_dependencies": [],
         "features": []
+      },
+      "flate2-1.1.10": {
+        "runtime_dependencies": [
+          {
+            "name": "crc32fast",
+            "package_key": "crc32fast-1.5.4",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": false,
+            "optional": true,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "miniz_oxide",
+            "package_key": "miniz_oxide-0.9.1",
+            "kind": "normal",
+            "features": [
+              "simd"
+            ],
+            "uses_default_features": true,
+            "optional": true,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": [
+          "any_impl",
+          "default",
+          "miniz_oxide",
+          "runtime_detection",
+          "rust_backend"
+        ]
       },
       "foldhash-0.1.5": {
         "runtime_dependencies": [],
@@ -2633,6 +2707,68 @@
           "std"
         ]
       },
+      "miniz_oxide-0.8.9": {
+        "runtime_dependencies": [
+          {
+            "name": "adler2",
+            "package_key": "adler2-2.0.1",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": false,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "simd_adler32",
+            "package_key": "simd-adler32-0.3.10",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": false,
+            "optional": true,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": [
+          "default",
+          "simd",
+          "simd-adler32",
+          "with-alloc"
+        ]
+      },
+      "miniz_oxide-0.9.1": {
+        "runtime_dependencies": [
+          {
+            "name": "adler2",
+            "package_key": "adler2-2.0.1",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": false,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "simd_adler32",
+            "package_key": "simd-adler32-0.3.10",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": false,
+            "optional": true,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": [
+          "default",
+          "simd",
+          "simd-adler32",
+          "with-alloc"
+        ]
+      },
       "mio-1.2.2": {
         "runtime_dependencies": [
           {
@@ -3132,6 +3268,16 @@
             "tree": "target"
           },
           {
+            "name": "png",
+            "package_key": "png-0.18.1",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
             "name": "rmcp",
             "package_key": "rmcp-0.15.0",
             "kind": "normal",
@@ -3457,6 +3603,64 @@
       },
       "pkg-config-0.3.34": {
         "runtime_dependencies": [],
+        "build_dependencies": [],
+        "features": []
+      },
+      "png-0.18.1": {
+        "runtime_dependencies": [
+          {
+            "name": "bitflags",
+            "package_key": "bitflags-2.13.1",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "crc32fast",
+            "package_key": "crc32fast-1.5.4",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "fdeflate",
+            "package_key": "fdeflate-0.3.7",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "flate2",
+            "package_key": "flate2-1.1.10",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "miniz_oxide",
+            "package_key": "miniz_oxide-0.8.9",
+            "kind": "normal",
+            "features": [
+              "simd"
+            ],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          }
+        ],
         "build_dependencies": [],
         "features": []
       },
@@ -4785,6 +4989,15 @@
         ],
         "build_dependencies": [],
         "features": []
+      },
+      "simd-adler32-0.3.10": {
+        "runtime_dependencies": [],
+        "build_dependencies": [],
+        "features": [
+          "const-generics",
+          "default",
+          "std"
+        ]
       },
       "slab-0.4.12": {
         "runtime_dependencies": [],
@@ -7373,6 +7586,14 @@
         ],
         "build_dependencies": [],
         "features": []
+      },
+      "zlib-rs-0.6.8": {
+        "runtime_dependencies": [],
+        "build_dependencies": [],
+        "features": [
+          "rust-allocator",
+          "std"
+        ]
       },
       "zmij-1.0.23": {
         "runtime_dependencies": [],
@@ -10741,6 +10962,9 @@
     }
   },
   "per_crate": {
+    "adler2-2.0.1": {
+      "edition": "2021"
+    },
     "aho-corasick-1.1.5": {
       "edition": "2021"
     },
@@ -10852,6 +11076,10 @@
     "cpufeatures-0.3.0": {
       "edition": "2024"
     },
+    "crc32fast-1.5.4": {
+      "edition": "2021",
+      "build_script": "build.rs"
+    },
     "crypto-common-0.1.7": {
       "edition": "2018"
     },
@@ -10919,12 +11147,18 @@
     "fastrand-2.5.0": {
       "edition": "2018"
     },
+    "fdeflate-0.3.7": {
+      "edition": "2021"
+    },
     "figment-0.10.19": {
       "edition": "2018",
       "build_script": "build.rs"
     },
     "find-msvc-tools-0.1.11": {
       "edition": "2021"
+    },
+    "flate2-1.1.10": {
+      "edition": "2018"
     },
     "foldhash-0.1.5": {
       "edition": "2021"
@@ -11106,6 +11340,12 @@
     "memchr-2.8.3": {
       "edition": "2021"
     },
+    "miniz_oxide-0.8.9": {
+      "edition": "2021"
+    },
+    "miniz_oxide-0.9.1": {
+      "edition": "2021"
+    },
     "mio-1.2.2": {
       "edition": "2021"
     },
@@ -11180,6 +11420,9 @@
       "edition": "2018"
     },
     "pkg-config-0.3.34": {
+      "edition": "2021"
+    },
+    "png-0.18.1": {
       "edition": "2021"
     },
     "polling-3.11.0": {
@@ -11327,6 +11570,9 @@
     },
     "signal-hook-registry-1.4.8": {
       "edition": "2015"
+    },
+    "simd-adler32-0.3.10": {
+      "edition": "2018"
     },
     "slab-0.4.12": {
       "edition": "2018"
@@ -11548,6 +11794,9 @@
     "zerocopy-derive-0.8.56": {
       "edition": "2021",
       "proc_macro": true
+    },
+    "zlib-rs-0.6.8": {
+      "edition": "2021"
     },
     "zmij-1.0.23": {
       "edition": "2021",

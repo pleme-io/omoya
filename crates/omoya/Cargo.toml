@@ -88,6 +88,7 @@ kanshou = "0.1"
 # dependency edge, only an honest one.
 hairetsu = { path = "../hairetsu" }
 fontdue = "0.9"
+png = "0.18"
 # kukaku (区画) — the split-tree layout algebra. Extracted from tear-types
 # when omoya became its third consumer (tear's panes, mado's planned rebase,
 # and this): the algebra used only "an id copies and two compare", so the id

@@ -568,6 +568,7 @@ where
         // ★ M3. Whether the dmabuf global is advertised is a property of the
         // renderer, so the loop cannot be driven by one that has no answer.
         + crate::nuri_renderer::AdvertisesDmabuf
+        + crate::nuri_renderer::PaintsGround
         // ★ `ExportMem` so the seat can be SCREENSHOT. This is a real
         // constraint on what may drive this loop, and it is the right one: a
         // renderer whose output cannot be read back produces a seat that can
@@ -1051,8 +1052,9 @@ where
                 }
                 return smithay::reexports::calloop::timer::TimeoutAction::ToInstant(next);
             };
+            crate::ground::adopt(&mut data.state.ground, &mut renderer, &mut damage_tracker);
             // Publish why, for the `owed` leaf. Cheap: a decode of one u64
-            // against a 7-element table, on a path that is by definition
+            // against an 8-element table, on a path that is by definition
             // about to do far more work than this.
             {
                 let names: Vec<&'static str> =
@@ -2411,11 +2413,10 @@ where
     {
         let ledger = data.state.owed.ledger();
         let mut last_minute: Option<u64> = None;
+        let (output_w, output_h) = (mode.size.w, mode.size.h);
         event_loop.handle().insert_source(
-            smithay::reexports::calloop::timer::Timer::from_duration(
-                std::time::Duration::from_secs(1),
-            ),
-            move |_, _, _| {
+            smithay::reexports::calloop::timer::Timer::immediate(),
+            move |_, _, data| {
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_or(0, |d| d.as_secs());
@@ -2423,6 +2424,18 @@ where
                 if last_minute != Some(minute) {
                     last_minute = Some(minute);
                     ledger.mark(crate::owed::Owed::Chrome);
+                }
+                let image = data.state.config.ground.image.as_deref();
+                let ground = data.state.ground.refresh(image, output_w, output_h);
+                if let Some(refused) = &ground.refused {
+                    tracing::warn!(
+                        path = ?image,
+                        error = %refused,
+                        "ground.image cannot be shown; the ground stays flat"
+                    );
+                }
+                if ground.repaint {
+                    ledger.mark(crate::owed::Owed::Ground);
                 }
                 smithay::reexports::calloop::timer::TimeoutAction::ToDuration(
                     std::time::Duration::from_secs(1),

@@ -349,6 +349,7 @@ pub struct Omoya {
     /// claiming to store a status we then ignore would be the same shape as
     /// the stub. This stores exactly what is acted on.
     pub pointer_hidden: bool,
+    pub ground: crate::ground::Ground,
 }
 
 impl Omoya {
@@ -450,6 +451,7 @@ impl Omoya {
             // guess dressed as a position.
             pointer_location: (0.0, 0.0).into(),
             pointer_hidden: false,
+            ground: crate::ground::Ground::default(),
             mode,
             reserved,
             owed_vt_switches: 0,

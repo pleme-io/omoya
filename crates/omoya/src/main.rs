@@ -26,6 +26,7 @@ mod drm;
 mod evdev_backend;
 mod floatpos;
 mod grab;
+mod ground;
 mod handlers;
 mod input;
 mod introspect;

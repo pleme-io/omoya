@@ -81,6 +81,13 @@ pub struct OmoyaConfig {
     pub ukeire: crate::ukeire::Ukeire,
     /// Whether the focused window gets an outline. See [`FocusRing`].
     pub focus_ring: FocusRing,
+    pub ground: GroundConfig,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct GroundConfig {
+    pub image: Option<std::path::PathBuf>,
 }
 
 /// The outline drawn around the focused window.
@@ -352,6 +359,7 @@ impl OmoyaConfig {
             damage: DamageConfig::default(),
             ukeire: crate::ukeire::Ukeire::default(),
             focus_ring: FocusRing::default(),
+            ground: GroundConfig::default(),
         }
     }
 
@@ -704,6 +712,7 @@ mod tests {
             "ukeire: {repeat: {}}\n",
             "ukeire: {scroll: {}}\n",
             "ukeire: {pointer: {}}\n",
+            "ground: {}\n",
         ] {
             assert!(
                 serde_yaml::from_str::<OmoyaConfig>(yaml).is_ok(),
@@ -731,5 +740,17 @@ mod tests {
         let on: OmoyaConfig = serde_yaml::from_str("focus_ring: accent\n").unwrap();
         assert_eq!(on.focus_ring, FocusRing::Accent);
         assert!(serde_yaml::from_str::<OmoyaConfig>("focus_ring: teal\n").is_err());
+    }
+
+    #[test]
+    fn the_ground_image_is_an_optional_path() {
+        assert_eq!(OmoyaConfig::bare().ground.image, None);
+        let set: OmoyaConfig =
+            serde_yaml::from_str("ground:\n  image: /a/g.png\n").expect("the key parses");
+        assert_eq!(
+            set.ground.image.as_deref(),
+            Some(std::path::Path::new("/a/g.png"))
+        );
+        assert!(serde_yaml::from_str::<OmoyaConfig>("ground: {img: /a}\n").is_err());
     }
 }
