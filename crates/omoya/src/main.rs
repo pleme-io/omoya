@@ -143,18 +143,25 @@ enum SessionBackend {
 /// `Evdev` reads `/dev/input/event*` directly and retires TWO C libraries —
 /// `libinput.so.10` and `libudev.so.1`. It is the destination.
 ///
-/// It is not the default yet because libinput's real value is POLICY —
-/// pointer acceleration, tap-to-click, gesture recognition, per-device
-/// calibration — and the evdev backend implements none of it. A seat that
-/// swapped silently would feel wrong in ways nobody could name: the pointer
-/// too fast, a touchpad tap doing nothing. That is a worse failure than a
-/// missing feature, because it presents as "the compositor is bad".
+/// libinput's real value was POLICY — pointer acceleration, tap-to-click,
+/// gesture recognition, per-device calibration. A seat that swapped silently
+/// would feel wrong in ways nobody could name: the pointer too fast, a touchpad
+/// tap doing nothing. That is a worse failure than a missing feature, because
+/// it presents as "the compositor is bad". For a touchpad that policy now lives
+/// in `nazoru`, configured by `ukeire.touchpad`; the rest is named below.
 ///
-/// `pending-omoya-input-policy: acceleration, tap-to-click, gestures`
+/// `pending-omoya-input-policy: mouse acceleration, tap-and-drag, pinch and
+/// swipe gestures, palm detection past MT_TOOL_PALM, calibration`
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum InputBackendKind {
     /// evdev straight from the kernel, pure Rust — and now the only one.
     Evdev,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct InputPlan {
+    kind: InputBackendKind,
+    touchpad: nazoru::TouchpadConfig,
 }
 
 /// Which rasterizer paints the frame.
@@ -269,8 +276,9 @@ fn parse_args() -> Result<Args, String> {
                     "libinput" => {
                         return Err("input backend `libinput` is not in this build — the \
                              backend_libinput/backend_udev features are off. `evdev` is \
-                             the only backend, and it implements no pointer \
-                             acceleration, tap-to-click or gestures \
+                             the only backend. Touchpad speed, tap-to-click and \
+                             two-finger scroll are `ukeire.touchpad`; mouse \
+                             acceleration and pinch or swipe gestures do not exist \
                              (pending-omoya-input-policy)."
                             .to_string());
                     }
@@ -341,9 +349,9 @@ fn parse_args() -> Result<Args, String> {
                     "--session logind  The session backend. logind over D-Bus, pure\n",
                     "                  Rust; libseat is NOT LINKED. logind itself is a C\n",
                     "                  daemon — see pending-omoya-direct-session.\n",
-                    "--input evdev     DEFAULT. Kernel evdev, pure Rust. NO pointer\n",
-                    "                  acceleration, tap-to-click or gestures — that is\n",
-                    "                  libinput policy nobody has reimplemented.\n",
+                    "--input evdev     DEFAULT. Kernel evdev, pure Rust. Touchpads go\n",
+                    "                  through nazoru (ukeire.touchpad); a mouse stays raw,\n",
+                    "                  with no acceleration.\n",
                     "--input libinput  the C library, and it carries that policy.\n",
                     "--renderer nuri   The renderer. pleme-io's own, zero dependencies.\n",
                     "                  libpixman is NOT LINKED — the feature is off.\n\n",
@@ -384,7 +392,7 @@ fn run_drm_seat<S, N>(
     introspect: &std::sync::Arc<crate::introspect::OmoyaIntrospect>,
     mut session: S,
     notifier: N,
-    kind: InputBackendKind,
+    input: InputPlan,
     renderer: RendererKind,
 ) -> Result<(), Box<dyn std::error::Error>>
 where
@@ -591,7 +599,7 @@ where
         )?,
     }
 
-    attach_session(event_loop, session, notifier, introspect, kind);
+    attach_session(event_loop, session, notifier, introspect, input);
     Ok(())
 }
 
@@ -608,7 +616,7 @@ fn attach_session<S, N>(
     session: S,
     notifier: N,
     introspect: &std::sync::Arc<crate::introspect::OmoyaIntrospect>,
-    kind: InputBackendKind,
+    input: InputPlan,
 ) where
     S: smithay::backend::session::Session + Clone + 'static,
     N: smithay::reexports::calloop::EventSource<
@@ -628,20 +636,23 @@ fn attach_session<S, N>(
     // notifier can make the input source re-register its fds after a VT
     // switch — see the ActivateSession arm below.
     let mut input_token: Option<smithay::reexports::calloop::RegistrationToken> = None;
+    let InputPlan { kind, touchpad } = input;
     let attached = match kind {
-        InputBackendKind::Evdev => {
-            crate::evdev_backend::EvdevBackend::new(session.clone(), Some(introspect.clone()))
-                .map_err(|e| format!("{e}"))
-                .and_then(|backend| {
-                    event_loop
-                        .handle()
-                        .insert_source(backend, move |event, (), data| {
-                            data.state.process_input_event(event);
-                        })
-                        .map(|token| input_token = Some(token))
-                        .map_err(|e| format!("{e}"))
+        InputBackendKind::Evdev => crate::evdev_backend::EvdevBackend::new(
+            session.clone(),
+            Some(introspect.clone()),
+            touchpad,
+        )
+        .map_err(|e| format!("{e}"))
+        .and_then(|backend| {
+            event_loop
+                .handle()
+                .insert_source(backend, move |event, (), data| {
+                    data.state.process_input_event(event);
                 })
-        }
+                .map(|token| input_token = Some(token))
+                .map_err(|e| format!("{e}"))
+        }),
     };
     match attached {
         Ok(()) => {
@@ -909,6 +920,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         display_handle,
     };
 
+    // ── ★ THE CONFIG FILE, WITH FLAGS STILL WINNING ─────────────────────
+    //
+    // omoya had NO configuration surface until this: a hand-rolled
+    // `std::env::args()` loop and 46 operator-visible values as Rust `const`s.
+    // A non-US operator could not use this seat, and no key could be rebound,
+    // without a recompile.
+    //
+    // Flags override the file rather than the other way round, and for a
+    // compositor that ordering is not a preference: greetd launches omoya with
+    // a command line, so a flag is the escape hatch that exists even when the
+    // yaml is wrong. A bad file that could only be fixed from inside a seat it
+    // prevented from starting would be a trap.
+    let cfg = crate::config::load().with_cli_overrides(args.spawn.clone(), args.launcher.clone());
+    tracing::info!(
+        terminal = ?cfg.terminal,
+        launcher = ?cfg.launcher,
+        remaps = cfg.ukeire.remaps.len(),
+        "seat configuration resolved"
+    );
+
     match args.backend {
         #[cfg(feature = "nested")]
         Backend::Nested => {
@@ -939,7 +970,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &introspect,
                         session,
                         notifier,
-                        args.input,
+                        InputPlan {
+                            kind: args.input,
+                            touchpad: cfg.ukeire.touchpad,
+                        },
                         args.renderer,
                     )?,
                     Err(e) => {
@@ -971,25 +1005,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // rather than re-read from args at chord time because `args` is consumed
     // below, and because the seat's terminal is state the compositor should be
     // able to answer about, not an argument it happens to still be holding.
-    // ── ★ THE CONFIG FILE, WITH FLAGS STILL WINNING ─────────────────────
-    //
-    // omoya had NO configuration surface until this: a hand-rolled
-    // `std::env::args()` loop and 46 operator-visible values as Rust `const`s.
-    // A non-US operator could not use this seat, and no key could be rebound,
-    // without a recompile.
-    //
-    // Flags override the file rather than the other way round, and for a
-    // compositor that ordering is not a preference: greetd launches omoya with
-    // a command line, so a flag is the escape hatch that exists even when the
-    // yaml is wrong. A bad file that could only be fixed from inside a seat it
-    // prevented from starting would be a trap.
-    let cfg = crate::config::load().with_cli_overrides(args.spawn.clone(), args.launcher.clone());
-    tracing::info!(
-        terminal = ?cfg.terminal,
-        launcher = ?cfg.launcher,
-        remaps = cfg.ukeire.remaps.len(),
-        "seat configuration resolved"
-    );
     data.state.session_command = cfg.terminal.clone();
     data.state.launcher_command = cfg.launcher.clone();
     data.state.remaps = cfg.remap_pairs();

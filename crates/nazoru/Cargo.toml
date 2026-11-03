@@ -1,0 +1,19 @@
+[package]
+name = "nazoru"
+description = "nazoru (なぞる) — touchpad policy as a pure state machine fed evdev events: pointer, tap, click, two-finger scroll"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+ishou-tokens = "0.1.17"
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+serde_yaml = "0.9"
+
+[lints.clippy]
+pedantic = "warn"

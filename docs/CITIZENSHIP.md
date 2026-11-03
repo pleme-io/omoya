@@ -353,8 +353,10 @@ not about a gate.
 - **`hairetsu` is not XKB.** One layout, no keymap parsing, no compose, no
   layout switching. It refuses what it cannot serve, which makes the gap loud
   rather than silent — but a refusal is still a gap.
-- **input policy is absent, not ported.** Acceleration, tap-to-click and
-  gestures were libinput's real value and were not reimplemented.
+- **input policy is partly ported.** A touchpad's speed, tap-to-click, clicks
+  and two-finger scroll are `nazoru`, pure Rust with zero `.so`, and unverified
+  on hardware. Mouse acceleration, tap-and-drag and pinch or swipe gestures were
+  libinput's value too and were not reimplemented.
 
 "No C in the compositor binary" is now true and measured. "No C on the seat"
 is not, and the two rows above are the distance between them.

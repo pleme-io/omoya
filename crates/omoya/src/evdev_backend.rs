@@ -24,14 +24,16 @@
 //! Deltas accumulate and flush on `SYN_REPORT`, which is what libinput does
 //! and what the kernel's protocol means.
 //!
-//! ── WHAT THIS DELIBERATELY DOES NOT DO ────────────────────────────────────
-//! No pointer acceleration, no tap-to-click, no gesture recognition, no
-//! calibration. libinput's real value is that policy, and reimplementing it
-//! badly would be worse than linking it. This is the transport; the policy
-//! belongs above, in a typed pleme-io surface, and is named rather than
-//! smuggled in as "good enough defaults".
+//! ── WHERE THE POLICY LIVES ────────────────────────────────────────────────
+//! This file stays the transport. Policy belongs above it, in a typed pleme-io
+//! surface, and is named rather than smuggled in as "good enough defaults".
+//! A multitouch touchpad is handed to `nazoru`, the leaf crate that owns its
+//! speed, tap-to-click, clicks and two-finger scroll, configured by
+//! `ukeire.touchpad` (see `docs/UKEIRE.md`). A mouse takes none of it: raw
+//! deltas with no acceleration, exactly as before.
 //!
-//! `pending-omoya-input-policy: acceleration, tap-to-click, gestures`
+//! `pending-omoya-input-policy: mouse acceleration, tap-and-drag, pinch and
+//! swipe gestures, palm detection past MT_TOOL_PALM, calibration`
 
 use std::collections::HashMap;
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
@@ -71,6 +73,7 @@ pub struct EvdevDevice {
 impl EvdevDevice {
     const CAP_KEYBOARD: u8 = 1 << 0;
     const CAP_POINTER: u8 = 1 << 1;
+    const CAP_TOUCHPAD: u8 = 1 << 2;
 }
 
 impl Device for EvdevDevice {
@@ -155,6 +158,8 @@ pub struct MotionEvent {
     base: Base,
     dx: f64,
     dy: f64,
+    raw_dx: f64,
+    raw_dy: f64,
 }
 impl_event!(MotionEvent);
 
@@ -166,13 +171,14 @@ impl<S: Session> si::PointerMotionEvent<EvdevBackend<S>> for MotionEvent {
         self.dy
     }
     fn delta_x_unaccel(&self) -> f64 {
-        // ★ Identical to the accelerated value, because this backend applies
-        // NO acceleration. Saying so here is honest; returning a differently
-        // scaled number would invent a curve nobody chose.
-        self.dx
+        // ★ For a mouse this is identical to the accelerated value, because a
+        // mouse takes NO acceleration. Saying so here is honest; returning a
+        // differently scaled number would invent a curve nobody chose. A
+        // touchpad carries `nazoru`'s delta before its speed and curve.
+        self.raw_dx
     }
     fn delta_y_unaccel(&self) -> f64 {
-        self.dy
+        self.raw_dy
     }
 }
 
@@ -200,18 +206,30 @@ pub struct AxisEvent {
     base: Base,
     vertical: f64,
     horizontal: f64,
+    finger: Option<FingerAxis>,
 }
 impl_event!(AxisEvent);
 
+#[derive(Debug, Clone, Copy)]
+struct FingerAxis {
+    vertical: bool,
+    horizontal: bool,
+    natural: bool,
+}
+
 impl<S: Session> si::PointerAxisEvent<EvdevBackend<S>> for AxisEvent {
     fn amount(&self, axis: Axis) -> Option<f64> {
-        Some(match axis {
-            Axis::Vertical => self.vertical,
-            Axis::Horizontal => self.horizontal,
-        })
+        let (value, present) = match axis {
+            Axis::Vertical => (self.vertical, self.finger.is_none_or(|f| f.vertical)),
+            Axis::Horizontal => (self.horizontal, self.finger.is_none_or(|f| f.horizontal)),
+        };
+        present.then_some(value)
     }
 
     fn amount_v120(&self, axis: Axis) -> Option<f64> {
+        if self.finger.is_some() {
+            return None;
+        }
         // ★ A wheel DETENT is 120 in the v120 convention, and the kernel's
         // REL_WHEEL reports 1 per detent. Multiplying is the translation, not
         // a scale factor someone picked.
@@ -226,14 +244,133 @@ impl<S: Session> si::PointerAxisEvent<EvdevBackend<S>> for AxisEvent {
     }
 
     fn source(&self) -> AxisSource {
-        // A discrete wheel. `Finger` and `Continuous` describe touchpads,
-        // which this backend does not decode.
-        AxisSource::Wheel
+        // A discrete wheel, unless `nazoru` decoded this from a touchpad.
+        if self.finger.is_some() {
+            AxisSource::Finger
+        } else {
+            AxisSource::Wheel
+        }
     }
 
     fn relative_direction(&self, _axis: Axis) -> AxisRelativeDirection {
-        AxisRelativeDirection::Identical
+        if self.finger.is_some_and(|f| f.natural) {
+            AxisRelativeDirection::Inverted
+        } else {
+            AxisRelativeDirection::Identical
+        }
     }
+}
+
+fn event_of<S: Session>(
+    action: nazoru::Action,
+    device: &EvdevDevice,
+) -> InputEvent<EvdevBackend<S>> {
+    let base = |time: u64| Base {
+        device: device.clone(),
+        time,
+    };
+    match action {
+        nazoru::Action::Motion {
+            dx,
+            dy,
+            raw_dx,
+            raw_dy,
+            time_us,
+        } => InputEvent::PointerMotion {
+            event: MotionEvent {
+                base: base(time_us),
+                dx,
+                dy,
+                raw_dx,
+                raw_dy,
+            },
+        },
+        nazoru::Action::Button {
+            code,
+            pressed,
+            time_us,
+        } => InputEvent::PointerButton {
+            event: ButtonEvent {
+                base: base(time_us),
+                code,
+                state: if pressed {
+                    ButtonState::Pressed
+                } else {
+                    ButtonState::Released
+                },
+            },
+        },
+        nazoru::Action::Scroll {
+            v120_x,
+            v120_y,
+            natural,
+            time_us,
+        } => InputEvent::PointerAxis {
+            event: AxisEvent {
+                base: base(time_us),
+                vertical: nazoru::axis_value(v120_y),
+                horizontal: nazoru::axis_value(v120_x),
+                finger: Some(FingerAxis {
+                    vertical: v120_y != 0.0,
+                    horizontal: v120_x != 0.0,
+                    natural,
+                }),
+            },
+        },
+        nazoru::Action::ScrollStop {
+            horizontal,
+            vertical,
+            time_us,
+        } => InputEvent::PointerAxis {
+            event: AxisEvent {
+                base: base(time_us),
+                vertical: 0.0,
+                horizontal: 0.0,
+                finger: Some(FingerAxis {
+                    vertical,
+                    horizontal,
+                    natural: false,
+                }),
+            },
+        },
+    }
+}
+
+fn capabilities_of(dev: &evdev::Device) -> nazoru::Capabilities {
+    nazoru::Capabilities {
+        props: dev.properties().iter().map(|p| p.0).collect(),
+        keys: dev
+            .supported_keys()
+            .map(|k| k.iter().map(|c| c.0).collect())
+            .unwrap_or_default(),
+        rel: dev
+            .supported_relative_axes()
+            .map(|a| a.iter().map(|c| c.0).collect())
+            .unwrap_or_default(),
+        abs: dev
+            .supported_absolute_axes()
+            .map(|a| a.iter().map(|c| c.0).collect())
+            .unwrap_or_default(),
+    }
+}
+
+fn surface_of(dev: &evdev::Device) -> Option<nazoru::Surface> {
+    let (mut x, mut y, mut slot) = (None, None, None);
+    for (code, info) in dev.get_absinfo().ok()? {
+        let axis = nazoru::AbsAxis {
+            value: info.value(),
+            minimum: info.minimum(),
+            maximum: info.maximum(),
+            resolution: info.resolution(),
+        };
+        match code.0 {
+            nazoru::code::ABS_MT_POSITION_X => x = Some(axis),
+            nazoru::code::ABS_MT_POSITION_Y => y = Some(axis),
+            nazoru::code::ABS_MT_SLOT => slot = Some(axis),
+            _ => {}
+        }
+    }
+    nazoru::Surface::new(x?, y?, slot?)
 }
 
 // ── THE BACKEND ───────────────────────────────────────────────────────────
@@ -261,6 +398,7 @@ struct Entry {
     /// re-armed, and this is the only thing that distinguishes an unplug from
     /// a revoke.
     gone: bool,
+    pad: Option<nazoru::Touchpad>,
 }
 
 /// Input devices, read straight from the kernel.
@@ -276,6 +414,7 @@ pub struct EvdevBackend<S: Session> {
     /// and dependent on `input` group membership the session exists to avoid
     /// needing.
     session: S,
+    touchpad: nazoru::TouchpadConfig,
     devices: Vec<Entry>,
     /// Deltas accumulating until `SYN_REPORT`. See the header.
     pending: HashMap<PathBuf, Accum>,
@@ -335,6 +474,7 @@ impl<S: Session> EvdevBackend<S> {
     pub fn new(
         mut session: S,
         introspect: Option<std::sync::Arc<crate::introspect::OmoyaIntrospect>>,
+        touchpad: nazoru::TouchpadConfig,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let monitor = match crate::uevent::UeventMonitor::new() {
             Ok(m) => Some(m),
@@ -360,14 +500,8 @@ impl<S: Session> EvdevBackend<S> {
                 continue;
             }
 
-            match Self::open_one(&mut session, &path) {
-                Ok(Some((meta, dev))) => devices.push(Entry {
-                    meta,
-                    dev,
-                    polled: false,
-                    armed: true,
-                    gone: false,
-                }),
+            match Self::open_one(&mut session, &path, touchpad) {
+                Ok(Some(entry)) => devices.push(entry),
                 // Not an input device we can use — no keyboard and no pointer.
                 Ok(None) => {}
                 Err(e) => {
@@ -384,6 +518,7 @@ impl<S: Session> EvdevBackend<S> {
         let me = Self {
             introspect,
             session,
+            touchpad,
             devices,
             pending: HashMap::new(),
             monitor,
@@ -410,11 +545,13 @@ impl<S: Session> EvdevBackend<S> {
             }
             let kb = e.meta.caps & EvdevDevice::CAP_KEYBOARD != 0;
             let pt = e.meta.caps & EvdevDevice::CAP_POINTER != 0;
+            let tp = e.meta.caps & EvdevDevice::CAP_TOUCHPAD != 0;
             out.push_str(&format!(
-                "{} [{}{}] armed={} polled={} gone={}",
+                "{} [{}{}{}] armed={} polled={} gone={}",
                 e.meta.path.display(),
                 if kb { "k" } else { "" },
                 if pt { "p" } else { "" },
+                if tp { "t" } else { "" },
                 e.armed,
                 e.polled,
                 e.gone
@@ -431,7 +568,8 @@ impl<S: Session> EvdevBackend<S> {
     fn open_one(
         session: &mut S,
         path: &Path,
-    ) -> Result<Option<(EvdevDevice, evdev::Device)>, Box<dyn std::error::Error>> {
+        touchpad: nazoru::TouchpadConfig,
+    ) -> Result<Option<Entry>, Box<dyn std::error::Error>> {
         use smithay::reexports::rustix::fs::OFlags;
 
         let fd: OwnedFd = session
@@ -439,14 +577,18 @@ impl<S: Session> EvdevBackend<S> {
             .map_err(|e| format!("{e:?}"))?;
         let dev = evdev::Device::from_fd(fd)?;
 
-        // evdev 0.13 names these `KeyCode` and `RelativeAxisCode` — the 0.12
-        // spellings (`Key`, `RelativeAxisType`) are gone.
-        let keys = dev.supported_keys();
-        let has_keyboard = keys.is_some_and(|k| k.contains(evdev::KeyCode::KEY_A));
-        let has_pointer = keys.is_some_and(|k| k.contains(evdev::KeyCode::BTN_LEFT))
-            || dev
-                .supported_relative_axes()
-                .is_some_and(|a| a.contains(evdev::RelativeAxisCode::REL_X));
+        let capabilities = capabilities_of(&dev);
+        let class = capabilities.classify();
+        let name = dev.name().unwrap_or("unnamed").to_string();
+        let surface = (class.touchpad && touchpad.enabled)
+            .then(|| surface_of(&dev))
+            .flatten();
+        if class.touchpad && touchpad.enabled && surface.is_none() {
+            tracing::warn!(device = %name, path = %path.display(), "touchpad reports unusable axes — left undecoded");
+        }
+        let pad = surface.map(|s| nazoru::Touchpad::new(touchpad, s, capabilities.is_clickpad()));
+        let has_keyboard = class.keyboard;
+        let has_pointer = class.pointer || pad.is_some();
 
         if !has_keyboard && !has_pointer {
             return Ok(None);
@@ -459,14 +601,24 @@ impl<S: Session> EvdevBackend<S> {
         if has_pointer {
             caps |= EvdevDevice::CAP_POINTER;
         }
+        if pad.is_some() {
+            caps |= EvdevDevice::CAP_TOUCHPAD;
+        }
 
         let meta = EvdevDevice {
             path: path.to_path_buf(),
-            name: dev.name().unwrap_or("unnamed").to_string(),
+            name,
             caps,
         };
-        tracing::info!(device = %meta.name, path = %path.display(), keyboard = has_keyboard, pointer = has_pointer, "input device");
-        Ok(Some((meta, dev)))
+        tracing::info!(device = %meta.name, path = %path.display(), keyboard = has_keyboard, pointer = has_pointer, touchpad = pad.is_some(), width_mm = surface.map(|s| s.width_mm()), height_mm = surface.map(|s| s.height_mm()), slots = surface.map(|s| s.slots()), "input device");
+        Ok(Some(Entry {
+            meta,
+            dev,
+            polled: false,
+            armed: true,
+            gone: false,
+            pad,
+        }))
     }
 }
 
@@ -540,22 +692,16 @@ impl<S: Session> EvdevBackend<S> {
                     if self.devices.iter().any(|e| e.meta.path == path) {
                         continue;
                     }
-                    match Self::open_one(&mut self.session, &path) {
-                        Ok(Some((meta, dev))) => {
-                            tracing::info!(device = %meta.name, path = %path.display(), "input device HOTPLUGGED");
+                    match Self::open_one(&mut self.session, &path, self.touchpad) {
+                        Ok(Some(entry)) => {
+                            tracing::info!(device = %entry.meta.name, path = %path.display(), "input device HOTPLUGGED");
                             callback(
                                 InputEvent::DeviceAdded {
-                                    device: meta.clone(),
+                                    device: entry.meta.clone(),
                                 },
                                 &mut (),
                             );
-                            self.devices.push(Entry {
-                                meta,
-                                dev,
-                                polled: false,
-                                armed: true,
-                                gone: false,
-                            });
+                            self.devices.push(entry);
                             self.dirty = true;
                         }
                         Ok(None) => {}
@@ -572,6 +718,13 @@ impl<S: Session> EvdevBackend<S> {
                     e.gone = true;
                     self.pending.remove(&path);
                     tracing::info!(device = %e.meta.name, path = %path.display(), "input device UNPLUGGED");
+                    if let Some(pad) = e.pad.as_mut() {
+                        let mut owed = Vec::new();
+                        pad.reset(&mut owed);
+                        for action in owed {
+                            callback(event_of(action, &e.meta), &mut ());
+                        }
+                    }
                     callback(InputEvent::DeviceRemoved { device: e.meta }, &mut ());
                     // ★ NOT dropped here. The fd is still in the poll set, and
                     // dropping it now closes it while calloop still believes
@@ -647,6 +800,7 @@ impl<S: Session> EvdevBackend<S> {
     where
         F: FnMut(InputEvent<Self>),
     {
+        let mut actions = Vec::new();
         // Disjoint field borrows: `devices`, `pending` and `dirty` are three
         // separate fields of `self`, so the loop may hold all three.
         for entry in &mut self.devices {
@@ -660,6 +814,7 @@ impl<S: Session> EvdevBackend<S> {
                 armed,
                 polled: _,
                 gone: _,
+                pad,
             } = entry;
             if !*armed {
                 continue;
@@ -669,6 +824,12 @@ impl<S: Session> EvdevBackend<S> {
                 Err(e) => {
                     if disarm_on_fault(meta, armed, &e) {
                         self.dirty = true;
+                        if let Some(pad) = pad.as_mut() {
+                            pad.reset(&mut actions);
+                            for action in actions.drain(..) {
+                                callback(event_of(action, meta));
+                            }
+                        }
                     }
                     continue;
                 }
@@ -683,6 +844,19 @@ impl<S: Session> EvdevBackend<S> {
                     u64::try_from(d.as_micros()).unwrap_or(0)
                 };
                 acc.time = time;
+                if let Some(pad) = pad.as_mut() {
+                    let (kind, number) = (ev.event_type().0, ev.code());
+                    pad.feed(
+                        nazoru::RawEvent::from_kernel(kind, number, ev.value(), time),
+                        &mut actions,
+                    );
+                    for action in actions.drain(..) {
+                        callback(event_of(action, meta));
+                    }
+                    if nazoru::owned_by_pad(kind, number) {
+                        continue;
+                    }
+                }
                 let base = Base {
                     device: meta.clone(),
                     time,
@@ -790,6 +964,8 @@ impl<S: Session> EvdevBackend<S> {
                                     base: base.clone(),
                                     dx: a.dx,
                                     dy: a.dy,
+                                    raw_dx: a.dx,
+                                    raw_dy: a.dy,
                                 },
                             });
                         }
@@ -800,6 +976,7 @@ impl<S: Session> EvdevBackend<S> {
                                     // ★ NEGATED — see the original note.
                                     vertical: -a.wheel,
                                     horizontal: a.hwheel,
+                                    finger: None,
                                 },
                             });
                         }
@@ -1092,6 +1269,189 @@ mod tests {
             )),
             38
         );
+    }
+
+    fn device() -> EvdevDevice {
+        EvdevDevice {
+            path: PathBuf::from("/dev/input/event11"),
+            name: "t".into(),
+            caps: EvdevDevice::CAP_POINTER | EvdevDevice::CAP_TOUCHPAD,
+        }
+    }
+
+    fn pad_axis(action: nazoru::Action) -> AxisEvent {
+        let InputEvent::PointerAxis { event } = event_of::<NoSession>(action, &device()) else {
+            panic!("expected an axis event");
+        };
+        event
+    }
+
+    type Axes = dyn si::PointerAxisEvent<EvdevBackend<NoSession>>;
+
+    #[test]
+    fn nazorus_kernel_codes_are_the_kernels() {
+        use evdev::{AbsoluteAxisCode as A, EventType as E, KeyCode as K, PropType as P};
+        use nazoru::code;
+        assert_eq!(code::EV_SYN, E::SYNCHRONIZATION.0);
+        assert_eq!(code::EV_KEY, E::KEY.0);
+        assert_eq!(code::EV_ABS, E::ABSOLUTE.0);
+        assert_eq!(code::SYN_REPORT, evdev::SynchronizationCode::SYN_REPORT.0);
+        assert_eq!(code::KEY_A, K::KEY_A.0);
+        assert_eq!(code::BTN_MISC, K::BTN_0.0);
+        assert_eq!(code::BTN_LEFT, K::BTN_LEFT.0);
+        assert_eq!(code::BTN_RIGHT, K::BTN_RIGHT.0);
+        assert_eq!(code::BTN_TASK, K::BTN_TASK.0);
+        assert_eq!(code::BTN_TOOL_PEN, K::BTN_TOOL_PEN.0);
+        assert_eq!(code::BTN_TOOL_FINGER, K::BTN_TOOL_FINGER.0);
+        assert_eq!(code::BTN_TOUCH, K::BTN_TOUCH.0);
+        assert_eq!(code::REL_X, evdev::RelativeAxisCode::REL_X.0);
+        assert_eq!(code::ABS_MT_SLOT, A::ABS_MT_SLOT.0);
+        assert_eq!(code::ABS_MT_POSITION_X, A::ABS_MT_POSITION_X.0);
+        assert_eq!(code::ABS_MT_POSITION_Y, A::ABS_MT_POSITION_Y.0);
+        assert_eq!(code::ABS_MT_TOOL_TYPE, A::ABS_MT_TOOL_TYPE.0);
+        assert_eq!(code::ABS_MT_TRACKING_ID, A::ABS_MT_TRACKING_ID.0);
+        assert_eq!(code::INPUT_PROP_DIRECT, P::DIRECT.0);
+        assert_eq!(code::INPUT_PROP_BUTTONPAD, P::BUTTONPAD.0);
+    }
+
+    #[test]
+    fn a_wheel_event_is_byte_for_byte_what_a_mouse_always_sent() {
+        let wheel = AxisEvent {
+            base: Base {
+                device: device(),
+                time: 0,
+            },
+            vertical: -1.0,
+            horizontal: 2.0,
+            finger: None,
+        };
+        let axes: &Axes = &wheel;
+        assert_eq!(axes.amount(Axis::Vertical), Some(-1.0));
+        assert_eq!(axes.amount(Axis::Horizontal), Some(2.0));
+        assert_eq!(axes.amount_v120(Axis::Vertical), Some(-120.0));
+        assert_eq!(axes.amount_v120(Axis::Horizontal), Some(240.0));
+        assert_eq!(axes.source(), AxisSource::Wheel);
+        assert_eq!(
+            axes.relative_direction(Axis::Vertical),
+            AxisRelativeDirection::Identical
+        );
+    }
+
+    #[test]
+    fn a_mouse_motion_reports_one_delta_both_ways() {
+        let motion = MotionEvent {
+            base: Base {
+                device: device(),
+                time: 0,
+            },
+            dx: 3.0,
+            dy: 4.0,
+            raw_dx: 3.0,
+            raw_dy: 4.0,
+        };
+        let event: &dyn si::PointerMotionEvent<EvdevBackend<NoSession>> = &motion;
+        assert_eq!(event.delta_x(), event.delta_x_unaccel());
+        assert_eq!(event.delta_y(), event.delta_y_unaccel());
+    }
+
+    #[test]
+    fn a_touchpad_motion_keeps_its_raw_delta_apart_from_the_accelerated_one() {
+        let action = nazoru::Action::Motion {
+            dx: 25.0,
+            dy: -50.0,
+            raw_dx: 10.0,
+            raw_dy: -20.0,
+            time_us: 8_000,
+        };
+        let InputEvent::PointerMotion { event } = event_of::<NoSession>(action, &device()) else {
+            panic!("expected motion");
+        };
+        let motion: &dyn si::PointerMotionEvent<EvdevBackend<NoSession>> = &event;
+        assert_eq!((motion.delta_x(), motion.delta_y()), (25.0, -50.0));
+        assert_eq!(
+            (motion.delta_x_unaccel(), motion.delta_y_unaccel()),
+            (10.0, -20.0)
+        );
+        assert_eq!(motion.time(), 8_000);
+    }
+
+    #[test]
+    fn a_touchpad_button_keeps_its_code_and_state() {
+        let press = nazoru::Action::Button {
+            code: 0x111,
+            pressed: true,
+            time_us: 1,
+        };
+        let InputEvent::PointerButton { event } = event_of::<NoSession>(press, &device()) else {
+            panic!("expected a button");
+        };
+        let button: &dyn si::PointerButtonEvent<EvdevBackend<NoSession>> = &event;
+        assert_eq!(button.button_code(), 0x111);
+        assert_eq!(button.state(), ButtonState::Pressed);
+        let release = nazoru::Action::Button {
+            code: 0x111,
+            pressed: false,
+            time_us: 2,
+        };
+        let InputEvent::PointerButton { event } = event_of::<NoSession>(release, &device()) else {
+            panic!("expected a button");
+        };
+        let button: &dyn si::PointerButtonEvent<EvdevBackend<NoSession>> = &event;
+        assert_eq!(button.state(), ButtonState::Released);
+    }
+
+    #[test]
+    fn a_finger_scroll_is_continuous_with_no_v120_on_the_wire() {
+        let scroll = pad_axis(nazoru::Action::Scroll {
+            v120_x: 0.0,
+            v120_y: -240.0,
+            natural: true,
+            time_us: 1,
+        });
+        let axes: &Axes = &scroll;
+        assert_eq!(axes.source(), AxisSource::Finger);
+        assert_eq!(axes.amount(Axis::Vertical), Some(-30.0));
+        assert_eq!(
+            axes.amount(Axis::Horizontal),
+            None,
+            "Some(0.0) here would send axis_stop on every frame"
+        );
+        assert_eq!(axes.amount_v120(Axis::Vertical), None);
+        assert_eq!(axes.amount_v120(Axis::Horizontal), None);
+        assert_eq!(
+            axes.relative_direction(Axis::Vertical),
+            AxisRelativeDirection::Inverted
+        );
+    }
+
+    #[test]
+    fn a_traditional_finger_scroll_is_not_marked_inverted() {
+        let scroll = pad_axis(nazoru::Action::Scroll {
+            v120_x: 120.0,
+            v120_y: 0.0,
+            natural: false,
+            time_us: 1,
+        });
+        let axes: &Axes = &scroll;
+        assert_eq!(axes.amount(Axis::Horizontal), Some(15.0));
+        assert_eq!(axes.amount(Axis::Vertical), None);
+        assert_eq!(
+            axes.relative_direction(Axis::Horizontal),
+            AxisRelativeDirection::Identical
+        );
+    }
+
+    #[test]
+    fn a_finger_stop_is_a_zero_on_exactly_the_axes_that_scrolled() {
+        let stop = pad_axis(nazoru::Action::ScrollStop {
+            horizontal: false,
+            vertical: true,
+            time_us: 1,
+        });
+        let axes: &Axes = &stop;
+        assert_eq!(axes.source(), AxisSource::Finger);
+        assert_eq!(axes.amount(Axis::Vertical), Some(0.0));
+        assert_eq!(axes.amount(Axis::Horizontal), None);
     }
 
     #[test]

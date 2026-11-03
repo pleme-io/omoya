@@ -50,10 +50,11 @@
 //!   runaway held key inside an application. ukeire sets the seat's advertised
 //!   pace. Two different questions, and keeping them apart is what lets the
 //!   seat be fast while a password field stays safe.
-//! - **Pointer acceleration, tap-to-click, natural-scroll-by-device.** omoya
-//!   reads raw evdev, not libinput, so there is no acceleration layer to
-//!   configure — the knobs do not exist to expose. Named here so their
-//!   absence reads as a measured fact rather than an oversight.
+//! - **The touchpad state machine.** `ukeire.touchpad` holds its typed knobs,
+//!   and `nazoru` owns what they mean: speed, tap-to-click, clicks and
+//!   two-finger scroll. A mouse has no acceleration layer to configure, so
+//!   those knobs do not exist for it. Named here so that absence reads as a
+//!   measured fact rather than an oversight.
 //!
 //! ── ★ TIER HONESTY ───────────────────────────────────────────────────────
 //! M0 is plain typed Rust plus shikumi config. The `(defukeire …)` tatara-lisp
@@ -187,31 +188,16 @@ pub const DEFAULT_CURSOR_SCALE: i32 = 2;
 /// Splitting them also removes the need for a `factor != 0` rule: dead scroll
 /// is not a small magnitude, it is not a direction at all, and has no
 /// spelling here.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum ScrollDirection {
-    /// The content follows the wheel: wheel down scrolls down. What omoya has
-    /// always done, so it stays the default.
-    #[default]
-    Traditional,
-    /// The content follows the fingers: wheel down scrolls the view up.
-    Natural,
-}
-
-impl ScrollDirection {
-    /// `+1.0` or `-1.0`, to multiply a magnitude by.
-    ///
-    /// The ONE place a direction becomes a sign. Every consumer multiplies by
-    /// this rather than deciding for itself, so a second inversion cannot be
-    /// introduced downstream.
-    #[must_use]
-    pub const fn sign(self) -> f64 {
-        match self {
-            Self::Traditional => 1.0,
-            Self::Natural => -1.0,
-        }
-    }
-}
+///
+/// `traditional`: the content follows the wheel: wheel down scrolls down. What
+/// omoya has always done, so it stays the wheel's default. `natural`: the
+/// content follows the fingers: wheel down scrolls the view up, and the
+/// touchpad's default.
+///
+/// `sign()` is the ONE place a direction becomes a sign. Every consumer
+/// multiplies by it rather than deciding for itself, so a second inversion
+/// cannot be introduced downstream.
+pub use nazoru::ScrollDirection;
 
 /// The modifier the seat's whole chord vocabulary hangs off.
 ///
@@ -429,6 +415,7 @@ pub struct Ukeire {
     pub scroll: Scroll,
     /// How the pointer is presented.
     pub pointer: Pointer,
+    pub touchpad: nazoru::TouchpadConfig,
     /// Which modifier the chord vocabulary hangs off.
     pub modifier: SeatModifier,
     /// evdev-level rewrites, proven safe by their own type.
@@ -448,6 +435,7 @@ impl Default for Ukeire {
             repeat: Repeat::default(),
             scroll: Scroll::default(),
             pointer: Pointer::default(),
+            touchpad: nazoru::TouchpadConfig::default(),
             modifier: SeatModifier::default(),
             remaps: Remaps::unchecked(crate::remap::DEFAULT_REMAPS),
         }
@@ -826,6 +814,37 @@ mod tests {
             "a negative factor must not invert direction: {}",
             neg.v120_multiplier()
         );
+    }
+
+    #[test]
+    fn the_touchpad_defaults_to_natural_and_leaves_the_wheel_traditional() {
+        let u = Ukeire::default();
+        assert_eq!(u.scroll.direction, ScrollDirection::Traditional);
+        assert_eq!(u.touchpad.scroll_direction, ScrollDirection::Natural);
+        assert!(u.touchpad.enabled);
+        assert!(u.touchpad.tap_to_click);
+    }
+
+    #[test]
+    fn the_touchpad_block_parses_under_ukeire_and_changes_nothing_beside_it() {
+        let u: Ukeire = serde_yaml::from_str(
+            "touchpad:\n  enabled: false\n  speed: 1.5\n  scroll_direction: traditional\n",
+        )
+        .unwrap();
+        assert!(!u.touchpad.enabled);
+        assert!((u.touchpad.speed.get() - 1.5).abs() < f64::EPSILON);
+        assert_eq!(u.touchpad.scroll_direction, ScrollDirection::Traditional);
+        assert_eq!(u.scroll, Scroll::default());
+        assert_eq!(u.remaps, Ukeire::default().remaps);
+        assert!(serde_yaml::from_str::<Ukeire>("touchpad: {spede: 1}\n").is_err());
+    }
+
+    #[test]
+    fn the_direction_keeps_its_yaml_spelling_after_moving_to_the_leaf_crate() {
+        let natural: Scroll = serde_yaml::from_str("direction: natural\n").unwrap();
+        assert_eq!(natural.direction, ScrollDirection::Natural);
+        let traditional: Scroll = serde_yaml::from_str("direction: traditional\n").unwrap();
+        assert_eq!(traditional.direction, ScrollDirection::Traditional);
     }
 
     // ── Modifier ────────────────────────────────────────────────────────

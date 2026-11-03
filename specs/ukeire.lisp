@@ -63,6 +63,24 @@
   :pointer (pointer
              :cursor-scale 2)         ; 1..6 screen px per mask cell
 
+  ;; ── How a touchpad is READ ─────────────────────────────────────────────
+  ;;
+  ;; `nazoru` owns what these mean. Unverified on hardware: see docs/UKEIRE.md.
+  :touchpad (touchpad
+              :enabled true
+              :speed 1.0                 ; 0.1..5, times 10 px/mm
+              :acceleration :adaptive    ; :flat | :adaptive
+              :accel-knee-mm-s 50        ; 0..500
+              :accel-slope 0.01          ; 0..0.1
+              :accel-max-gain 2.5        ; 1..5
+              :tap-to-click true
+              :tap-max-ms 180            ; 50..500
+              :tap-max-travel-mm 2.0     ; 0.5..10
+              :scroll-direction :natural ; :natural | :traditional
+              :scroll-speed 1.0          ; 0.1..5
+              :right-click-width-pct 50  ; 10..100
+              :right-click-height-pct 20) ; 5..50
+
   ;; ── Which modifier the chord vocabulary hangs off ──────────────────────
   ;;
   ;; ★ TWO VARIANTS, BOTH KNOWN-SAFE. An arbitrary modifier would let someone

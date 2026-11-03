@@ -315,7 +315,22 @@ Bootstrap is not a concern — measured: `commit(…, event: true)` generates a 
 
 **Entry:** **S-1 (a cursor)** and S-3 (device introspection). *The draft said S-2 + S-3; its real blocker is the pointer being visible.*
 
-Smallest first: stop the touchpad lying (`CAP_POINTER` requires `REL_X`); stable device `id()` from `input_id()`, not `/dev/input/eventN`; hi-res scroll (`REL_WHEEL_HI_RES`, reusing the 120-per-detent convention already present). Then a **new leaf crate** — no smithay, no seat — with `PointerTransfer = Flat { scale } | Adaptive { … }` over `ishou_tokens::Refined`, a pure `apply(raw, dt) -> delta`, shipped with **identity as the default** so landing it is a no-op. Wire at the SYN flush; keep raw in `delta_unaccel`. Flipping the default is a **separate commit with a witnessed session**. Then hotplug: a calloop source owning the netlink udev-group socket, emitting `DeviceAdded`/`DeviceRemoved`, handled where `input.rs:277` says `_ => {}`.
+**State, 2026-11-03:**
+
+| item | state |
+|---|---|
+| stop the touchpad lying | ✅ decoded rather than narrowed: `CAP_POINTER` stays `BTN_LEFT \|\| REL_X`, and a multitouch touchpad now does what the claim says |
+| the leaf crate | ✅ `crates/nazoru`, green on a Mac with zero `/dev` and zero seat |
+| `PointerTransfer`, identity default | ✅ type and default; wired for touchpads, whose default is `adaptive` because they had no motion to change |
+| wire the transfer at a mouse's SYN flush | ➖ not done, so a mouse stays byte-identical until the flip below |
+| default-flip with a witnessed session | ➖ not done |
+| witnessed touchpad session on zek | ❌ `pending-nazoru-witness`: no finger has touched this code |
+| hotplug | ✅ `absorb_hotplug` |
+| stable device `id()`, hi-res scroll | ➖ not done |
+
+Design and keys: [`UKEIRE.md`](./UKEIRE.md) "The touchpad".
+
+Smallest first: stop the touchpad lying; stable device `id()` from `input_id()`, not `/dev/input/eventN`; hi-res scroll (`REL_WHEEL_HI_RES`, reusing the 120-per-detent convention already present). Then a **new leaf crate** — no smithay, no seat — with `PointerTransfer = Flat { scale } | Adaptive { … }` over `ishou_tokens::Refined`, a pure `apply(raw, dt) -> delta`, shipped with **identity as the default** so landing it is a no-op. Wire at the SYN flush; keep raw in `delta_unaccel`. Flipping the default is a **separate commit with a witnessed session**. Then hotplug: a calloop source owning the netlink udev-group socket, emitting `DeviceAdded`/`DeviceRemoved`, handled where `input.rs:277` says `_ => {}`.
 
 **Done-predicate:** `introspect.input_devices` goes 3 → 2 → 3 across unplug/replug with no restart. The policy crate is green with a mocked environment, zero `/dev` access, zero seat. The default-flip is its own rev with the operator's verdict recorded against it.
 

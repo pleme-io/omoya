@@ -714,6 +714,7 @@ mod tests {
             "ukeire: {repeat: {}}\n",
             "ukeire: {scroll: {}}\n",
             "ukeire: {pointer: {}}\n",
+            "ukeire: {touchpad: {}}\n",
             "ground: {}\n",
         ] {
             assert!(
@@ -733,6 +734,31 @@ mod tests {
         let cfg: OmoyaConfig = serde_yaml::from_str(plo).expect("plo's config must load");
         assert_eq!(cfg.layout.mode, LayoutMode::Floating);
         assert_eq!(cfg.damage.authority, crate::truedamage::Mode::default());
+    }
+
+    #[test]
+    fn the_config_is_loaded_before_the_seat_attaches_its_input() {
+        let code: String = include_str!("main.rs")
+            .lines()
+            .map(|line| line.split("//").next().unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let load = code
+            .find("crate::config::load()")
+            .expect("main must load the config");
+        let seat = code
+            .find("=> run_drm_seat(")
+            .expect("main must start the DRM seat");
+        assert!(
+            load < seat,
+            "`config::load` at byte {load} runs after the seat starts at byte {seat}, so \
+             the input backend reads the prescribed tier and every `ukeire.touchpad` key \
+             is parsed and ignored"
+        );
+        assert!(
+            code.contains("touchpad: cfg.ukeire.touchpad"),
+            "the loaded touchpad config must be what the seat is handed"
+        );
     }
 
     #[test]

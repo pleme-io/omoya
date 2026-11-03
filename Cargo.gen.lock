@@ -1,13 +1,14 @@
 {
   "schema_version": 2,
-  "cargo_lock_sha256": "67bfd680139aa9846983ed155112b92f1bde9205f24e01d6b70c053b47f4956d",
+  "cargo_lock_sha256": "431a83ef144930da051938ac10d8c62fc21dc89ade74182d8756b99e96e4dffd",
   "manifest_sha256": {
-    "Cargo.toml": "9377871098b4e585e5bbcc9f2b361558d06a377a38cb4306bb0d9c9f365ebe85",
+    "Cargo.toml": "5d799a7bc473c5b71d4e96d20789dff14e4a82753b9210aa3704c242b671e647",
     "crates/hairetsu/Cargo.toml": "67a784b3f0dc716e74f9257bed09bef7c637618269586ecf20b1ff223114b0da",
     "crates/kasane/Cargo.toml": "369669a052055aaa3c836309e6f1cb667e7740f7e74e84b96a9d4dd64dc8ddff",
+    "crates/nazoru/Cargo.toml": "bc61172a7ce19ad846b81096d9ef3960ab6ba073127f1a510aaf2cd91322295b",
     "crates/nuri/Cargo.toml": "3116435ecbd4619097d2879f5a26924834f5550aa4c732e667c3617e28d2865d",
     "crates/omoya-spec/Cargo.toml": "75cd6d31f2ef617df89556610445abab8cf9cddb49d7bbf04c28ac5b7fc89031",
-    "crates/omoya/Cargo.toml": "b869a4d5c7ec069d68019d54f1544db58da36ff9dc9fa1df220e5fa4150a318d",
+    "crates/omoya/Cargo.toml": "3f901c7fd9d59e76398bd205e8d7c86a2b74e2f59c1ac4272b94ef9131a1c69b",
     "crates/xkbcommon-hairetsu/Cargo.toml": "47e976fa1c8c185b17a5c2ced9fcec14a3fa5521a7bc9c046f3d23cf94af19b2"
   },
   "target_resolves": {
@@ -2995,6 +2996,34 @@
           "wgsl-in"
         ]
       },
+      "nazoru-0.1.131": {
+        "runtime_dependencies": [
+          {
+            "name": "ishou_tokens",
+            "package_key": "ishou-tokens-0.1.17",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "serde",
+            "package_key": "serde-1.0.229",
+            "kind": "normal",
+            "features": [
+              "derive"
+            ],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          }
+        ],
+        "build_dependencies": [],
+        "features": []
+      },
       "nix-0.29.0": {
         "runtime_dependencies": [
           {
@@ -3240,6 +3269,16 @@
           {
             "name": "mekuri",
             "package_key": "mekuri-0.1.2",
+            "kind": "normal",
+            "features": [],
+            "uses_default_features": true,
+            "optional": false,
+            "target": null,
+            "tree": "target"
+          },
+          {
+            "name": "nazoru",
+            "package_key": "nazoru-0.1.131",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -11352,6 +11391,13 @@
     "naga-25.0.1": {
       "edition": "2021",
       "build_script": "build.rs"
+    },
+    "nazoru-0.1.131": {
+      "edition": "2024",
+      "lib_target": {
+        "name": "nazoru",
+        "path": "src/lib.rs"
+      }
     },
     "nix-0.29.0": {
       "edition": "2021",

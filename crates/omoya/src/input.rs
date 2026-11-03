@@ -329,7 +329,12 @@ impl Omoya {
     /// is easy to omit and whose absence looks like a frozen seat rather than
     /// a missing bound.
     pub fn pointer_motion(&mut self, dx: f64, dy: f64, time: u32) {
-        let delta: smithay::utils::Point<f64, smithay::utils::Logical> = (dx, dy).into();
+        self.pointer_motion_with_raw((dx, dy), (dx, dy), time);
+    }
+
+    fn pointer_motion_with_raw(&mut self, delta: (f64, f64), raw: (f64, f64), time: u32) {
+        let delta: smithay::utils::Point<f64, smithay::utils::Logical> = delta.into();
+        let delta_unaccel: smithay::utils::Point<f64, smithay::utils::Logical> = raw.into();
 
         let Some(pointer) = self.seat.get_pointer() else {
             return;
@@ -373,7 +378,7 @@ impl Omoya {
             under,
             &RelativeMotionEvent {
                 delta: delta,
-                delta_unaccel: delta,
+                delta_unaccel,
                 utime: u64::from(time) * 1000,
             },
         );
@@ -750,7 +755,8 @@ impl Omoya {
             // amount of testing in the nested backend could have shown it.
             InputEvent::PointerMotion { event, .. } => {
                 let d = event.delta();
-                self.pointer_motion(d.x, d.y, event.time_msec());
+                let raw = event.delta_unaccel();
+                self.pointer_motion_with_raw((d.x, d.y), (raw.x, raw.y), event.time_msec());
             }
             InputEvent::PointerMotionAbsolute { event, .. } => {
                 let Some(output) = self.space.outputs().next().cloned() else {
@@ -796,13 +802,16 @@ impl Omoya {
                 // THAT ASYMMETRY IS DELIBERATE. `amount()` is already in
                 // the device's own continuous units — scaling it by a
                 // lines-per-detent factor would be applying a discrete-wheel
-                // conversion to a trackpad, so it takes the DIRECTION only.
+                // conversion to a trackpad, so it takes the DIRECTION only,
+                // and a `Finger` source takes not even that: `nazoru` already
+                // applied `ukeire.touchpad.scroll_direction`, and `axis_sign`
+                // is what stops a wheel's setting inverting it a second time.
                 // `amount_v120` is 120 units per detent and takes the whole
                 // multiplier, including the `/120` wire conversion that
                 // `v120_multiplier` owns and does not expose.
                 let scroll = self.config.ukeire.scroll;
                 let mul = scroll.v120_multiplier();
-                let sign = scroll.direction.sign();
+                let sign = axis_sign(scroll, event.source());
                 // ★ AND A WHEEL'S `amount()` TAKES THE FACTOR TOO (2026-09-19).
                 // The asymmetry above is right for a TRACKPAD and wrong for the
                 // only device on this seat: evdev's `amount()` returns `Some`
@@ -874,6 +883,53 @@ impl Omoya {
             }
             _ => {}
         }
+    }
+}
+
+fn axis_sign(scroll: crate::ukeire::Scroll, source: AxisSource) -> f64 {
+    if source == AxisSource::Finger {
+        1.0
+    } else {
+        scroll.direction.sign()
+    }
+}
+
+#[cfg(test)]
+mod axis_sign_tests {
+    use super::axis_sign;
+    use crate::ukeire::{Scroll, ScrollDirection};
+    use smithay::backend::input::AxisSource;
+
+    fn scroll(direction: ScrollDirection) -> Scroll {
+        Scroll {
+            direction,
+            ..Scroll::default()
+        }
+    }
+
+    #[test]
+    fn a_wheel_still_takes_the_seats_scroll_direction() {
+        let traditional = axis_sign(scroll(ScrollDirection::Traditional), AxisSource::Wheel);
+        let natural = axis_sign(scroll(ScrollDirection::Natural), AxisSource::Wheel);
+        assert!((traditional - 1.0).abs() < f64::EPSILON);
+        assert!((natural + 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn a_finger_source_is_never_signed_by_the_wheels_direction() {
+        for direction in [ScrollDirection::Traditional, ScrollDirection::Natural] {
+            let sign = axis_sign(scroll(direction), AxisSource::Finger);
+            assert!(
+                (sign - 1.0).abs() < f64::EPSILON,
+                "{direction:?} gave {sign}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_continuous_source_keeps_the_seats_direction() {
+        let natural = axis_sign(scroll(ScrollDirection::Natural), AxisSource::Continuous);
+        assert!((natural + 1.0).abs() < f64::EPSILON);
     }
 }
 

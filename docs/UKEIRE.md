@@ -68,7 +68,8 @@ Naming these keeps the weave flat: no two layers answer one question.
 | which chord does what | `deed.rs` over `awase` | a binding question, not an intake one |
 | what may not be bound | `awase::Reserved` | ukeire *consults* it; it never re-states a claim |
 | bounding a runaway held key | `awase::KeyRepeatGate` | that is at the **consumer**; ukeire sets the seat's advertised pace. Keeping them apart is what lets the seat be fast while a password field stays safe |
-| pointer accel / tap-to-click | **nobody, and nothing to configure** | omoya reads raw evdev, not libinput, so no acceleration layer exists. Named so the absence reads as measured rather than as an oversight |
+| what a touchpad gesture means | **`nazoru`**, configured by `ukeire.touchpad` | ukeire holds the typed knobs; the leaf crate owns the state machine. See "The touchpad" below |
+| mouse acceleration | **nobody, and nothing to configure** | a mouse stays raw evdev, so no acceleration layer exists for it. Named so the absence reads as measured rather than as an oversight |
 | the `/120` in the scroll math | `wl_pointer.axis_v120` | a protocol unit, not a preference. `v120_multiplier` owns it and does not expose it — exposing it would invite an operator to "fix" scrolling by editing a wire constant |
 
 ## The nix seam — one declaration, projected
@@ -79,6 +80,7 @@ services.omoya.settings.ukeire = {
   repeat  = { delay_ms = 200; rate_hz = 45; };
   scroll  = { direction = "traditional"; factor = 3.0; };
   pointer = { cursor_scale = 2; };
+  touchpad = { enabled = true; speed = 1.0; scroll_direction = "natural"; };
   modifier = "super";                                    # super | alt
 };
 ```
@@ -242,6 +244,119 @@ substitution in a new costume.
 `pending-ukeire-variants: hairetsu reads xkeyboard-config rules, so a named
 variant (`us(dvorak)`, `br(nodeadkeys)`) resolves rather than refuses`
 
+## The touchpad: `nazoru` (なぞる, to trace with a finger)
+
+Added 2026-11-03 for zek, a Samsung Galaxy Book4 360. `crates/nazoru` is the
+leaf crate SEAT-PLAN S-6 asked for: no smithay, no seat, no `/dev`, no C. It is
+a pure state machine fed `(type, code, value, time)` and it runs on a Mac.
+
+**Real-hardware behaviour is UNVERIFIED.** No finger has touched this code. The
+recordings in `crates/nazoru/tests/recordings/` are written by hand to the
+kernel's multitouch protocol and zek's measured axes, in `evemu-record` format,
+so a real capture can replace any of them unchanged.
+
+### What the device is, measured on zek
+
+`/proc/bus/input/devices` and `EVIOCGABS` on `event11`, 2026-11-03.
+
+| fact | value |
+|---|---|
+| name | `ZNT0001:00 14E5:650E Touchpad`, I2C HID |
+| `PROP` | `5`: `INPUT_PROP_POINTER` + `INPUT_PROP_BUTTONPAD`, a clickpad |
+| `ABS_MT_POSITION_X` | 0..1888 at 16 units/mm, 118 mm |
+| `ABS_MT_POSITION_Y` | 0..1296 at 16 units/mm, 81 mm |
+| `ABS_MT_SLOT` | 0..4, five slots |
+| `ABS_MT_TOOL_TYPE` | 0..2, so the firmware can say `MT_TOOL_PALM` |
+| sibling `Mouse` node | `KEY=30000 0 0 0 0`, `REL=3`, expected quiet in multitouch mode |
+
+zek's touchscreen (`GXTP7936`, `PROP=2`, only `BTN_TOUCH`) and stylus (`WCOM0172`)
+are neither a touchpad nor a pointer, and a test asserts both from their bitmaps.
+
+### What "stop the touchpad lying" turned out to mean
+
+`open_one` claimed `CAP_POINTER` on `BTN_LEFT || REL_X`, so this pad was already
+a pointer that could never move anything. Worse, every `EV_KEY` at or above
+`BTN_MISC` became a `PointerButton`, so a touch sent clients a press of
+`BTN_TOUCH` and `BTN_TOOL_FINGER`. Narrowing the claim to `REL_X` would have made
+the lie smaller; decoding the device makes it true.
+
+`Capabilities::classify` is the one classifier. `pointer` keeps the old rule
+unchanged, so no other device moves. `touchpad` is new and needs `BTN_TOOL_FINGER`,
+`BTN_TOUCH`, `ABS_MT_SLOT`, both positions and `ABS_MT_TRACKING_ID`, and refuses
+`INPUT_PROP_DIRECT`, `REL_X` and `BTN_TOOL_PEN`. A pad the machine cannot decode
+keeps exactly what it had. `input_devices` marks a decoded pad `[pt]`.
+
+### Why a mouse is untouched
+
+The backend gives the machine only what `owned_by_pad` claims, `EV_ABS` and
+`EV_KEY` at or above `BTN_MISC`, and only on a device classified as a touchpad.
+Every other event on every other device takes the old path. A mouse's
+`delta_unaccel` equals its `delta`, and `PointerTransfer`'s default is the
+identity, bit for bit. **The transfer is not wired to the mouse flush:** that step
+stays with S-6's default-flip, which needs a witnessed session.
+
+### The rules the machine holds
+
+| rule | why |
+|---|---|
+| a new touch has zero delta | a palm or a resting thumb must not jump the pointer |
+| X and Y stay sticky per slot, across contacts | the kernel filters a repeated value, so a new touch at the old X sends no X at all |
+| a contact excluded last frame has zero delta on return | a palm turning into a finger must not jump |
+| one step over 20 mm is discarded and re-anchored | evdev's `SYN_DROPPED` repair re-reads `ABS_MT_*` for the CURRENT slot only, so a position can arrive stale. 20 mm in one frame is not a finger |
+| `BTN_TOUCH=0` clears every non-palm contact | the same repair cannot restore a lift lost in another slot, so a ghost finger heals here. It also spoils the tap: a lift nobody saw proves nothing |
+| a press decides its button once, and the release repeats it | a click that starts right and ends elsewhere must not release left |
+| a tap starts only from zero fingers | a finger left down after a release must not click again |
+| a rest-zone contact stops counting past the tap time, or at once if a finger was already down | a resting thumb must not turn pointing into scrolling. A lone short tap there is still a tap |
+| a finger left after a scroll does not point until all lift | lifting two fingers one at a time must not nudge the pointer |
+
+### The scroll wire format
+
+The machine measures scroll in the 120-per-detent unit, and one detent is 1.5 mm
+of finger travel, so content tracks the fingers at the pointer's 10 px/mm base
+rate. What reaches a client is `wl_pointer.axis` at 15 per detent, source
+`finger`, then `axis_stop`, with **no `axis_value120`**. smithay's own doc says a
+touchpad "may never issue this event as it has no steps", and `input.rs` already
+records that winit, GTK4, Qt6 and Chromium read `value120` when it is present and
+discard the continuous delta. `axis_sign` exempts `finger` from
+`ukeire.scroll.direction`, or a wheel set to natural would invert the touchpad a
+second time.
+
+### One trap in the seat's startup
+
+`config::load()` ran AFTER the backend attached input, so `data.state.config` at
+that point is still the prescribed tier, and every touchpad key would have parsed,
+published and done nothing. The load moved above `match args.backend`, the value
+is a parameter down to `EvdevBackend::new`, and
+`the_config_is_loaded_before_the_seat_attaches_its_input` reddens if it moves back.
+
+### The keys, all under `ukeire.touchpad`
+
+Numbers clamp at the parse boundary, words and typos refuse. Every constant below
+is a guess no finger has judged.
+
+| key | default | range | what to expect from it |
+|---|---|---|---|
+| `enabled` | `true` | | `false` is the old transport for that device, exactly |
+| `speed` | `1.0` | 0.1..5 | times 10 px/mm |
+| `acceleration` | `adaptive` | `flat`, `adaptive` | |
+| `accel_knee_mm_s` | `50` | 0..500 | no gain below this finger speed |
+| `accel_slope` | `0.01` | 0..0.1 | gain per mm/s past the knee |
+| `accel_max_gain` | `2.5` | 1..5 | reached at 200 mm/s by default |
+| `tap_to_click` | `true` | | |
+| `tap_max_ms` | `180` | 50..500 | first contact to last lift |
+| `tap_max_travel_mm` | `2.0` | 0.5..10 | also the two-finger slop before scrolling starts |
+| `scroll_direction` | `natural` | `natural`, `traditional` | independent of `ukeire.scroll.direction` |
+| `scroll_speed` | `1.0` | 0.1..5 | |
+| `right_click_width_pct` | `50` | 10..100 | from the right edge |
+| `right_click_height_pct` | `20` | 5..50 | from the bottom edge, 16 mm on zek, and also the rest zone |
+
+`nazoru` is `publish = false`: minting a crates.io name is permanent and
+outward-facing, so it is the operator's call rather than a side effect of a push,
+the same decision as `kasane`.
+
+`pending-nazoru-witness: run a session on zek and record the verdict; tune the
+keys above; replace the hand-written recordings with captures`
+
 ## Tier ledger
 
 Every bad state the vocabulary was built to corner, at its **true** tier. A
@@ -270,6 +385,12 @@ here is rounded up.
 | a self-remap or a duplicated remap source | same constructor, all problems named in one message | parse-time-rejected |
 | the seat's keymap diverging from the node's declared layout | **eval-caught**: the nix module defaults `ukeire.keymap.layout` from `services.xserver.xkb.layout`, so agreement is a projection rather than two hand-lists | only-mitigated (C1 — a *default*, so an operator can still override the two apart on purpose. A `readOnly` derived option would make it truly eval-rejected; that is M1, and deliberate: a dual-layout seat on a single-layout TTY is a legitimate thing to want) |
 | the reserved-key table drifting from `awase`'s claims | `reserved_codes` filters the table **through `Reserved`**, so the claim set is the denominator; a claim on a key absent from the table fails `every_reserved_claim_maps_to_an_evdev_code_this_file_knows` | only-mitigated (C2 — CI-caught, fail-closed) |
+| a touchpad number out of band | `Refined`'s `Deserialize` clamps; `PointerTransfer`'s fields are `Refined` too, so no curve holds an out-of-band value | truly-unrep |
+| a new touch jumping the pointer | a fresh contact's delta is zero and only `advance` writes another; `a_new_touch_starts_with_zero_delta_wherever_it_lands` | CI-caught |
+| the touchpad knobs parsed and ignored | a required parameter down to `EvdevBackend::new`, plus a source-order test on `main.rs` | CI-caught |
+| a touchpad inverted twice by the wheel's direction | `axis_sign` exempts `finger`; `a_finger_source_is_never_signed_by_the_wheels_direction` | CI-caught |
+| `nazoru`'s kernel numbers drifting from the kernel's | the leaf declares them to stay free of evdev, and `nazorus_kernel_codes_are_the_kernels` compares each to the evdev crate on Linux | CI-caught |
+| the machine behaving wrong on a real pad | nothing here can see that; no finger has touched it | **unverified** |
 
 ### Red runs
 
@@ -284,6 +405,15 @@ House standard is a recorded red run per seal. All four, on rio:
 | `a_soft_bricking_remap_is_refused_by_the_config_loader_itself` | `Deserialize` returns `Ok(unchecked(...))` instead of refusing | RED |
 | `every_reserved_claim_maps_to_an_evdev_code_this_file_knows` | *none needed* | RED **for free**: it failed with `derived 0` while the matcher was broken, and passed once fixed |
 | `the_xkb_floor_is_us_only_and_this_test_fails_when_that_changes` | *none needed* | It IS the red run — it asserts a limit, so it fails the day the limit lifts, which is the only moment anyone needs telling |
+| `a_new_touch_starts_with_zero_delta_wherever_it_lands` | `Contact::settle` writes `delta_mm = at` | RED with `Motion { dx: 62.5, dy: 62.5 }`, a real 62.5 px jump; 14 other tests go red with it |
+| `the_config_is_loaded_before_the_seat_attaches_its_input` | `load()` moved below `match args.backend`, the seat handed the default | RED — *"`config::load` at byte 26039 runs after the seat starts at byte 24919"*. Broken in one run with the row below; those two were the only reds of 390 |
+| `a_finger_source_is_never_signed_by_the_wheels_direction` | `axis_sign` always returns the wheel's sign | RED — *"Natural gave -1"* |
+
+`nazoru` also ran through `cargo mutants` (25.3.1, 2026-11-03): 304 mutants, 294
+caught, 5 unviable, 5 missed. The first pass missed 19 and found eight real test
+gaps and two pieces of redundant code. All 5 left are equivalent: negating a whole
+axis of the slop leaves `hypot` unchanged (2), dividing by a sign of ±1 equals
+multiplying by it (2), and which of two equally fast fingers leads a drag (1).
 
 ### Live verification over MCP (2026-09-03)
 
@@ -345,11 +475,12 @@ remapped when it was not, and keeping it would cost them the machine.
   tatara-lisp form and its `#[derive(DeriveTataraDomain)]` border are a
   **named M1**. `specs/ukeire.lisp` *documents* the destination form; it is
   not the wired form and nothing loads it.
-- **Nine of twelve rows are truly-unrep or parse-time-rejected.** The three
-  that remain `only-mitigated` are the *keymap-agrees-with-the-node* row (a
-  nix **default**, deliberately overridable), the
-  *table-tracks-awase's-claims* row (C2, CI-caught), and the
-  *layout-cannot-be-realised* row (C2 — observable, not fixed).
+- **Read the tier on each row; the ledger is not uniformly strong.** The three
+  `only-mitigated` rows are the *keymap-agrees-with-the-node* row (a nix
+  **default**, deliberately overridable), the *table-tracks-awase's-claims* row
+  (C2, CI-caught), and the *layout-cannot-be-realised* row (C2 — observable, not
+  fixed). The touchpad's behaviour rows are CI-caught against hand-written
+  recordings, and its last row is unverified.
 - **The keymap knob is a DECLARATION, not yet a capability.** Only `us` and
   the empty default actually apply. See the correction above; do not cite this
   vocabulary as having fixed non-US keyboards.

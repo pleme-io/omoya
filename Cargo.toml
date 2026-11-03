@@ -2,6 +2,7 @@
 resolver = "3"
 members = ["crates/omoya-spec", "crates/nuri", "crates/kasane", "crates/hairetsu",
     "crates/xkbcommon-hairetsu",
+    "crates/nazoru",
     "crates/omoya"]
 
 # Replace the `xkbcommon` FFI binding with our pure-Rust one, fleet-wide.
