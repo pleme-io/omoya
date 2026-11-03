@@ -350,6 +350,7 @@ pub struct Omoya {
     /// the stub. This stores exactly what is acted on.
     pub pointer_hidden: bool,
     pub ground: crate::ground::Ground,
+    pub bar_status: crate::bar::StatusLine,
 }
 
 impl Omoya {
@@ -452,6 +453,7 @@ impl Omoya {
             pointer_location: (0.0, 0.0).into(),
             pointer_hidden: false,
             ground: crate::ground::Ground::default(),
+            bar_status: crate::bar::StatusLine::default(),
             mode,
             reserved,
             owed_vt_switches: 0,

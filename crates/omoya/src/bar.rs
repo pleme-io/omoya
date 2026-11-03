@@ -23,6 +23,8 @@
 //! defeat the partial repaint this seat just gained — the bar wouldsingle-handedly
 //! put the desktop back to full-screen composites.
 
+use std::io::Read as _;
+use std::path::Path;
 use std::sync::OnceLock;
 
 use irodori::NORD;
@@ -49,6 +51,10 @@ const PAD: f32 = 12.0;
 
 /// The gutter between items inside one group. `Spacing::px_2`.
 const GUTTER: f32 = 8.0;
+
+const GROUP_GUTTER: f32 = 16.0;
+
+const STATUS_READ_LIMIT: u64 = 4096;
 
 /// A parcel cell's side, and the slot it occupies.
 const CELL: f32 = 20.0;
@@ -289,6 +295,58 @@ pub struct BarState {
     /// `Default` is all-absent, which renders nothing — so a seat whose
     /// reader has not published yet shows no indicator rather than a zero.
     pub readings: crate::bar_modules::Readings,
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Default)]
+pub struct StatusLine {
+    shown: Option<String>,
+}
+
+impl StatusLine {
+    #[must_use]
+    pub fn refresh(&mut self, path: Option<&Path>) -> bool {
+        let read = path.and_then(status_line);
+        if read == self.shown {
+            return false;
+        }
+        self.shown = read;
+        true
+    }
+
+    #[must_use]
+    pub fn shown(&self) -> Option<&str> {
+        self.shown.as_deref()
+    }
+}
+
+fn status_line(path: &Path) -> Option<String> {
+    let mut bytes = Vec::new();
+    crate::ground::open_regular(path)
+        .ok()?
+        .take(STATUS_READ_LIMIT)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    let text = String::from_utf8_lossy(&bytes);
+    let line: String = text
+        .lines()
+        .next()?
+        .trim()
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect();
+    (!line.is_empty()).then_some(line)
+}
+
+fn fit<'a>(face: &fontdue::Font, text: &'a str, room: f32) -> &'a str {
+    let mut used = 0.0;
+    for (at, c) in text.char_indices() {
+        used += face.metrics(c, FONT_PX).advance_width;
+        if used > room {
+            return &text[..at];
+        }
+    }
+    text
 }
 
 /// The clock, and whether it is telling the truth about its zone.
@@ -558,6 +616,8 @@ pub fn rasterize_h(state: &BarState, width: i32, height: i32) -> Option<Vec<u8>>
     // different bitmaps at two sub-pixel offsets and defeats the
     // "re-rasterize only when the text changed" rule entirely.
     let clock = state.clock.text();
+    #[allow(clippy::cast_precision_loss)]
+    let mut status_end = w as f32 - PAD;
     // `Clock::Hidden` renders as nothing. Skipped rather than drawn-empty so
     // the intent is legible at the draw site too, not only in the enum.
     if !clock.is_empty() {
@@ -566,6 +626,7 @@ pub fn rasterize_h(state: &BarState, width: i32, height: i32) -> Option<Vec<u8>>
         let centre = ((w as f32 - cw) / 2.0 / 2.0).round() * 2.0;
         let clock_blend = Blend::new(bg, state.clock.colour());
         draw_text(&mut buf, w, h, font, clock, centre, &clock_blend);
+        status_end = centre - GROUP_GUTTER;
     }
 
     // ── Right: the state a screenshot cannot show ────────────────────────
@@ -611,7 +672,16 @@ pub fn rasterize_h(state: &BarState, width: i32, height: i32) -> Option<Vec<u8>>
             // a muted warning about a window you cannot see is a warning that
             // loses to the wallpaper.
             draw_text(&mut buf, w, h, font, &text, x, &bright);
+            if clock.is_empty() {
+                status_end = x - GROUP_GUTTER;
+            }
         }
+    }
+
+    if let Some(status) = state.status.as_deref() {
+        let start = x + GUTTER;
+        let shown = fit(font, status, status_end - start);
+        draw_text(&mut buf, w, h, font, shown, start, &muted);
     }
 
     Some(buf)
@@ -741,6 +811,223 @@ mod tests {
             // A healthy machine: nothing for the right zone to say. Tests that
             // want a module to speak set this explicitly.
             readings: crate::bar_modules::Readings::default(),
+            status: None,
+        }
+    }
+
+    fn with_status(clock: Clock, hidden: usize, status: Option<&str>) -> BarState {
+        BarState {
+            parcels: vec![true, false],
+            clock,
+            hidden,
+            status: status.map(str::to_owned),
+            ..BarState::default()
+        }
+    }
+
+    fn changed_columns(quiet: &[u8], loud: &[u8], width: usize) -> Vec<usize> {
+        let mut columns: Vec<usize> = quiet
+            .chunks_exact(4)
+            .zip(loud.chunks_exact(4))
+            .enumerate()
+            .filter(|(_, (q, l))| q != l)
+            .map(|(i, _)| i % width)
+            .collect();
+        columns.sort_unstable();
+        columns.dedup();
+        columns
+    }
+
+    fn status_columns(clock: Clock, hidden: usize, status: &str, width: usize) -> Vec<usize> {
+        let width_px = i32::try_from(width).expect("a width");
+        let quiet = rasterize(&with_status(clock.clone(), hidden, None), width_px)
+            .expect("the bar needs a font on this machine");
+        let loud = rasterize(&with_status(clock, hidden, Some(status)), width_px)
+            .expect("the bar needs a font on this machine");
+        changed_columns(&quiet, &loud, width)
+    }
+
+    fn cell_end() -> f32 {
+        PAD + 2.0 * (CELL + GUTTER) + GUTTER
+    }
+
+    #[test]
+    fn a_status_file_shows_its_first_line() {
+        let path = crate::ground::fixture::scratch("status-first").join("status");
+        std::fs::write(&path, "  building plo  \nsecond line\n").expect("a status file");
+        assert_eq!(status_line(&path).as_deref(), Some("building plo"));
+        std::fs::write(&path, "no newline").expect("a status file");
+        assert_eq!(status_line(&path).as_deref(), Some("no newline"));
+        std::fs::write(&path, b"caf\xc3\xa9 \xff\n").expect("a status file");
+        assert_eq!(status_line(&path).as_deref(), Some("caf\u{e9} \u{fffd}"));
+    }
+
+    #[test]
+    fn a_missing_or_empty_status_shows_nothing() {
+        let dir = crate::ground::fixture::scratch("status-empty");
+        let path = dir.join("status");
+        assert_eq!(status_line(&path), None, "missing");
+        std::fs::write(&path, "").expect("a status file");
+        assert_eq!(status_line(&path), None, "empty");
+        std::fs::write(&path, "\nsecond line\n").expect("a status file");
+        assert_eq!(status_line(&path), None, "an empty first line");
+        std::fs::write(&path, "   \n").expect("a status file");
+        assert_eq!(status_line(&path), None, "a blank first line");
+        assert_eq!(status_line(&dir), None, "a directory");
+    }
+
+    #[test]
+    fn a_fifo_status_never_blocks_the_tick() {
+        let path = crate::ground::fixture::scratch("status-fifo").join("status");
+        crate::ground::fixture::fifo(&path);
+        let (sent, got) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sent.send(status_line(&path));
+        });
+        assert_eq!(
+            got.recv_timeout(std::time::Duration::from_secs(10)),
+            Ok(None)
+        );
+    }
+
+    #[test]
+    fn the_status_owes_a_frame_only_when_it_changes() {
+        let path = crate::ground::fixture::scratch("status-owed").join("status");
+        let mut status = StatusLine::default();
+        assert!(!status.refresh(None), "nothing configured");
+        assert!(!status.refresh(Some(&path)), "missing and already empty");
+
+        std::fs::write(&path, "one\n").expect("a status file");
+        assert!(status.refresh(Some(&path)));
+        assert_eq!(status.shown(), Some("one"));
+        assert!(!status.refresh(Some(&path)), "an idle status owes nothing");
+
+        std::fs::write(&path, "two\n").expect("a status file");
+        assert!(status.refresh(Some(&path)));
+        assert_eq!(status.shown(), Some("two"));
+
+        std::fs::remove_file(&path).expect("the file gone");
+        assert!(status.refresh(Some(&path)), "a vanished status clears");
+        assert_eq!(status.shown(), None);
+        assert!(!status.refresh(Some(&path)));
+    }
+
+    #[test]
+    fn the_status_sits_between_the_left_side_and_the_clock_and_clips() {
+        let face = font().expect("the bar needs a font on this machine");
+        let long = "W".repeat(400);
+        let columns = status_columns(Clock::Local("14:22".into()), 0, &long, 800);
+        let (first, last) = (
+            *columns
+                .first()
+                .expect("the status put no pixels on the strip"),
+            *columns
+                .last()
+                .expect("the status put no pixels on the strip"),
+        );
+        let clock_left = ((800.0 - measure(face, "14:22")) / 2.0 / 2.0).round() * 2.0;
+        let end = clock_left - GROUP_GUTTER;
+        let advance = face.metrics('W', FONT_PX).advance_width;
+        assert!(
+            first as f32 >= cell_end() - 1.0,
+            "the status starts at {first}, inside the parcel cells"
+        );
+        assert!(
+            last as f32 <= end + 1.0,
+            "the status reaches {last}, past its end at {end}"
+        );
+        assert!(
+            last as f32 >= end - 2.0 * advance,
+            "the status stops at {last}, well short of its end at {end}"
+        );
+
+        let short = status_columns(Clock::Local("14:22".into()), 0, "abc", 800);
+        assert!(
+            short
+                .last()
+                .is_some_and(|l| (*l as f32) < cell_end() + 4.0 * advance),
+            "a short status must keep its own width"
+        );
+    }
+
+    #[test]
+    fn with_the_clock_hidden_the_status_stops_at_the_right_zone_or_the_edge() {
+        let face = font().expect("the bar needs a font on this machine");
+        let long = "W".repeat(400);
+
+        let to_edge = status_columns(Clock::Hidden, 0, &long, 800);
+        let last = *to_edge
+            .last()
+            .expect("the status put no pixels on the strip");
+        assert!(
+            last as f32 <= 800.0 - PAD + 1.0,
+            "the status reaches {last}"
+        );
+        assert!(last > 700, "the free strip went unused: {last}");
+
+        let to_zone = status_columns(Clock::Hidden, 3, &long, 800);
+        let zone_left = ((800.0 - PAD - measure(face, "3 hidden")) / 2.0).round() * 2.0;
+        let last = *to_zone
+            .last()
+            .expect("the status put no pixels on the strip");
+        assert!(
+            last as f32 <= zone_left - GROUP_GUTTER + 1.0,
+            "the status reaches {last}, into the right zone at {zone_left}"
+        );
+    }
+
+    #[test]
+    fn with_no_room_the_status_draws_nothing() {
+        let columns = status_columns(Clock::Local("14:22".into()), 0, "status", 120);
+        assert!(columns.is_empty(), "the status drew at {columns:?}");
+    }
+
+    #[test]
+    fn the_status_is_painted_in_the_muted_role() {
+        let quiet = rasterize(&with_status(Clock::Hidden, 0, None), 800)
+            .expect("the bar needs a font on this machine");
+        let loud = rasterize(&with_status(Clock::Hidden, 0, Some("status")), 800)
+            .expect("the bar needs a font on this machine");
+        let blend = Blend::new(role_surface(), role_text_muted());
+        let ink: Vec<&[u8]> = quiet
+            .chunks_exact(4)
+            .zip(loud.chunks_exact(4))
+            .filter(|(q, l)| q != l)
+            .map(|(_, l)| l)
+            .collect();
+        assert!(!ink.is_empty(), "the status put no pixels on the strip");
+        assert!(
+            ink.iter().all(|px| {
+                (0..=255).any(|a| [blend.b[a], blend.g[a], blend.r[a], 0xff] == **px)
+            })
+        );
+    }
+
+    #[test]
+    fn a_change_of_status_is_a_change_of_bar_state() {
+        assert_ne!(
+            with_status(Clock::Hidden, 0, None),
+            with_status(Clock::Hidden, 0, Some("one"))
+        );
+        assert_ne!(
+            with_status(Clock::Hidden, 0, Some("one")),
+            with_status(Clock::Hidden, 0, Some("two"))
+        );
+    }
+
+    #[test]
+    fn the_render_loop_reads_the_status_knob() {
+        let source = include_str!("drm.rs");
+        let live = source
+            .split_once("#[cfg(test)]")
+            .map_or(source, |(live, _)| live);
+        for wire in [
+            "config.bar.status_path",
+            "bar_status.refresh(",
+            "bar_status.shown()",
+            "Owed::Chrome",
+        ] {
+            assert!(live.contains(wire), "drm.rs does not read `{wire}`");
         }
     }
 

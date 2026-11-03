@@ -1354,6 +1354,7 @@ where
                     hidden,
                     tab,
                     readings,
+                    status: data.state.bar_status.shown().map(str::to_owned),
                 };
                 if wanted != bar_text || bar_buffer.is_none() {
                     let bar_h = data.state.config.bar.height;
@@ -2436,6 +2437,10 @@ where
                 }
                 if ground.repaint {
                     ledger.mark(crate::owed::Owed::Ground);
+                }
+                let status_path = data.state.config.bar.status_path.as_deref();
+                if data.state.bar_status.refresh(status_path) {
+                    ledger.mark(crate::owed::Owed::Chrome);
                 }
                 smithay::reexports::calloop::timer::TimeoutAction::ToDuration(
                     std::time::Duration::from_secs(1),

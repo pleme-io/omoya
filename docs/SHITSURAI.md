@@ -176,6 +176,8 @@ Today the bar says `" wayland-1"` on the left and `"N windows   HH:MM UTC"` on t
 | **centre** | **`HH:MM`, local time**, screen-centred at `round(w/2 - measure/2)` **snapped to an even pixel** | `text_muted` (nord4) |
 | **right** | **empty**, until the system has something to say | §2.5 |
 
+**Amended 2026-11-03: `bar.status_path` fills the space between the cells and the clock.** It names a text file, and the bar shows its first line in `text_muted`, starting one inter-group gutter after the last cell and ending one before the clock (with the clock hidden, one before the right zone, or at the inset). It clips at a whole glyph. The clock's one-second tick re-reads the file and marks `Owed::Chrome` only when the line changed, so an idle seat still presents nothing. The file is opened non-blocking and refused unless it is a regular file, because a named pipe here would wedge the compositor on that tick. A missing or empty file shows nothing.
+
 Three points that are load-bearing rather than stylistic:
 
 - **Centre means centred on the SCREEN**, not centred in the space between the left and right groups. A flex-centred clock drifts a few pixels every time a parcel appears; a screen-centred one is the only element on the desktop with a permanently constant rect, which makes it the cheapest thing to redraw.

@@ -272,6 +272,7 @@ pub struct BarConfig {
     pub height: i32,
     /// Show the clock.
     pub clock: bool,
+    pub status_path: Option<std::path::PathBuf>,
 }
 
 // No `Eq`: `float_width`/`float_height` are `f64`, and floats have no total
@@ -306,6 +307,7 @@ impl Default for BarConfig {
         Self {
             height: crate::bar::HEIGHT,
             clock: true,
+            status_path: None,
         }
     }
 }
@@ -752,5 +754,17 @@ mod tests {
             Some(std::path::Path::new("/a/g.png"))
         );
         assert!(serde_yaml::from_str::<OmoyaConfig>("ground: {img: /a}\n").is_err());
+    }
+
+    #[test]
+    fn the_status_path_is_an_optional_path_that_keeps_the_bar_defaults() {
+        assert_eq!(OmoyaConfig::bare().bar.status_path, None);
+        let set: OmoyaConfig =
+            serde_yaml::from_str("bar:\n  status_path: /a/s\n").expect("the key parses");
+        assert_eq!(
+            set.bar.status_path.as_deref(),
+            Some(std::path::Path::new("/a/s"))
+        );
+        assert_eq!(set.bar.height, crate::bar::HEIGHT);
     }
 }
