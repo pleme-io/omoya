@@ -965,6 +965,33 @@ mod tests {
     }
 
     #[test]
+    fn a_return_repaints_each_slot_whole_then_nothing() {
+        let dir = scratch("return");
+        let source = picture();
+        let mut ground = ground_of(&dir, &source);
+        let mut renderer = NuriRenderer::new();
+        let mut tracker = OutputDamageTracker::new((W, H), 1.0, Transform::Normal);
+        adopt(&mut ground, &mut renderer, &mut tracker);
+        let mut chain = Chain::new(&dir, Fourcc::Xrgb8888);
+        let none: [MemoryRenderBufferRenderElement<NuriRenderer>; 0] = [];
+        let full = u64::try_from(W * H * 4).expect("a size");
+
+        assert_eq!(chain.frame(&mut renderer, &mut tracker, &none), Some(full));
+        assert_eq!(chain.frame(&mut renderer, &mut tracker, &none), Some(full));
+        assert_eq!(chain.frame(&mut renderer, &mut tracker, &none), None);
+
+        chain.slots[0].poison(0);
+        chain.slots[1].poison(0);
+        chain.ages.forget();
+
+        assert_eq!(chain.frame(&mut renderer, &mut tracker, &none), Some(full));
+        assert_eq!(chain.slots[0].bytes(), source.bgra);
+        assert_eq!(chain.frame(&mut renderer, &mut tracker, &none), Some(full));
+        assert_eq!(chain.slots[1].bytes(), source.bgra);
+        assert_eq!(chain.frame(&mut renderer, &mut tracker, &none), None);
+    }
+
+    #[test]
     fn either_scanout_format_composes_and_captures_the_same_pixels() {
         for (name, format) in [
             ("format-xrgb", Fourcc::Xrgb8888),

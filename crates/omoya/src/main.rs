@@ -38,6 +38,7 @@ mod mcp;
 mod nuri_renderer;
 mod owed;
 mod placement;
+mod presence;
 mod protocols;
 mod remap;
 mod role;
@@ -568,7 +569,6 @@ where
         Ordering::Relaxed,
     );
 
-    let mut device = device;
     // ★ THE MATCH IS HERE AND NOT INSIDE `run` because the renderer is a TYPE
     // parameter, not a value: `run` is generic and monomorphises per renderer.
     // A `Box<dyn Renderer>` would not work — the trait has associated types
@@ -579,7 +579,7 @@ where
             flip_pending.clone(),
             event_loop,
             data,
-            &mut device,
+            device,
             &drm_fd,
             &target,
             introspect.clone(),
@@ -665,6 +665,7 @@ fn attach_session<S, N>(
             use smithay::backend::session::Event as SessionEvent;
             match event {
                 SessionEvent::ActivateSession => {
+                    data.state.presence.come_back();
                     intro.session_active.store(1, Ordering::Relaxed);
                     // ★ RE-ARM INPUT. logind resumes a device by `dup2`ing a NEW
                     // file description onto the fd NUMBER the evdev backend
@@ -700,6 +701,7 @@ fn attach_session<S, N>(
                     tracing::info!("session ACTIVATED — the seat is ours again");
                 }
                 SessionEvent::PauseSession => {
+                    data.state.presence.leave();
                     intro.session_active.store(0, Ordering::Relaxed);
                     tracing::info!("session PAUSED — another VT holds the seat");
                 }

@@ -258,7 +258,7 @@ A "no" on VT round-trip promotes S-2 above everything.
 **Entry:** S-0 recorded; A green.
 
 - **(a) hairetsu, keysym-keyed** — the §4 fix, plus the modmap-seam parity test, plus dropping the Scroll Lock divergence.
-- **(b) `SessionEvent` actually reacts** — hold the `DrmDevice` + evdev backend where the session closure reaches them; `PauseSession → device.pause()`, `ActivateSession → device.activate(true)`.
+- **(b) `SessionEvent` actually reacts** — hold the `DrmDevice` + evdev backend where the session closure reaches them; `PauseSession → device.pause()`, `ActivateSession → device.activate(true)`. **Landed 2026-11-03, not yet witnessed on hardware:** the session events set `presence.rs`, and the render loop, which owns the `DrmDevice`, settles it each tick. Away it pauses once and draws nothing. Back it activates, re-modesets on the next flip, and repaints each slot whole.
 - **(c) logind's `K_OFF`** — probe first, then decide. Do **not** "complete" the chord path by swallowing `Ctrl+Alt+Fn` before `change_vt` is genuinely called; today's forward-and-count is an honest no-op and a half-finished grab is a soft brick.
 - Wire the `xkbcli` differential as a nix check: `xkbcli compile-keymap --keymap <ours>` exit 0, plus block-level comparison of `modifier_map` and `key <…>` against `--layout us`. Both binaries are packaged; the oracle already accepts our output.
 

@@ -351,6 +351,7 @@ pub struct Omoya {
     pub pointer_hidden: bool,
     pub ground: crate::ground::Ground,
     pub bar_status: crate::bar::StatusLine,
+    pub presence: crate::presence::Presence,
 }
 
 impl Omoya {
@@ -454,6 +455,7 @@ impl Omoya {
             pointer_hidden: false,
             ground: crate::ground::Ground::default(),
             bar_status: crate::bar::StatusLine::default(),
+            presence: crate::presence::Presence::default(),
             mode,
             reserved,
             owed_vt_switches: 0,

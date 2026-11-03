@@ -498,6 +498,16 @@ pub fn frame_interval(target: &ScanoutTarget) -> Duration {
 // a second, subtly different render path that nobody exercises; MODULARIZE,
 // DON'T DELETE governs configured-off FEATURES, not uncalled functions.
 
+impl crate::presence::SeatDisplay for DrmDevice {
+    fn pause(&mut self) {
+        Self::pause(self);
+    }
+
+    fn activate(&mut self) -> Result<(), String> {
+        Self::activate(self, true).map_err(|error| error.to_string())
+    }
+}
+
 fn next_interval(
     deadline: std::time::Instant,
     interval: Duration,
@@ -553,7 +563,7 @@ pub fn run<R>(
     flip_pending: std::sync::Arc<std::sync::atomic::AtomicBool>,
     event_loop: &mut smithay::reexports::calloop::EventLoop<'static, crate::CalloopData>,
     data: &mut crate::CalloopData,
-    device: &mut DrmDevice,
+    mut device: DrmDevice,
     fd: &DrmDeviceFd,
     target: &ScanoutTarget,
     introspect: std::sync::Arc<crate::introspect::OmoyaIntrospect>,
@@ -981,8 +991,28 @@ where
     event_loop.handle().insert_source(
         smithay::reexports::calloop::timer::Timer::from_duration(interval),
         move |deadline, _, data| {
-            if !frame_retry.ready(std::time::Instant::now()) {
+            let tick_at = std::time::Instant::now();
+            if !data.state.presence.is_away() && !frame_retry.ready(tick_at) {
                 return idle_tick(&introspect, data, deadline, interval);
+            }
+            match data.state.presence.settle(&mut device, &data.state.owed) {
+                crate::presence::Settled::Present => {}
+                crate::presence::Settled::Away => {
+                    frame_retry.forgive();
+                    return idle_tick(&introspect, data, deadline, interval);
+                }
+                crate::presence::Settled::Returned => {
+                    scanout.resume();
+                    flip_pending.store(false, std::sync::atomic::Ordering::Release);
+                    frame_retry.forgive();
+                    tracing::info!("the display is back; every slot repaints whole");
+                }
+                crate::presence::Settled::Refused(reason) => {
+                    if frame_retry.failed(tick_at) {
+                        tracing::error!(%reason, "the DRM device refused to come back; retrying with backoff");
+                    }
+                    return idle_tick(&introspect, data, deadline, interval);
+                }
             }
 
             // ★ DO NOT COMPOSE A FRAME THE DISPLAY CANNOT TAKE. A flip issued

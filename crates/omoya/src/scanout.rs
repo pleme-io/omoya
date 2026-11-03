@@ -118,6 +118,10 @@ impl SlotAges {
         self.last_drawn[self.back] = Some(self.presented);
         self.back = 1 - self.back;
     }
+
+    pub fn forget(&mut self) {
+        self.last_drawn = [None; 2];
+    }
 }
 
 /// A double-buffered scanout over one CRTC.
@@ -241,6 +245,11 @@ impl DirectScanout {
 
     pub fn back_buffer(&mut self) -> &mut DumbBuffer {
         &mut self.slots[self.ages.back()].buffer
+    }
+
+    pub fn resume(&mut self) {
+        self.modeset = false;
+        self.ages.forget();
     }
 
     /// Present the back buffer and swap.
@@ -385,5 +394,18 @@ mod tests {
             (ages.back(), ages.age(), ages.generation()),
             (1, 2, Some(2))
         );
+    }
+
+    #[test]
+    fn forgetting_makes_each_slot_repaint_whole_once() {
+        let mut ages = SlotAges::default();
+        ages.presented();
+        ages.presented();
+        ages.forget();
+        assert_eq!((ages.age(), ages.generation()), (0, None));
+        ages.presented();
+        assert_eq!((ages.age(), ages.generation()), (0, None));
+        ages.presented();
+        assert_eq!(ages.age(), 2);
     }
 }
