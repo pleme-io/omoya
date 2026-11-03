@@ -142,6 +142,7 @@ pub struct DamageConfig {
     pub authority: crate::truedamage::Mode,
     /// How the composed shadow reaches the scanout mapping.
     pub flush: FlushPolicy,
+    pub flush_readback: bool,
 }
 
 /// How the composed shadow reaches the scanout mapping.
@@ -695,6 +696,15 @@ mod tests {
                 "{name} tier's own remaps are refused by its own validator"
             );
         }
+    }
+
+    #[test]
+    fn flush_readback_is_off_unless_the_operator_asks() {
+        assert!(!OmoyaConfig::default().damage.flush_readback);
+        let plo: OmoyaConfig = serde_yaml::from_str("damage:\n  flush: baselined\n").unwrap();
+        assert!(!plo.damage.flush_readback);
+        let on: OmoyaConfig = serde_yaml::from_str("damage:\n  flush-readback: true\n").unwrap();
+        assert!(on.damage.flush_readback);
     }
 
     #[test]

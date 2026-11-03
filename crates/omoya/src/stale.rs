@@ -295,9 +295,244 @@ pub fn render_mask(expected: &[u8], actual: &[u8], w: usize, h: usize) -> Vec<u8
     out
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FlushVerdict {
+    Clean { rows: u64 },
+    Lost { bytes: u64, rows: u64 },
+    Blind { reason: &'static str },
+}
+
+impl FlushVerdict {
+    #[must_use]
+    pub fn to_json(&self, rows_total: usize) -> serde_json::Value {
+        match self {
+            Self::Blind { reason } => serde_json::json!({
+                "outcome": "blind",
+                "reason": reason,
+            }),
+            Self::Clean { rows } => serde_json::json!({
+                "outcome": "clean",
+                "differing_bytes": 0,
+                "rows_compared": rows,
+                "rows_total": rows_total,
+            }),
+            Self::Lost { bytes, rows } => serde_json::json!({
+                "outcome": "flush-lost-bytes",
+                "differing_bytes": bytes,
+                "rows_compared": rows,
+                "rows_total": rows_total,
+            }),
+        }
+    }
+}
+
+#[must_use]
+pub fn compare_flush(
+    scanout: Option<(&[u8], usize)>,
+    shadow: &[u8],
+    w: usize,
+    h: usize,
+) -> FlushVerdict {
+    let Some((bytes, stride)) = scanout else {
+        return FlushVerdict::Blind {
+            reason: "this renderer does not map its scanout",
+        };
+    };
+    let row = w * 4;
+    if row == 0 || h == 0 {
+        return FlushVerdict::Blind {
+            reason: "zero-sized output",
+        };
+    }
+    if stride < row {
+        return FlushVerdict::Blind {
+            reason: "stride is narrower than a row",
+        };
+    }
+    let mut lost = 0u64;
+    let mut rows = 0u64;
+    for y in 0..h {
+        let (ms, ss) = (y * stride, y * row);
+        let (Some(m), Some(sh)) = (bytes.get(ms..ms + row), shadow.get(ss..ss + row)) else {
+            break;
+        };
+        rows += 1;
+        lost += m.iter().zip(sh).filter(|(a, b)| a != b).count() as u64;
+    }
+    if rows == 0 {
+        return FlushVerdict::Blind {
+            reason: "no row was readable in both buffers",
+        };
+    }
+    if lost == 0 {
+        FlushVerdict::Clean { rows }
+    } else {
+        FlushVerdict::Lost { bytes: lost, rows }
+    }
+}
+
+#[must_use]
+pub fn check_flush(
+    readback: bool,
+    flushed_bytes: u64,
+    scanout: Option<(&[u8], usize)>,
+    shadow: &[u8],
+    w: usize,
+    h: usize,
+) -> FlushVerdict {
+    if !readback {
+        return FlushVerdict::Blind {
+            reason: "damage.flush-readback is off",
+        };
+    }
+    if flushed_bytes == 0 && scanout.is_some() {
+        return FlushVerdict::Blind {
+            reason: "this frame flushed nothing, so this slot is not the next image",
+        };
+    }
+    compare_flush(scanout, shadow, w, h)
+}
+
+#[must_use]
+pub fn repainted_by_scan(mapped: bool, flushed_bytes: u64, w: usize, h: usize) -> bool {
+    !mapped || flushed_bytes >= (w * 4 * h) as u64
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const SHADOW_ROW: usize = 4 * 4;
+
+    fn padded() -> (Vec<u8>, Vec<u8>, usize) {
+        let h = 3usize;
+        let stride = SHADOW_ROW + 8;
+        let shadow: Vec<u8> = (0..(SHADOW_ROW * h)).map(|i| (i % 251) as u8).collect();
+        let mut map = vec![0xAAu8; stride * h];
+        for y in 0..h {
+            map[y * stride..y * stride + SHADOW_ROW]
+                .copy_from_slice(&shadow[y * SHADOW_ROW..(y + 1) * SHADOW_ROW]);
+        }
+        (shadow, map, stride)
+    }
+
+    #[test]
+    fn an_unmapped_scanout_is_blind_and_not_clean() {
+        let shadow = vec![0u8; 4 * 4 * 4];
+        assert!(matches!(
+            compare_flush(None, &shadow, 4, 4),
+            FlushVerdict::Blind { .. }
+        ));
+    }
+
+    #[test]
+    fn an_empty_mapping_is_blind_and_not_clean() {
+        let shadow = vec![7u8; 4 * 4 * 4];
+        assert!(matches!(
+            compare_flush(Some((&[], 16)), &shadow, 4, 4),
+            FlushVerdict::Blind { .. }
+        ));
+    }
+
+    #[test]
+    fn a_padded_mapping_that_matches_is_clean() {
+        let (shadow, map, stride) = padded();
+        assert_eq!(
+            compare_flush(Some((&map, stride)), &shadow, 4, 3),
+            FlushVerdict::Clean { rows: 3 }
+        );
+    }
+
+    #[test]
+    fn a_byte_the_flush_lost_is_counted() {
+        let (shadow, mut map, stride) = padded();
+        map[2 * stride + 5] ^= 0xFF;
+        assert_eq!(
+            compare_flush(Some((&map, stride)), &shadow, 4, 3),
+            FlushVerdict::Lost { bytes: 1, rows: 3 }
+        );
+    }
+
+    #[test]
+    fn a_stride_narrower_than_a_row_is_blind() {
+        let shadow = vec![0u8; 4 * 4 * 4];
+        let map = vec![0u8; 4 * 4 * 4];
+        assert!(matches!(
+            compare_flush(Some((&map, 8)), &shadow, 4, 4),
+            FlushVerdict::Blind { .. }
+        ));
+    }
+
+    #[test]
+    fn readback_off_reads_nothing_even_when_the_mapping_differs() {
+        let (shadow, mut map, stride) = padded();
+        map[0] ^= 0xFF;
+        assert_eq!(
+            check_flush(false, 1, Some((&map, stride)), &shadow, 4, 3),
+            FlushVerdict::Blind {
+                reason: "damage.flush-readback is off"
+            }
+        );
+    }
+
+    #[test]
+    fn a_frame_that_flushed_nothing_is_blind_and_not_lost() {
+        let (shadow, mut map, stride) = padded();
+        map[0] ^= 0xFF;
+        assert_eq!(
+            check_flush(true, 0, Some((&map, stride)), &shadow, 4, 3),
+            FlushVerdict::Blind {
+                reason: "this frame flushed nothing, so this slot is not the next image"
+            }
+        );
+    }
+
+    #[test]
+    fn readback_on_after_a_flush_reports_what_differs() {
+        let (shadow, mut map, stride) = padded();
+        map[0] ^= 0xFF;
+        assert_eq!(
+            check_flush(true, 16, Some((&map, stride)), &shadow, 4, 3),
+            FlushVerdict::Lost { bytes: 1, rows: 3 }
+        );
+    }
+
+    #[test]
+    fn an_unmapped_renderer_stays_blind_with_readback_on() {
+        let shadow = vec![0u8; 4 * 4 * 3];
+        assert_eq!(
+            check_flush(true, 0, None, &shadow, 4, 3),
+            FlushVerdict::Blind {
+                reason: "this renderer does not map its scanout"
+            }
+        );
+    }
+
+    #[test]
+    fn only_a_whole_copy_repaints_a_mapped_scanout() {
+        assert!(repainted_by_scan(true, 48, 4, 3));
+        assert!(!repainted_by_scan(true, 47, 4, 3));
+        assert!(!repainted_by_scan(true, 0, 4, 3));
+    }
+
+    #[test]
+    fn an_unmapped_renderer_repaints_by_drawing() {
+        assert!(repainted_by_scan(false, 0, 4, 3));
+    }
+
+    #[test]
+    fn each_flush_verdict_renders_its_own_outcome() {
+        let lost = FlushVerdict::Lost { bytes: 2, rows: 3 }.to_json(3);
+        assert_eq!(lost["outcome"], "flush-lost-bytes");
+        assert_eq!(lost["differing_bytes"], 2);
+        assert_eq!(lost["rows_total"], 3);
+        let clean = FlushVerdict::Clean { rows: 3 }.to_json(3);
+        assert_eq!(clean["outcome"], "clean");
+        assert_eq!(clean["rows_compared"], 3);
+        let blind = FlushVerdict::Blind { reason: "r" }.to_json(3);
+        assert_eq!(blind["outcome"], "blind");
+        assert_eq!(blind["reason"], "r");
+    }
 
     fn buf(w: usize, h: usize, v: u8) -> Vec<u8> {
         vec![v; w * h * 4]

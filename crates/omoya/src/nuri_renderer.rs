@@ -386,7 +386,13 @@ pub trait ScanoutFlush {
     ///
     /// So this exists, it is called only on an explicit operator request, and
     /// it must never be called from the frame path. See `crate::stale`.
-    fn scanout_bytes(&self) -> &[u8];
+    fn scanout(&self) -> Option<ScanoutView<'_>>;
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ScanoutView<'a> {
+    pub bytes: &'a [u8],
+    pub stride: usize,
 }
 
 impl ScanoutFlush for NuriFramebuffer<'_> {
@@ -394,8 +400,11 @@ impl ScanoutFlush for NuriFramebuffer<'_> {
         NuriFramebuffer::flush_damage(self, damage)
     }
 
-    fn scanout_bytes(&self) -> &[u8] {
-        self.data
+    fn scanout(&self) -> Option<ScanoutView<'_>> {
+        Some(ScanoutView {
+            bytes: self.data,
+            stride: self.stride,
+        })
     }
 }
 

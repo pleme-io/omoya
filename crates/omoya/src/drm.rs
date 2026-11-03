@@ -1951,7 +1951,7 @@ where
                     // and minimal. `None` means "no usable history", which is
                     // the full-repaint case, and `flush_damage` copies
                     // everything for an empty slice.
-                    {
+                    let flushed = {
                         use crate::nuri_renderer::ScanoutFlush as _;
                         // ★ TIMED SEPARATELY, FOR THE SAME REASON `gather_us`
                         // WAS SPLIT OUT — and this is the second time the same
@@ -1995,20 +1995,11 @@ where
                             introspect.flush_bytes.store(wrote, Relaxed);
                             introspect.flush_bytes_total.fetch_add(wrote, Relaxed);
                         }
-                    }
+                        wrote
+                    };
 
                     // ── ★ THE STALE SCAN — AFTER THE FLUSH, BEFORE THE FLIP ──
                     //
-                    // Placement is the whole correctness of this check. After
-                    // `flush_damage` the back buffer holds exactly what is
-                    // about to be scanned out: whatever it kept from two
-                    // frames ago, plus this frame's damage copied over it. If
-                    // the damage was under-reported, the difference against
-                    // the shadow IS the stale content the operator sees.
-                    //
-                    // A frame earlier and the flush has not happened; a frame
-                    // later and the buffers have swapped and the evidence is
-                    // gone.
                     // ★ `blind` is an ANSWER. If the baseline snapshot failed
                     // the probe still consumed the request, and reporting nothing
                     // would leave the caller polling a result that can never
@@ -2087,6 +2078,16 @@ where
                                         h,
                                     });
                                     crate::stale::attribute(&mut rep, &named);
+
+                                    let flush = crate::stale::check_flush(
+                                        data.state.config.damage.flush_readback,
+                                        flushed,
+                                        fb.scanout().map(|v| (v.bytes, v.stride)),
+                                        shadow,
+                                        wu,
+                                        hu,
+                                    );
+
                                     let img =
                                         crate::stale::render_mask(shadow, &baseline, wu, hu);
                                     let wrote = std::fs::write(&mask_path, &img).is_ok();
@@ -2121,6 +2122,14 @@ where
                                         "regions_total": rep.regions.len(),
                                         "regions": regions,
                                         "mask": if wrote { Some(mask_path.clone()) } else { None },
+                                        "flush": flush.to_json(hu),
+                                        "flushed_bytes": flushed,
+                                        "repainted_by_this_scan": crate::stale::repainted_by_scan(
+                                            fb.scanout().is_some(),
+                                            flushed,
+                                            wu,
+                                            hu,
+                                        ),
                                     })
                                     .to_string()
                                 }

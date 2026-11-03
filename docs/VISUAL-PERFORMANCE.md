@@ -261,6 +261,32 @@ Chrome landed on plo in the same wave as this plan. It is a large, opaque,
 GPU-backed client and it will dominate L5. Measure before designing.
 **Done:** frame_us with Chrome mapped and animating stays within one interval.
 
+### The scanout readback: `damage.flush-readback` (off by default)
+
+`stale_scan` compares two renders in the shadow, so it finds a damage set that
+under-reports. It does not read the display. With `damage.flush-readback: true`,
+it also compares the scanout mapping with the shadow, and its answer gets a
+`flush` object with `clean`, `flush-lost-bytes` or `blind`.
+
+- **The flush uses the natural-age damage, not the age-0 control render.** So
+  under `damage.flush: baselined` a difference is stale content in this slot.
+  Under `damage.flush: full` the two buffers match by construction unless the
+  copy itself failed, and the check only proves the copy.
+- **A frame that flushed nothing answers `blind`.** That slot is not the next
+  image and can differ for good reason, so a comparison would give a false
+  `flush-lost-bytes`.
+- **The read runs inside the frame, and it is why this is off.** The mapping is
+  write-combining memory. `nuri_renderer::copy_framebuffer` records a read of a
+  1920x1080 frame at several seconds. Off, `stale_scan` reads nothing new and
+  answers `flush: blind`.
+- **`repainted_by_this_scan` comes from the bytes the flush wrote.** The control
+  render repairs the shadow. The display gets the repair only from a whole copy.
+- **`ScanoutFlush::scanout` returns `None` on kasane.** The GPU arm maps no
+  scanout. It used to return an empty slice, and a count of differences over an
+  empty slice is zero, which reads as a clean display.
+
+Tier: unit tests and a type-check. No seat has run with this on.
+
 ---
 
 ## V. Rust and tatara-lisp — the specific exploitations
