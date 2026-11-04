@@ -90,7 +90,52 @@ pub fn disown_children() {
 /// to be in the environment — which on a nested seat is the difference
 /// between a client appearing in the seat under test and appearing in the
 /// operator's real one.
-pub fn into_seat(cmd: &[String], socket: &std::ffi::OsStr, what: &'static str) {
+pub fn prepare_worker(command: &mut std::process::Command) {
+    unsafe {
+        use std::os::unix::process::CommandExt as _;
+        command.pre_exec(|| {
+            libc::signal(libc::SIGCHLD, libc::SIG_DFL);
+            Ok(())
+        });
+    }
+}
+
+#[must_use]
+pub fn worker_command(exe: &std::path::Path) -> std::process::Command {
+    let mut command = std::process::Command::new(exe);
+    command.env("RUST_LOG", "off");
+    prepare_worker(&mut command);
+    command
+}
+
+#[must_use]
+pub fn own_exe() -> std::path::PathBuf {
+    #[cfg(target_os = "linux")]
+    {
+        std::path::PathBuf::from("/proc/self/exe")
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("omoya"))
+    }
+}
+
+#[must_use]
+pub fn resolves(program: &str) -> bool {
+    use std::os::unix::fs::PermissionsExt as _;
+    let runnable = |path: &std::path::Path| {
+        path.metadata()
+            .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    };
+    if program.contains('/') {
+        return runnable(std::path::Path::new(program));
+    }
+    std::env::var_os("PATH")
+        .is_some_and(|path| std::env::split_paths(&path).any(|dir| runnable(&dir.join(program))))
+}
+
+#[must_use = "false means no process started, and a caller must not report that as done"]
+pub fn into_seat(cmd: &[String], socket: &std::ffi::OsStr, what: &'static str) -> bool {
     // ★ INSTALLED HERE, UNCONDITIONALLY, ON THE ONLY PATH THAT CAN SPAWN.
     //
     // The startup call covers the whole process lifetime including anything a
@@ -106,8 +151,12 @@ pub fn into_seat(cmd: &[String], socket: &std::ffi::OsStr, what: &'static str) {
 
     let Some((program, rest)) = cmd.split_first() else {
         tracing::warn!(what, "nothing to spawn — the command is empty");
-        return;
+        return false;
     };
+    if !resolves(program) {
+        tracing::error!(program, what, "no such program; nothing was started");
+        return false;
+    }
     let mut command = std::process::Command::new(program);
     command.args(rest).env("WAYLAND_DISPLAY", socket);
 
@@ -127,22 +176,65 @@ pub fn into_seat(cmd: &[String], socket: &std::ffi::OsStr, what: &'static str) {
         });
     }
 
-    match command.spawn() {
+    let spawned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| command.spawn()));
+    let Ok(spawned) = spawned else {
+        tracing::error!(program, what, "the program could not be started");
+        return false;
+    };
+    match spawned {
         // ★ The `Child` is DROPPED immediately and deliberately. Holding it
         // would imply an intent to wait; with SIGCHLD ignored there is nothing
         // to wait for, and a handle nobody waits on is exactly the shape that
         // produced the leak this module exists to remove.
-        Ok(child) => tracing::info!(pid = child.id(), program, what, "spawned into the seat"),
+        Ok(child) => {
+            tracing::info!(pid = child.id(), program, what, "spawned into the seat");
+            true
+        }
         // Not fatal, and that is a decision: a seat whose first client fails
         // is still a working seat, and exiting here would make a typo in a
         // command look like the compositor crashing.
-        Err(e) => tracing::error!(error = %e, program, what, "spawn failed"),
+        Err(e) => {
+            tracing::error!(error = %e, program, what, "spawn failed");
+            false
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_missing_program_is_a_false_not_a_dead_seat() {
+        disown_children();
+        for missing in [
+            "/nonexistent/lock-client",
+            "no-such-program-on-any-path",
+            "",
+        ] {
+            assert!(
+                !into_seat(
+                    &[missing.to_owned()],
+                    std::ffi::OsStr::new("omoya-test"),
+                    "missing program probe",
+                ),
+                "{missing}"
+            );
+        }
+        assert!(!into_seat(
+            &[],
+            std::ffi::OsStr::new("omoya-test"),
+            "empty probe"
+        ));
+    }
+
+    #[test]
+    fn a_program_is_found_by_path_or_by_name_and_a_folder_is_no_program() {
+        assert!(resolves("/bin/sh"));
+        assert!(!resolves("/bin"));
+        assert!(!resolves("/nonexistent/sh"));
+        assert!(!resolves("no-such-program-on-any-path"));
+    }
 
     /// Strip comments so a gate reads CODE, not prose.
     ///
@@ -363,11 +455,11 @@ mod tests {
             "-c".to_string(),
             format!("grep ^SigIgn: /proc/self/status > {}", out.display()),
         ];
-        into_seat(
+        assert!(into_seat(
             &cmd,
             std::ffi::OsStr::new("omoya-test"),
             "sigchld inheritance probe",
-        );
+        ));
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         let child = loop {

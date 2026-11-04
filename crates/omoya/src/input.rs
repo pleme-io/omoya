@@ -53,6 +53,14 @@ impl Omoya {
     /// applies that offset in `KeyboardKeyEvent::key_code`; a caller
     /// synthesising a key must apply it too.
     pub fn key(&mut self, code: Keycode, state: KeyState, time: u32) {
+        let woke = self.note_input();
+        if state == KeyState::Pressed && woke {
+            self.wake_swallow.woke_with(code.raw());
+            return;
+        }
+        if state == KeyState::Released && self.wake_swallow.swallow_release(code.raw()) {
+            return;
+        }
         // ★ REMAP FIRST, SO EVERYTHING DOWNSTREAM AGREES. CapsLock is Escape
         // on this seat (see `crate::remap`, and why it cannot be an xkb
         // option here). Doing it above the chord filter means `awase`, the
@@ -109,6 +117,7 @@ impl Omoya {
             return;
         };
 
+        let shut = !self.keyboard_may_reach_a_client(&keyboard);
         let mut owed: Option<String> = None;
         let mut switched: Option<i32> = None;
         // The deed a chord asked for, carried OUT of the filter
@@ -219,6 +228,9 @@ impl Omoya {
                             }
                         }
                     }
+                }
+                if shut {
+                    return FilterResult::Intercept(());
                 }
                 FilterResult::Forward
             },
@@ -333,6 +345,7 @@ impl Omoya {
     }
 
     fn pointer_motion_with_raw(&mut self, delta: (f64, f64), raw: (f64, f64), time: u32) {
+        self.note_input();
         let delta: smithay::utils::Point<f64, smithay::utils::Logical> = delta.into();
         let delta_unaccel: smithay::utils::Point<f64, smithay::utils::Logical> = raw.into();
 
@@ -391,6 +404,10 @@ impl Omoya {
     /// click-to-focus-and-raise policy below is omoya's own, and a synthetic
     /// click that skipped it would move focus differently from a real one.
     pub fn pointer_button(&mut self, code: u32, pressed: bool, time: u32) {
+        let woke = self.note_input();
+        if pressed && woke {
+            return;
+        }
         let Some(pointer) = self.seat.get_pointer() else {
             return;
         };
@@ -408,7 +425,10 @@ impl Omoya {
         // Click-to-focus, and raise. This IS window-management policy —
         // omoya's own, not smithay's — and it is the smallest possible
         // amount of it that makes the seat usable.
-        if ButtonState::Pressed == button_state && !pointer.is_grabbed() {
+        if ButtonState::Pressed == button_state
+            && !pointer.is_grabbed()
+            && !self.session_lock.machine.hides_desktop()
+        {
             // ── ★ HOISTED OUT OF THE `element_under` GUARD (2026-09-03) ──
             //
             // This block used to sit INSIDE `if let Some(..) = element_under(..)`,

@@ -35,15 +35,19 @@ mod layout;
 mod localtime;
 mod logind;
 mod mcp;
+mod notes;
 mod nuri_renderer;
 mod owed;
 mod placement;
+mod power;
 mod presence;
 mod protocols;
 mod remap;
 mod role;
 mod rouka;
 mod scanout;
+mod screencopy;
+mod session_lock;
 mod snap;
 mod spawn;
 mod stale;
@@ -60,6 +64,7 @@ mod winid;
 /// `dlopen`s libxkbcommon behind `ldd`'s back. See `Cargo.toml`'s `[features]`.
 #[cfg(feature = "nested")]
 mod winit;
+mod world;
 
 use smithay::reexports::{
     calloop::EventLoop,
@@ -532,11 +537,12 @@ where
     let flip_pending_ev = flip_pending.clone();
     event_loop
         .handle()
-        .insert_source(drm_notifier, move |event, _meta, _data| {
+        .insert_source(drm_notifier, move |event, _meta, data| {
             match event {
                 smithay::backend::drm::DrmEvent::VBlank(_) => {
                     // The flip retired; the back buffer is free again.
                     flip_pending_ev.store(false, std::sync::atomic::Ordering::Release);
+                    data.state.frame_retired();
                 }
                 smithay::backend::drm::DrmEvent::Error(err) => {
                     tracing::warn!(?err, "DRM device reported an error");
@@ -731,6 +737,25 @@ fn attach_session<S, N>(
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let raw_args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(code) = blue_lang_worker::child::dispatch(&raw_args, crate::world::JUDGE) {
+        std::process::exit(code);
+    }
+    if raw_args.first().map(String::as_str) == Some(crate::notes::WORKER) {
+        let rule = raw_args.get(1).map(std::path::PathBuf::from);
+        std::process::exit(crate::notes::run_worker(rule.as_deref()));
+    }
+    if raw_args.first().map(String::as_str) == Some("world-check") {
+        let file = raw_args
+            .get(1)
+            .map_or_else(crate::world::world_file, std::path::PathBuf::from);
+        println!(
+            "{}",
+            crate::world::check(&file, std::time::Duration::from_secs(10))
+        );
+        return Ok(());
+    }
+
     // ── ★ THE MCP BRANCH RUNS BEFORE ANYTHING ELSE ──────────────────────
     // Two reasons it cannot be folded into `parse_args`:
     //
@@ -932,7 +957,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // a command line, so a flag is the escape hatch that exists even when the
     // yaml is wrong. A bad file that could only be fixed from inside a seat it
     // prevented from starting would be a trap.
-    let cfg = crate::config::load().with_cli_overrides(args.spawn.clone(), args.launcher.clone());
+    let base = crate::config::load();
+    let (seat_tx, seat_rx) =
+        smithay::reexports::calloop::channel::channel::<crate::world::SeatMessage>();
+    let seat_exe = crate::spawn::own_exe();
+    let world_path = crate::world::world_file();
+    let first = crate::world::first_world(
+        seat_exe.clone(),
+        world_path.clone(),
+        base.clone(),
+        seat_tx.clone(),
+    );
+    let cfg = first
+        .config
+        .clone()
+        .with_cli_overrides(args.spawn.clone(), args.launcher.clone());
+    data.state.world.cli_terminal.clone_from(&args.spawn);
+    data.state.world.cli_launcher.clone_from(&args.launcher);
+    data.state.world.base = Some(base.clone());
     tracing::info!(
         terminal = ?cfg.terminal,
         launcher = ?cfg.launcher,
@@ -964,18 +1006,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // removes the need for `video` group membership.
             match args.session {
                 SessionBackend::Logind => match crate::logind::LogindSession::new() {
-                    Ok((session, notifier)) => run_drm_seat(
-                        &mut event_loop,
-                        &mut data,
-                        &introspect,
-                        session,
-                        notifier,
-                        InputPlan {
-                            kind: args.input,
-                            touchpad: cfg.ukeire.touchpad,
-                        },
-                        args.renderer,
-                    )?,
+                    Ok((session, notifier)) => {
+                        let logind_power = session.power();
+                        logind_power.watch(seat_tx.clone());
+                        data.state.power =
+                            crate::power::Power::start(Some(logind_power), seat_tx.clone());
+                        data.state
+                            .power_hint(crate::power::PowerCommand::TakeSleepInhibitor);
+                        run_drm_seat(
+                            &mut event_loop,
+                            &mut data,
+                            &introspect,
+                            session,
+                            notifier,
+                            InputPlan {
+                                kind: args.input,
+                                touchpad: cfg.ukeire.touchpad,
+                            },
+                            args.renderer,
+                        )?;
+                    }
                     Err(e) => {
                         tracing::error!(
                             error = %e,
@@ -1001,169 +1051,56 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "omoya is up — WAYLAND_DISPLAY is set for children"
     );
 
-    // Remember it so `Logo+Return` opens another of the same thing. Stored
-    // rather than re-read from args at chord time because `args` is consumed
-    // below, and because the seat's terminal is state the compositor should be
-    // able to answer about, not an argument it happens to still be holding.
-    data.state.session_command = cfg.terminal.clone();
-    data.state.launcher_command = cfg.launcher.clone();
-    data.state.remaps = cfg.remap_pairs();
-    // ★ RE-SEED THE DAMAGE MODE ONCE THE REAL CONFIG EXISTS.
-    //
-    // `State::new` seeds `td_mode` from the environment alone, because it runs
-    // BEFORE `config::load()` — its `config` field is `prescribed()` until the
-    // line below replaces it. Leaving it there would mean the typed knob was
-    // parsed, published by `config-show`, and silently ignored by the hot path:
-    // the worst of the three possible outcomes, because the config would LOOK
-    // authoritative.
-    //
-    // `resolve` keeps the environment winning when it is set, so this narrows
-    // nothing an operator could already do; it only gives the config a say
-    // where previously there was none. From here the atomic remains the single
-    // source of truth and `td_mode_set` over kanshou still overrides both.
-    data.state.introspect.td_mode.store(
-        crate::truedamage::Mode::resolve(cfg.damage.authority).to_u64(),
-        std::sync::atomic::Ordering::Relaxed,
-    );
-    data.state.config = cfg;
-
-    // ── ukeire: apply the operator's intake policy ───────────────────────
-    //
-    // ★ AFTER the config exists, and via the two RUNTIME setters, because
-    // `State::new` built the seat before `config::load()` ran. That is not
-    // an accident of ordering to be tidied away — the bare tier must produce
-    // a working keyboard even when the config cannot be parsed, so the seat
-    // is built from `bare()` and then moved.
-    //
-    // Both setters reach clients that are ALREADY bound: smithay re-sends
-    // `wl_keyboard.repeat_info` and the keymap fd to every bound keyboard.
-    // Re-adding a keyboard instead would replace the handle every client
-    // holds.
-    // ★ NO REFUSAL CHECK HERE, AND THAT IS THE IMPROVEMENT. An earlier cut of
-    // this block called `ukeire.refusals(...)` and cleared the remap set when
-    // it complained — a runtime guard, and one a future caller could simply
-    // forget, which is why the ledger graded it `only-mitigated (C1)`.
-    // `Remaps` now refuses at its own parse boundary, so a `Ukeire` that
-    // rewrites a VT-switch key cannot be constructed from config at all and
-    // `config::load` falls back to the prescribed tier with the serde error
-    // named. Nothing left to check.
-
-    // The chord vocabulary, re-hung on the operator's modifier.
-    //
-    // ★ REBUILT, not patched. `BindingMap` is keyed on the whole chord, so
-    // changing the modifier means every entry moves — walking the map to
-    // rewrite keys would be re-implementing `default_bindings_on` badly. The
-    // bare-tier map built in `State::new` is simply replaced, and the clash
-    // report is re-run because a modifier change can create a collision the
-    // default never had.
-    {
-        let modifier = data.state.config.ukeire.modifier;
-        let floating = data.state.config.layout.mode == crate::config::LayoutMode::Floating;
-        if modifier != crate::ukeire::SeatModifier::default() || floating {
-            let (map, clashes) = crate::deed::default_bindings_for(modifier.modifiers(), floating);
-            if !clashes.is_empty() {
-                tracing::error!(?clashes, "duplicate key bindings — later ones were refused");
+    if let Ok(mut g) = data.state.introspect.ukeire_keymap_layout.lock() {
+        *g = String::from("<bare>");
+    }
+    data.state.adopt_world(first);
+    if let Err(e) = event_loop
+        .handle()
+        .insert_source(seat_rx, |event, (), data| {
+            if let smithay::reexports::calloop::channel::Event::Msg(message) = event {
+                data.state.on_seat_message(message);
             }
-            data.state.bindings = map;
-            tracing::info!(?modifier, "ukeire: seat modifier");
-        }
-    }
-
-    // ── Publish the RESOLVED policy, not the requested one ───────────────
-    //
-    // Written after every apply below would be wrong for the keymap (it may
-    // fail to compile), so the layout leaf is set inside that arm. The rest
-    // cannot fail, so they are published here.
+        })
     {
-        use std::sync::atomic::Ordering::Relaxed;
-        let u = &data.state.config.ukeire;
-        let i = &data.state.introspect;
-        let (delay, rate) = u.repeat.smithay_repeat_info();
-        i.ukeire_repeat_delay_ms.store(delay as u64, Relaxed);
-        i.ukeire_repeat_rate_hz.store(rate as u64, Relaxed);
-        // x1000 so 3.0 does not arrive as 3 — see the field's own note.
-        i.ukeire_scroll_factor_milli
-            .store((u.scroll.factor.get() * 1000.0).round() as u64, Relaxed);
-        i.ukeire_scroll_natural.store(
-            u64::from(u.scroll.direction == crate::ukeire::ScrollDirection::Natural),
-            Relaxed,
-        );
-        i.ukeire_cursor_scale
-            .store(u.pointer.cursor_scale.get() as u64, Relaxed);
-        i.ukeire_remaps.store(u.remaps.len() as u64, Relaxed);
-        if let Ok(mut g) = i.ukeire_modifier.lock() {
-            // `Debug` is the typed surface here; the enum's two spellings are
-            // exactly the two config words.
-            *g = match u.modifier {
-                crate::ukeire::SeatModifier::Super => String::from("super"),
-                crate::ukeire::SeatModifier::Alt => String::from("alt"),
-            };
-        }
-        // The honest default until an apply succeeds: the seat IS on the bare
-        // keymap at this point.
-        if let Ok(mut g) = i.ukeire_keymap_layout.lock() {
-            *g = String::from("<bare>");
-        }
+        tracing::error!(error = %e, "no seat channel; the world and the bar modules stay as they are");
     }
-
-    if let Some(kb) = data.state.seat.get_keyboard() {
-        let (delay, rate) = data.state.config.ukeire.repeat.smithay_repeat_info();
-        kb.change_repeat_info(rate, delay);
-        tracing::info!(delay_ms = delay, rate_hz = rate, "ukeire: key repeat");
-
-        // The keymap. `set_xkb_config` compiles the names through
-        // libxkbcommon and returns `Err` WITHOUT disturbing the live keymap,
-        // so an uncompilable layout leaves the operator on the bare-tier
-        // keymap they can log in with — the fallback is structural, not a
-        // branch we wrote.
-        // ★ CLONED FIRST, deliberately. `set_xkb_config` takes `&mut State`
-        // while the names live inside `state.config`, so borrowing them
-        // through the same value is a borrowck conflict. Five short owned
-        // strings once at startup is the honest fix; reaching for a
-        // `mem::replace` placeholder to satisfy the borrow checker would be
-        // trading a real invariant for a compile-time convenience.
-        let km = data.state.config.ukeire.keymap.clone();
-        if !km.is_default() {
-            let layout = km.layout.clone().unwrap_or_default();
-            let xkb = smithay::input::keyboard::XkbConfig {
-                rules: km.rules.as_deref().unwrap_or(""),
-                model: km.model.as_deref().unwrap_or(""),
-                layout: &layout,
-                variant: km.variant.as_deref().unwrap_or(""),
-                options: km.options.clone(),
-            };
-            let shown = if layout.is_empty() {
-                "<xkb default>"
-            } else {
-                layout.as_str()
-            };
-            match kb.set_xkb_config(&mut data.state, xkb) {
-                Ok(()) => {
-                    tracing::info!(layout = shown, "ukeire: keymap");
-                    // ★ Published ONLY on success. A failed compile leaves the
-                    // seat on the bare keymap, and the leaf must say `<bare>`
-                    // rather than the name that did not take — otherwise the
-                    // observation plane would confirm a change that never
-                    // happened, which is worse than publishing nothing.
-                    if let Ok(mut g) = data.state.introspect.ukeire_keymap_layout.lock() {
-                        *g = shown.to_string();
-                    }
-                }
-                Err(e) => tracing::error!(
-                    layout = shown,
-                    error = ?e,
-                    "ukeire: keymap did not compile — keeping the bare-tier keymap"
-                ),
-            }
-        }
+    data.state.world.bar = crate::world::BarModules::start(seat_exe.clone(), seat_tx.clone());
+    data.state.world.seat_tx = Some(seat_tx.clone());
+    data.state.world.path = Some(world_path.clone());
+    data.state.world.exe = Some(seat_exe.clone());
+    data.state.refresh_notes();
+    if let Err(e) = event_loop.handle().insert_source(
+        smithay::reexports::calloop::timer::Timer::from_duration(std::time::Duration::from_secs(1)),
+        |_, (), data| {
+            data.state.seat_tick(std::time::Instant::now());
+            smithay::reexports::calloop::timer::TimeoutAction::ToDuration(
+                std::time::Duration::from_secs(1),
+            )
+        },
+    ) {
+        tracing::error!(error = %e, "no seat tick; idle and the lock client stay unsupervised");
     }
+    data.state.rearm_modules();
+    let _world_watch = match crate::world::watch(seat_exe, world_path, base, seat_tx) {
+        Ok(watcher) => Some(watcher),
+        Err(e) => {
+            tracing::warn!(error = %e, "the world is not watched; a save takes effect at the next login");
+            None
+        }
+    };
 
     if let Some(cmd) = args.spawn {
         // ★ ONE spawn path — `crate::spawn` owns process construction so the
         // kernel-level zombie guarantee covers every client, not just the ones
         // whose call site remembered. The not-fatal-on-failure decision moved
         // there with it.
-        spawn::into_seat(&cmd, &socket, "startup client");
+        if !spawn::into_seat(&cmd, &socket, "startup client") {
+            tracing::error!(
+                ?cmd,
+                "the startup client did not start; the seat stands without it"
+            );
+        }
     }
 
     // ── ★ FLUSH AFTER EVERY DISPATCH. THIS IS WHERE TYPING WAS LOST. ────

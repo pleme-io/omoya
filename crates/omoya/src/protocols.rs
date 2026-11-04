@@ -106,7 +106,7 @@ pub const ADVERTISED: &[Protocol] = &[
     Protocol {
         interface: "wl_data_device_manager",
         delegate: "data_device",
-        served: Served::By("smithay's own selection plumbing (one of three planes; see below)"),
+        served: Served::By("smithay's own selection plumbing, the clipboard plane"),
     },
     Protocol {
         interface: "wl_output / xdg_output",
@@ -119,11 +119,47 @@ pub const ADVERTISED: &[Protocol] = &[
         served: Served::By("input.rs pointer.relative_motion on every PointerMotion event"),
     },
     Protocol {
+        interface: "zwp_primary_selection_device_manager_v1",
+        delegate: "primary_selection",
+        served: Served::By("smithay's own plumbing; focus_changed moves the plane with the seat"),
+    },
+    Protocol {
+        interface: "zwlr_data_control_manager_v1",
+        delegate: "data_control",
+        served: Served::By("smithay's own plumbing over both selection planes"),
+    },
+    Protocol {
+        interface: "ext_data_control_manager_v1",
+        delegate: "ext_data_control",
+        served: Served::By("smithay's own plumbing over both selection planes"),
+    },
+    Protocol {
+        interface: "zwp_idle_inhibit_manager_v1",
+        delegate: "idle_inhibit",
+        served: Served::By("handlers.rs IdleInhibitHandler holds omoya_spec::idle's clock"),
+    },
+    Protocol {
         interface: "zwp_linux_dmabuf_v1",
         delegate: "dmabuf",
         served: Served::By(
             "handlers.rs DmabufHandler::dmabuf_imported + the renderer's import path",
         ),
+    },
+];
+
+pub const ADVERTISED_BY_HAND: &[Protocol] = &[
+    Protocol {
+        interface: "ext_session_lock_manager_v1",
+        delegate: "",
+        served: Served::By(
+            "session_lock.rs speaks the wire itself, because smithay 0.7.0's dispatch unlocks a \
+             locked screen for any client that asks; omoya_spec::session_lock decides",
+        ),
+    },
+    Protocol {
+        interface: "zwlr_screencopy_manager_v1",
+        delegate: "",
+        served: Served::By("screencopy.rs copies the composed frame the render loop just drew"),
     },
 ];
 
@@ -165,20 +201,6 @@ pub const WITHHELD: &[(&str, &str)] = &[
         "zwp_pointer_gestures_v1",
         "the compositor must SEND pinch/swipe events; evdev_backend.rs does not \
          synthesise them. A bound client would wait forever.",
-    ),
-    (
-        "ext_session_lock_v1",
-        "★ SECURITY. smithay 0.7.0's implementation has a reachable lock-screen \
-         bypass: session_lock/lock.rs:181-189 posts InvalidUnlock and then calls \
-         state.unlock() anyway, with no else and no return, while every \
-         Request::Lock mints a fresh lock_status = false. Any client can unlock \
-         a locked screen at the cost of its own connection. Fixed on smithay \
-         master, in no release. See docs/DESKTOP-PLAN.md P4.",
-    ),
-    (
-        "zwp_primary_selection_v1 / wlr_data_control / ext_data_control",
-        "the other two selection planes. Real work in hasami, not a delegate \
-         line — and a clipboard manager needs data-control specifically.",
     ),
     (
         "zwp_text_input_v3 / zwp_input_method_v2",
@@ -294,6 +316,22 @@ mod tests {
                 "{name} is listed as both advertised and withheld"
             );
         }
+    }
+
+    #[test]
+    fn a_protocol_served_by_hand_says_where_and_session_lock_is_not_withheld() {
+        for p in ADVERTISED_BY_HAND {
+            let Served::By(where_) = p.served else {
+                panic!("{} must be served", p.interface);
+            };
+            assert!(where_.len() > 12);
+            assert!(!WITHHELD.iter().any(|(name, _)| name.contains(p.interface)));
+        }
+        assert!(
+            !WITHHELD
+                .iter()
+                .any(|(name, _)| name.contains("session_lock"))
+        );
     }
 
     #[test]

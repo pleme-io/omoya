@@ -520,6 +520,27 @@ fn next_interval(
     smithay::reexports::calloop::timer::TimeoutAction::ToInstant(next)
 }
 
+const DPMS_ON: u64 = 0;
+const DPMS_OFF: u64 = 3;
+
+fn set_panel_power(
+    device: &DrmDevice,
+    connector: connector::Handle,
+    on: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use smithay::reexports::drm::control::Device as _;
+    let properties = device.get_properties(connector)?;
+    let (handles, _values) = properties.as_props_and_values();
+    for handle in handles {
+        let info = device.get_property(*handle)?;
+        if info.name().to_bytes() == b"DPMS" {
+            device.set_property(connector, *handle, if on { DPMS_ON } else { DPMS_OFF })?;
+            return Ok(());
+        }
+    }
+    Err("the connector has no DPMS property".into())
+}
+
 fn idle_tick(
     introspect: &crate::introspect::OmoyaIntrospect,
     data: &crate::CalloopData,
@@ -626,8 +647,13 @@ where
     for<'fb> R::Framebuffer<'fb>: crate::nuri_renderer::ScanoutFlush,
 {
     let surface = device.create_surface(target.crtc, target.mode, &[target.connector])?;
-    let scanout_format =
-        crate::scanout::format_for(surface.plane_info().formats.iter().map(|format| format.code));
+    let scanout_format = crate::scanout::format_for(
+        surface
+            .plane_info()
+            .formats
+            .iter()
+            .map(|format| format.code),
+    );
     tracing::info!(format = ?scanout_format, "scanout format");
     let (output, mode) = output_for(target);
 
@@ -812,6 +838,13 @@ where
     // The snap preview is ONE solid rect, so it needs one stable id of its own
     // for the same reason as the border edges below.
     let snap_preview_id = smithay::backend::renderer::element::Id::new();
+    let mut note_buffers: Vec<(
+        u32,
+        smithay::backend::renderer::element::memory::MemoryRenderBuffer,
+    )> = Vec::new();
+    let mut note_generation: u64 = u64::MAX;
+    let hidden_scene_id = smithay::backend::renderer::element::Id::new();
+    let target_connector = target.connector;
 
     let border_ids: [smithay::backend::renderer::element::Id; 4] = [
         smithay::backend::renderer::element::Id::new(),
@@ -999,9 +1032,14 @@ where
                 crate::presence::Settled::Present => {}
                 crate::presence::Settled::Away => {
                     frame_retry.forgive();
+                    data.state.lock_scene_on_glass();
+                    data.state.fail_pending_shots();
                     return idle_tick(&introspect, data, deadline, interval);
                 }
                 crate::presence::Settled::Returned => {
+                    data.state.panel = omoya_spec::idle::Panel::On;
+                    data.state.panel_dark_due = false;
+                    data.state.panel_wake_due = false;
                     scanout.resume();
                     flip_pending.store(false, std::sync::atomic::Ordering::Release);
                     frame_retry.forgive();
@@ -1013,6 +1051,29 @@ where
                     }
                     return idle_tick(&introspect, data, deadline, interval);
                 }
+            }
+
+            if data.state.panel_dark_due {
+                data.state.panel_dark_due = false;
+                data.state.panel = omoya_spec::idle::Panel::Dark;
+                if let Err(e) = set_panel_power(&device, target_connector, false) {
+                    tracing::warn!(error = %e, "the panel took no DPMS off");
+                }
+                data.state.publish_panel();
+            }
+            if data.state.panel_wake_due {
+                data.state.panel_wake_due = false;
+                if let Err(e) = set_panel_power(&device, target_connector, true) {
+                    tracing::warn!(error = %e, "the panel took no DPMS on");
+                }
+                data.state.panel = omoya_spec::idle::Panel::On;
+                data.state.publish_panel();
+                data.state.owed.mark(crate::owed::Owed::Resume);
+            }
+            if data.state.panel == omoya_spec::idle::Panel::Dark {
+                data.state.lock_scene_on_glass();
+                data.state.fail_pending_shots();
+                return idle_tick(&introspect, data, deadline, interval);
             }
 
             // ★ DO NOT COMPOSE A FRAME THE DISPLAY CANNOT TAKE. A flip issued
@@ -1410,6 +1471,9 @@ where
                     tab,
                     readings,
                     status: data.state.bar_status.shown().map(str::to_owned),
+                    layout: data.state.layout_sign(),
+                    blue: data.state.world.cells_line(),
+                    accent: data.state.config.look.accent,
                 };
                 if wanted != bar_text || bar_buffer.is_none() {
                     let bar_h = data.state.config.bar.height;
@@ -1447,6 +1511,51 @@ where
                         elements.push(SeatElements::Texture(el));
                     }
                 }
+                if note_generation != data.state.shelf.generation {
+                    note_generation = data.state.shelf.generation;
+                    note_buffers.clear();
+                    for shown in data.state.shelf.shown(data.state.config.notes.max as usize) {
+                        if let Some(px) = crate::bar::rasterize_note(
+                            &shown.note.summary,
+                            &shown.note.body,
+                            shown.note.urgency >= 2,
+                            data.state.config.look.accent,
+                        ) {
+                            note_buffers.push((
+                                shown.note.id,
+                                smithay::backend::renderer::element::memory::MemoryRenderBuffer::from_slice(
+                                    &px,
+                                    smithay::backend::allocator::Fourcc::Argb8888,
+                                    (crate::bar::NOTE_W, crate::bar::NOTE_H),
+                                    1,
+                                    smithay::utils::Transform::Normal,
+                                    None,
+                                ),
+                            ));
+                        }
+                    }
+                }
+                for (i, (_, b)) in note_buffers.iter().enumerate() {
+                    use smithay::backend::renderer::element::Kind;
+                    use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
+                    let x = f64::from(mode.size.w - crate::bar::NOTE_W - 12);
+                    let row = i32::try_from(i).unwrap_or(0);
+                    let y = f64::from(
+                        data.state.config.bar.height + 12 + row * (crate::bar::NOTE_H + 8),
+                    );
+                    if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
+                        &mut renderer,
+                        (x, y),
+                        b,
+                        None,
+                        None,
+                        None,
+                        Kind::Unspecified,
+                    ) {
+                        elements.push(SeatElements::Texture(el));
+                    }
+                }
+
             }
 
             // ── ★ THE FOCUS BORDER, DRAWN IN THE GAP ────────────────────
@@ -1580,7 +1689,8 @@ where
                 use smithay::backend::renderer::element::Kind;
                 use smithay::backend::renderer::element::solid::SolidColorRenderElement;
                 use smithay::backend::renderer::utils::CommitCounter;
-                let [cr, cg, cb, _] = crate::theme::focus_border_for_surface(false);
+                let [cr, cg, cb, _] =
+                    crate::theme::focus_border_for_surface(false, data.state.config.look.accent);
                 // Premultiplied: rgb scaled by the same alpha.
                 const WASH: f32 = 0.28;
                 elements.push(SeatElements::Solid(SolidColorRenderElement::new(
@@ -1612,7 +1722,7 @@ where
                 use smithay::backend::renderer::utils::CommitCounter;
                 let b = crate::layout::BORDER;
                 let colour = smithay::backend::renderer::Color32F::from(
-                    crate::theme::focus_border_for_surface(false),
+                    crate::theme::focus_border_for_surface(false, data.state.config.look.accent),
                 );
                 // ★ AROUND THE WHOLE FRAME — BAR INCLUDED.
                 //
@@ -1735,6 +1845,44 @@ where
                 elements.extend(els.into_iter().map(surface));
             }
             elements.extend(lower_elements.into_iter().map(surface));
+            if data.state.scene_hidden() {
+                elements.clear();
+                let dark = data.state.panel != omoya_spec::idle::Panel::On;
+                if !dark {
+                    for surface_tree in data.state.session_lock.surfaces_of_holder() {
+                        let trees: Vec<
+                            smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement<R>,
+                        > = smithay::backend::renderer::element::surface::render_elements_from_surface_tree(
+                            &mut renderer,
+                            &surface_tree,
+                            (0, 0),
+                            smithay::utils::Scale::from(1.0),
+                            1.0,
+                            Kind::Unspecified,
+                        );
+                        elements.extend(trees.into_iter().map(surface));
+                    }
+                }
+                let field = if dark {
+                    [0.0, 0.0, 0.0, 1.0]
+                } else {
+                    crate::theme::background_for_surface(false)
+                };
+                use smithay::backend::renderer::{
+                    element::solid::SolidColorRenderElement, utils::CommitCounter,
+                };
+                elements.push(SeatElements::Solid(SolidColorRenderElement::new(
+                    hidden_scene_id.clone(),
+                    smithay::utils::Rectangle::new((0, 0).into(), (mode.size.w, mode.size.h).into()),
+                    if dark {
+                        CommitCounter::from(1)
+                    } else {
+                        CommitCounter::default()
+                    },
+                    smithay::backend::renderer::Color32F::from(field),
+                    Kind::Unspecified,
+                )));
+            }
             // ★ PUBLISHED FROM THE PUSH, so `titlebar_drawn` is a measurement.
             *introspect
                 .chrome_drawn
@@ -1815,7 +1963,8 @@ where
                 // one added later by someone who never read this comment —
                 // resolves the request.
                 let requested = introspect.take_capture_request();
-                let age = if requested.is_some() {
+                let shots_due = data.state.shots.due();
+                let age = if requested.is_some() || shots_due {
                     0
                 } else {
                     scanout.back_buffer_age()
@@ -2159,6 +2308,30 @@ where
                     // Taking the request CLEARS it (above), so this is one-shot
                     // by construction: a capture every frame would fill the
                     // disk and change the timing it exists to observe.
+                    if shots_due {
+                        let rect = smithay::utils::Rectangle::new(
+                            (0, 0).into(),
+                            (mode.size.w, mode.size.h).into(),
+                        );
+                        let bytes = renderer
+                            .copy_framebuffer(&fb, rect, scanout_format)
+                            .map_err(|e| e.to_string())
+                            .and_then(|mapping| {
+                                renderer
+                                    .map_texture(&mapping)
+                                    .map(<[u8]>::to_vec)
+                                    .map_err(|e| e.to_string())
+                            });
+                        match bytes {
+                            Ok(bgra) => {
+                                data.state.deliver_shots(&bgra, (mode.size.w, mode.size.h));
+                            }
+                            Err(why) => {
+                                tracing::warn!(why, "the frame could not be read for a shot");
+                                data.state.fail_pending_shots();
+                            }
+                        }
+                    }
                     if let Some(inflight) = requested {
                         let req = &inflight.request;
                         let path = req.path.clone();
@@ -2229,10 +2402,20 @@ where
                 // skipped frame, holds an older image than the one on screen.
                 // So flipping a skipped frame is not merely wasteful, it moves
                 // the display backwards.
+                if !presented && data.state.session_lock.machine.hides_desktop() {
+                    data.state.lock_scene_on_glass();
+                }
+                if !presented && data.state.panel == omoya_spec::idle::Panel::Darkening {
+                    data.state.panel_dark_due = true;
+                }
                 if presented {
                     scanout.flip()?;
                     // Accepted, not retired — the VBlank event clears this.
                     flip_pending.store(true, std::sync::atomic::Ordering::Release);
+                    data.state.lock_frame_flipped();
+                    if data.state.panel == omoya_spec::idle::Panel::Darkening {
+                        data.state.panel_flip_in_flight = true;
+                    }
 
                     // ── ★ THE LEDGER CLEARS HERE, AND NOWHERE ELSE ──────────
                     //
@@ -2320,14 +2503,26 @@ where
             // a second frame. A compositor that renders once and then appears
             // frozen is usually this line missing.
             let now = data.state.start_time.elapsed();
-            data.state.space.elements().for_each(|w| {
-                w.send_frame(
+            for surface_tree in data.state.session_lock.surfaces_of_holder() {
+                smithay::desktop::utils::send_frames_surface_tree(
+                    &surface_tree,
                     &output,
                     now,
                     Some(std::time::Duration::ZERO),
                     |_, _| Some(output.clone()),
                 );
-            });
+            }
+            let hidden_now = data.state.scene_hidden();
+            if !hidden_now {
+                data.state.space.elements().for_each(|w| {
+                    w.send_frame(
+                        &output,
+                        now,
+                        Some(std::time::Duration::ZERO),
+                        |_, _| Some(output.clone()),
+                    );
+                });
+            }
             // ★ LAYER SURFACES GET THEM TOO — AND THIS LINE IS WHY A BAR OR A
             // LAUNCHER WOULD HAVE FROZEN AFTER EXACTLY ONE FRAME.
             //
@@ -2344,7 +2539,7 @@ where
             // the callback it depends on is worse than not advertising it.
             {
                 let map = smithay::desktop::layer_map_for_output(&output);
-                for layer in map.layers() {
+                for layer in map.layers().filter(|_| !hidden_now) {
                     layer.send_frame(
                         &output,
                         now,

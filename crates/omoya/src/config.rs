@@ -82,6 +82,87 @@ pub struct OmoyaConfig {
     /// Whether the focused window gets an outline. See [`FocusRing`].
     pub focus_ring: FocusRing,
     pub ground: GroundConfig,
+    pub look: LookConfig,
+    pub idle: IdleConfig,
+    pub lock: LockConfig,
+    pub sleep: SleepConfig,
+    pub notes: NotesConfig,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct NotesConfig {
+    pub enabled: bool,
+    pub ms: u32,
+    pub max: u32,
+}
+
+impl Default for NotesConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            ms: 6000,
+            max: 3,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct IdleConfig {
+    pub blank_s: u32,
+    pub lock_s: u32,
+}
+
+impl IdleConfig {
+    #[must_use]
+    pub fn policy(self) -> omoya_spec::idle::IdlePolicy {
+        let after = |s: u32| {
+            if s == 0 {
+                None
+            } else {
+                Some(std::time::Duration::from_secs(s as u64))
+            }
+        };
+        omoya_spec::idle::IdlePolicy {
+            blank_after: after(self.blank_s),
+            lock_after: after(self.lock_s),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LockConfig {
+    pub client: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SleepConfig {
+    pub lock_before: bool,
+}
+
+impl Default for SleepConfig {
+    fn default() -> Self {
+        Self { lock_before: true }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Accent {
+    Frost0,
+    #[default]
+    Frost1,
+    Frost2,
+    Frost3,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LookConfig {
+    pub accent: Accent,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -363,6 +444,11 @@ impl OmoyaConfig {
             ukeire: crate::ukeire::Ukeire::default(),
             focus_ring: FocusRing::default(),
             ground: GroundConfig::default(),
+            look: LookConfig::default(),
+            idle: IdleConfig::default(),
+            lock: LockConfig::default(),
+            sleep: SleepConfig::default(),
+            notes: NotesConfig::default(),
         }
     }
 
@@ -726,6 +812,11 @@ mod tests {
             "ukeire: {pointer: {}}\n",
             "ukeire: {touchpad: {}}\n",
             "ground: {}\n",
+            "look: {}\n",
+            "idle: {}\n",
+            "lock: {}\n",
+            "sleep: {}\n",
+            "notes: {}\n",
         ] {
             assert!(
                 serde_yaml::from_str::<OmoyaConfig>(yaml).is_ok(),
@@ -757,7 +848,7 @@ mod tests {
             .find("crate::config::load()")
             .expect("main must load the config");
         let seat = code
-            .find("=> run_drm_seat(")
+            .find("run_drm_seat(")
             .expect("main must start the DRM seat");
         assert!(
             load < seat,

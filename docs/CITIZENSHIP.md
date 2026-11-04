@@ -358,5 +358,10 @@ not about a gate.
   on hardware. Mouse acceleration, tap-and-drag and pinch or swipe gestures were
   libinput's value too and were not reimplemented.
 
+**2026-11-03, the blue host.** `blue-lang-worker` brings `psm`, the assembly behind
+`stacker`, into the binary as a static object. It links no `.so`, and it runs only in
+the worker children, never on the seat's own stack. A census of the crate tree finds
+no other new C.
+
 "No C in the compositor binary" is now true and measured. "No C on the seat"
 is not, and the two rows above are the distance between them.

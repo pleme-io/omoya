@@ -420,6 +420,18 @@ pub struct Ukeire {
     pub modifier: SeatModifier,
     /// evdev-level rewrites, proven safe by their own type.
     pub remaps: Remaps,
+    pub layouts: Vec<String>,
+}
+
+#[must_use]
+pub fn layout_pair(name: &str) -> (&str, &str) {
+    name.split_once('+').unwrap_or((name, ""))
+}
+
+#[must_use]
+pub fn layout_is_realised(name: &str) -> bool {
+    let (layout, variant) = layout_pair(name);
+    hairetsu::layout::by_names(layout, variant).is_some()
 }
 
 impl Default for Ukeire {
@@ -438,6 +450,7 @@ impl Default for Ukeire {
             touchpad: nazoru::TouchpadConfig::default(),
             modifier: SeatModifier::default(),
             remaps: Remaps::unchecked(crate::remap::DEFAULT_REMAPS),
+            layouts: Vec::new(),
         }
     }
 }

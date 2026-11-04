@@ -237,12 +237,20 @@ Two consequences worth stating plainly:
   That is correct behaviour on every compositor, not an omoya defect — but it
   is the thing to check first if a non-mado client cannot type accents.
 
-**Still refused, deliberately:** any layout not in the registry, and any named
-variant. Handing back a base table for a requested variant is the same silent
-substitution in a new costume.
+**Variants, 2026-11-03.** `us(intl)` is a row in the registry. Its table is read
+from `xkbcli compile-keymap --layout us --variant intl` over xkeyboard-config 2.46,
+and `tests/fixtures/us-intl.xkb` is that output. `us_intl_agrees_with_xkbcli`
+compares each four-level key with it. A layout switch is `ukeire.layouts`: a list,
+each `layout` or `layout+variant`, first one first, and `Logo+Space` or the
+`next-layout` verb moves through them. `set_xkb_config` hands every bound keyboard
+the new keymap, and the keys a person holds stay held.
 
-`pending-ukeire-variants: hairetsu reads xkeyboard-config rules, so a named
-variant (`us(dvorak)`, `br(nodeadkeys)`) resolves rather than refuses`
+**Still refused, deliberately:** any layout not in the registry, and any named
+variant with no row. Handing back a base table for a requested variant is the same
+silent substitution in a new costume.
+
+`pending-ukeire-variants: hairetsu reads xkeyboard-config rules, so a variant with no
+row (`us(dvorak)`, `br(nodeadkeys)`) resolves rather than refuses`
 
 ## The touchpad: `nazoru` (なぞる, to trace with a finger)
 
@@ -509,7 +517,7 @@ type.
 | `ukeire_cursor_scale` | |
 | `ukeire_remaps` | count |
 | `ukeire_modifier` | `super` / `alt` |
-| `ukeire_keymap_layout` | **`<bare>` when the requested layout did not compile** — published only on a successful apply, so the observation plane never confirms a change that did not happen |
+| `ukeire_keymap_layout` | **`<bare>` when the requested layout did not compile** — published only on a successful apply, so the observation plane never confirms a change that did not happen. A variant reads `us+intl` |
 
 ## M1, named rather than implied
 

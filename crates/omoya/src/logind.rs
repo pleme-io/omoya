@@ -155,6 +155,154 @@ impl Inner {
     }
 }
 
+#[derive(Clone)]
+pub struct LogindPower {
+    conn: zbus::blocking::Connection,
+    session_path: zvariant::OwnedObjectPath,
+}
+
+impl std::fmt::Debug for LogindPower {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("LogindPower")
+    }
+}
+
+fn body_of_sleep(msg: &zbus::Message) -> Option<bool> {
+    msg.body().deserialize::<bool>().ok()
+}
+
+impl LogindPower {
+    pub fn inhibit_sleep(&self) -> Result<OwnedFd, Error> {
+        let reply = self
+            .conn
+            .call_method(
+                Some(DEST),
+                MANAGER_PATH,
+                Some(MANAGER_IFACE),
+                "Inhibit",
+                &("sleep", "omoya", "locks the session before sleep", "delay"),
+            )
+            .map_err(|e| Error::Refused {
+                method: "Inhibit",
+                reason: e.to_string(),
+            })?;
+        let fd: zvariant::OwnedFd = reply.body().deserialize().map_err(|e| Error::Refused {
+            method: "Inhibit",
+            reason: format!("the reply is an fd: {e}"),
+        })?;
+        Ok(OwnedFd::from(fd))
+    }
+
+    pub fn suspend(&self) -> Result<(), Error> {
+        self.conn
+            .call_method(
+                Some(DEST),
+                MANAGER_PATH,
+                Some(MANAGER_IFACE),
+                "Suspend",
+                &(false,),
+            )
+            .map(|_| ())
+            .map_err(|e| Error::Refused {
+                method: "Suspend",
+                reason: e.to_string(),
+            })
+    }
+
+    fn session_hint(&self, method: &'static str, value: bool) -> Result<(), Error> {
+        self.conn
+            .call_method(
+                Some(DEST),
+                self.session_path.as_str(),
+                Some(SESSION_IFACE),
+                method,
+                &(value,),
+            )
+            .map(|_| ())
+            .map_err(|e| Error::Refused {
+                method,
+                reason: e.to_string(),
+            })
+    }
+
+    pub fn set_locked_hint(&self, locked: bool) -> Result<(), Error> {
+        self.session_hint("SetLockedHint", locked)
+    }
+
+    pub fn set_idle_hint(&self, idle: bool) -> Result<(), Error> {
+        self.session_hint("SetIdleHint", idle)
+    }
+
+    pub fn watch(
+        &self,
+        sender: smithay::reexports::calloop::channel::Sender<crate::world::SeatMessage>,
+    ) {
+        let conn = self.conn.clone();
+        let session = self.session_path.clone();
+        let manager_sender = sender.clone();
+        let manager_conn = conn.clone();
+        let _ = std::thread::Builder::new()
+            .name("omoya-logind-manager".into())
+            .spawn(move || {
+                let rule = format!(
+                    "type='signal',sender='{DEST}',path='{MANAGER_PATH}',interface='{MANAGER_IFACE}',member='PrepareForSleep'"
+                );
+                let Ok(iter) = zbus::blocking::MessageIterator::for_match_rule(
+                    rule.as_str(),
+                    &manager_conn,
+                    Some(16),
+                ) else {
+                    tracing::error!("no PrepareForSleep match; a sleep will not lock this seat");
+                    return;
+                };
+                for msg in iter.flatten() {
+                    if let Some(start) = body_of_sleep(&msg)
+                        && manager_sender
+                            .send(crate::world::SeatMessage::PrepareForSleep(start))
+                            .is_err()
+                    {
+                        return;
+                    }
+                }
+            });
+        let _ = std::thread::Builder::new()
+            .name("omoya-logind-session".into())
+            .spawn(move || {
+                let rule = format!(
+                    "type='signal',sender='{DEST}',path='{}',interface='{SESSION_IFACE}',member='Lock'",
+                    session.as_str()
+                );
+                let Ok(iter) =
+                    zbus::blocking::MessageIterator::for_match_rule(rule.as_str(), &conn, Some(16))
+                else {
+                    tracing::error!("no Lock match; loginctl lock-session will not reach this seat");
+                    return;
+                };
+                for _msg in iter.flatten() {
+                    if sender.send(crate::world::SeatMessage::LockSignal).is_err() {
+                        return;
+                    }
+                }
+            });
+    }
+
+    pub fn set_brightness(&self, subsystem: &str, name: &str, value: u32) -> Result<(), Error> {
+        self.conn
+            .call_method(
+                Some(DEST),
+                self.session_path.as_str(),
+                Some(SESSION_IFACE),
+                "SetBrightness",
+                &(subsystem, name, value),
+            )
+            .map(|_| ())
+            .map_err(|e| Error::Refused {
+                method: "SetBrightness",
+                reason: e.to_string(),
+            })
+    }
+}
+
 /// The compositor-facing half. Cheap to clone; smithay hands it to libinput.
 #[derive(Clone)]
 pub struct LogindSession {
@@ -180,6 +328,14 @@ pub struct LogindSessionNotifier {
 }
 
 impl LogindSession {
+    #[must_use]
+    pub fn power(&self) -> LogindPower {
+        LogindPower {
+            conn: self.inner.conn.clone(),
+            session_path: self.inner.session_path.clone(),
+        }
+    }
+
     /// Take control of this process's logind session.
     ///
     /// # Errors

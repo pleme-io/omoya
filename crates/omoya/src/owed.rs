@@ -42,6 +42,7 @@ pub enum Owed {
     /// committed while we were away and the framebuffer contents are not
     /// ours any more, so the next frame must be unconditional.
     Resume,
+    Lock,
 }
 
 impl mekuri::Cause for Owed {
@@ -55,6 +56,7 @@ impl mekuri::Cause for Owed {
             Owed::Capture => 5,
             Owed::Resume => 6,
             Owed::Ground => 7,
+            Owed::Lock => 8,
         }
     }
 
@@ -68,6 +70,7 @@ impl mekuri::Cause for Owed {
             Owed::Capture,
             Owed::Resume,
             Owed::Ground,
+            Owed::Lock,
         ]
     }
 }
@@ -86,6 +89,7 @@ impl Owed {
             Owed::Capture => "capture",
             Owed::Resume => "resume",
             Owed::Ground => "ground",
+            Owed::Lock => "lock",
         }
     }
 }
@@ -210,6 +214,6 @@ mod tests {
         // `all()` is what the leaf enumerates and what `bits_are_distinct`
         // checks. A variant missing from it is invisible to both, so its
         // count is pinned: adding a variant without listing it fails here.
-        assert_eq!(Owed::all().len(), 8, "a new Owed variant must join all()");
+        assert_eq!(Owed::all().len(), 9, "a new Owed variant must join all()");
     }
 }

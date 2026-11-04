@@ -97,6 +97,215 @@ pub enum Deed {
     /// Snap the focused floating window by Windows' Win+Arrow table — see
     /// `snap::step`. Floating mode only; refused, by name, in tiling mode.
     Snap(Direction),
+    Command(String),
+    Nothing,
+    NextLayout,
+    Volume(i8),
+    Mute,
+    Backlight(i8),
+    Lock,
+    Suspend,
+    DismissNote,
+    Screenshot,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SeatCommand {
+    Run(Vec<String>),
+    Deed(Deed),
+    Volume(i8),
+    Mute,
+    Backlight(i8),
+    Screenshot(std::path::PathBuf),
+}
+
+fn step_of(value: &serde_json::Value) -> Result<i8, String> {
+    let step = value
+        .get("step_pct")
+        .and_then(serde_json::Value::as_i64)
+        .ok_or("step_pct is no whole number")?;
+    i8::try_from(step)
+        .ok()
+        .filter(|s| (-100..=100).contains(s))
+        .ok_or_else(|| format!("step_pct {step} is outside -100..100"))
+}
+
+impl SeatCommand {
+    pub fn from_world(value: &serde_json::Value) -> Result<Self, String> {
+        let kind = value
+            .get("kind")
+            .and_then(serde_json::Value::as_str)
+            .ok_or("no kind")?;
+        match kind {
+            "run" => {
+                let argv: Vec<String> = value
+                    .get("argv")
+                    .and_then(serde_json::Value::as_array)
+                    .ok_or("no argv")?
+                    .iter()
+                    .map(|w| w.as_str().map(str::to_owned).ok_or("argv holds a non-word"))
+                    .collect::<Result<_, _>>()?;
+                if argv.is_empty() {
+                    return Err("an empty argv".to_owned());
+                }
+                Ok(Self::Run(argv))
+            }
+            "deed" => {
+                let verb = value
+                    .get("verb")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or("no verb")?
+                    .replace('_', "-");
+                match Deed::parse(&verb) {
+                    Some(Deed::Command(_)) | None => Err(format!("{verb} is no verb of the seat")),
+                    Some(deed) => Ok(Self::Deed(deed)),
+                }
+            }
+            "volume" => Ok(Self::Volume(step_of(value)?)),
+            "mute" => Ok(Self::Mute),
+            "backlight" => Ok(Self::Backlight(step_of(value)?)),
+            "screenshot" => {
+                let dir = value
+                    .get("dir")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or("no dir")?;
+                Ok(Self::Screenshot(std::path::PathBuf::from(dir)))
+            }
+            other => Err(format!("{other} is no command kind")),
+        }
+    }
+}
+
+#[must_use]
+pub fn valid_command_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+#[derive(Debug)]
+pub struct BuiltBindings {
+    pub map: BindingMap<Deed>,
+    pub behind_lock: Vec<String>,
+    pub refusals: Vec<blue_lang_worker::Refusal>,
+}
+
+fn is_bare_application_key(hotkey: &Hotkey) -> bool {
+    use std::convert::identity;
+    if hotkey.modifiers != Modifiers::NONE {
+        return false;
+    }
+    identity(!matches!(
+        hotkey.key,
+        Key::F1
+            | Key::F2
+            | Key::F3
+            | Key::F4
+            | Key::F5
+            | Key::F6
+            | Key::F7
+            | Key::F8
+            | Key::F9
+            | Key::F10
+            | Key::F11
+            | Key::F12
+            | Key::VolumeUp
+            | Key::VolumeDown
+            | Key::Mute
+            | Key::BrightnessUp
+            | Key::BrightnessDown
+            | Key::PlayPause
+            | Key::NextTrack
+            | Key::PreviousTrack
+            | Key::PrintScreen
+    ))
+}
+
+pub fn parse_chord(chord: &str) -> Result<Hotkey, String> {
+    let spelled = chord.replace("logo", "super");
+    let hotkey = Hotkey::parse(&spelled).map_err(|e| e.to_string())?;
+    if crate::chord::key_is_reachable(hotkey.key) {
+        Ok(hotkey)
+    } else {
+        Err(format!("{chord} names a key the seat cannot see"))
+    }
+}
+
+fn action_deed(
+    action: &str,
+    commands: &std::collections::BTreeMap<String, SeatCommand>,
+) -> Result<Deed, String> {
+    if action == "none" {
+        return Ok(Deed::Nothing);
+    }
+    match Deed::parse(&action.replace('_', "-")) {
+        Some(Deed::Command(_)) | None => {}
+        Some(deed) => return Ok(deed),
+    }
+    if commands.contains_key(action) {
+        return Ok(Deed::Command(action.to_owned()));
+    }
+    Err(format!("{action} is no verb and no declared command"))
+}
+
+#[must_use]
+pub fn world_bindings(
+    mut map: BindingMap<Deed>,
+    binds: &[crate::world::WorldBind],
+    commands: &std::collections::BTreeMap<String, SeatCommand>,
+) -> BuiltBindings {
+    let reserved = awase::Reserved::fleet_linux();
+    let mut behind_lock = Vec::new();
+    let mut refusals = Vec::new();
+    let refuse = |chord: &str, why: String| {
+        blue_lang_worker::Refusal::new("invalid", format!("bind {chord}: {why}"))
+    };
+    for bind in binds {
+        let hotkey = match parse_chord(&bind.chord) {
+            Ok(hotkey) => hotkey,
+            Err(why) => {
+                refusals.push(refuse(&bind.chord, why));
+                continue;
+            }
+        };
+        if reserved.claim_on(&hotkey).is_some() {
+            refusals.push(refuse(
+                &bind.chord,
+                "the chord is reserved for the way out of this seat".to_owned(),
+            ));
+            continue;
+        }
+        if is_bare_application_key(&hotkey) {
+            refusals.push(refuse(
+                &bind.chord,
+                "a bare key belongs to the applications".to_owned(),
+            ));
+            continue;
+        }
+        let deed = match action_deed(&bind.action, commands) {
+            Ok(deed) => deed,
+            Err(why) => {
+                refusals.push(refuse(&bind.chord, why));
+                continue;
+            }
+        };
+        if bind.locked {
+            behind_lock.push(bind.action.clone());
+        }
+        let mut binding = Binding::new(hotkey, deed.clone());
+        if deed == Deed::Nothing {
+            binding.consume = false;
+        }
+        if let Some(mode) = map.mode_mut("default") {
+            let _ = mode.add_binding(binding);
+        }
+    }
+    BuiltBindings {
+        map,
+        behind_lock,
+        refusals,
+    }
 }
 
 impl Deed {
@@ -138,7 +347,24 @@ impl Deed {
             "snap-right" => Self::Snap(Direction::Right),
             "snap-up" => Self::Snap(Direction::Above),
             "snap-down" => Self::Snap(Direction::Below),
-            _ => return None,
+            "none" => Self::Nothing,
+            "next-layout" => Self::NextLayout,
+            "volume-up" => Self::Volume(5),
+            "volume-down" => Self::Volume(-5),
+            "mute" => Self::Mute,
+            "brightness-up" => Self::Backlight(5),
+            "brightness-down" => Self::Backlight(-5),
+            "lock" => Self::Lock,
+            "suspend" => Self::Suspend,
+            "dismiss-note" => Self::DismissNote,
+            "screenshot" => Self::Screenshot,
+            other => {
+                let name = other.strip_prefix("command:")?;
+                if !valid_command_name(name) {
+                    return None;
+                }
+                Self::Command(name.to_owned())
+            }
         })
     }
 
@@ -168,6 +394,17 @@ impl Deed {
         "snap-right",
         "snap-up",
         "snap-down",
+        "none",
+        "next-layout",
+        "volume-up",
+        "volume-down",
+        "mute",
+        "brightness-up",
+        "brightness-down",
+        "lock",
+        "suspend",
+        "dismiss-note",
+        "screenshot",
     ];
 }
 
@@ -325,6 +562,41 @@ pub fn default_bindings_for(logo: Modifiers, floating: bool) -> (BindingMap<Deed
     )) {
         clashes.push(prev.hotkey);
     }
+    if let Err(prev) = mode.try_bind(Binding::new(Hotkey::new(logo, Key::N), Deed::DismissNote)) {
+        clashes.push(prev.hotkey);
+    }
+    if let Err(prev) = mode.try_bind(Binding::new(Hotkey::new(logo, Key::Escape), Deed::Lock)) {
+        clashes.push(prev.hotkey);
+    }
+    if let Err(prev) = mode.try_bind(Binding::new(
+        Hotkey::new(logo, Key::Space),
+        Deed::NextLayout,
+    )) {
+        clashes.push(prev.hotkey);
+    }
+    if let Err(prev) = mode.try_bind(Binding::new(
+        Hotkey::new(Modifiers::NONE, Key::PrintScreen),
+        Deed::Screenshot,
+    )) {
+        clashes.push(prev.hotkey);
+    }
+    if let Err(prev) = mode.try_bind(Binding::new(
+        Hotkey::new(logo_shift, Key::S),
+        Deed::Screenshot,
+    )) {
+        clashes.push(prev.hotkey);
+    }
+    for (key, deed) in [
+        (Key::VolumeUp, Deed::Volume(5)),
+        (Key::VolumeDown, Deed::Volume(-5)),
+        (Key::Mute, Deed::Mute),
+        (Key::BrightnessUp, Deed::Backlight(5)),
+        (Key::BrightnessDown, Deed::Backlight(-5)),
+    ] {
+        if let Err(prev) = mode.try_bind(Binding::new(Hotkey::new(Modifiers::NONE, key), deed)) {
+            clashes.push(prev.hotkey);
+        }
+    }
     (map, clashes)
 }
 
@@ -429,6 +701,172 @@ mod tests {
         assert_eq!(Deed::parse("focus"), None, "a prefix is not a verb");
     }
 
+    fn world_bind(chord: &str, action: &str) -> crate::world::WorldBind {
+        crate::world::WorldBind {
+            chord: chord.to_owned(),
+            action: action.to_owned(),
+            locked: false,
+        }
+    }
+
+    fn commands() -> std::collections::BTreeMap<String, SeatCommand> {
+        [("louder".to_owned(), SeatCommand::Volume(5))]
+            .into_iter()
+            .collect()
+    }
+
+    fn built(binds: &[crate::world::WorldBind]) -> BuiltBindings {
+        world_bindings(default_bindings().0, binds, &commands())
+    }
+
+    #[test]
+    fn a_world_bind_takes_a_verb_or_a_declared_command_by_name() {
+        let mut b = built(&[
+            world_bind("super+a", "close"),
+            world_bind("super+b", "louder"),
+        ]);
+        assert!(b.refusals.is_empty(), "{:?}", b.refusals);
+        assert_eq!(
+            hit(&mut b.map, Hotkey::new(LOGO, Key::A)),
+            Some(Deed::Close)
+        );
+        assert_eq!(
+            hit(&mut b.map, Hotkey::new(LOGO, Key::B)),
+            Some(Deed::Command("louder".to_owned()))
+        );
+    }
+
+    #[test]
+    fn a_world_bind_replaces_a_default_and_the_siblings_stand() {
+        let mut b = built(&[world_bind("super+q", "minimize")]);
+        assert_eq!(
+            hit(&mut b.map, Hotkey::new(LOGO, Key::Q)),
+            Some(Deed::Minimize)
+        );
+        assert_eq!(
+            hit(&mut b.map, Hotkey::new(LOGO, Key::H)),
+            Some(Deed::Focus(Direction::Left))
+        );
+    }
+
+    #[test]
+    fn a_bad_bind_is_refused_alone_by_name() {
+        let mut b = built(&[
+            world_bind("super+wibble", "close"),
+            world_bind("super+a", "explode"),
+            world_bind("ctrl+alt+f2", "close"),
+            world_bind("a", "close"),
+            world_bind("super+b", "close"),
+        ]);
+        assert_eq!(b.refusals.len(), 4, "{:?}", b.refusals);
+        assert!(b.refusals[0].why.starts_with("bind super+wibble:"));
+        assert!(b.refusals[1].why.contains("explode"));
+        assert!(b.refusals[2].why.contains("reserved"));
+        assert!(b.refusals[3].why.contains("applications"));
+        assert_eq!(
+            hit(&mut b.map, Hotkey::new(LOGO, Key::B)),
+            Some(Deed::Close)
+        );
+        assert_eq!(hit(&mut b.map, Hotkey::new(LOGO, Key::A)), None);
+    }
+
+    #[test]
+    fn a_media_key_binds_bare_and_a_locked_bind_is_recorded() {
+        let mut bind = world_bind("volume_up", "louder");
+        bind.locked = true;
+        let mut b = built(&[bind]);
+        assert!(b.refusals.is_empty(), "{:?}", b.refusals);
+        assert_eq!(b.behind_lock, vec!["louder".to_owned()]);
+        assert_eq!(
+            hit(&mut b.map, Hotkey::new(Modifiers::NONE, Key::VolumeUp)),
+            Some(Deed::Command("louder".to_owned()))
+        );
+    }
+
+    #[test]
+    fn none_leaves_the_chord_to_the_client() {
+        let mut b = built(&[world_bind("super+q", "none")]);
+        match b
+            .map
+            .match_key(Hotkey::new(LOGO, Key::Q), &MatchContext::default())
+        {
+            MatchResult::Matched { action, consume } => {
+                assert_eq!(action, Deed::Nothing);
+                assert!(!consume);
+            }
+            _ => panic!("no match"),
+        }
+    }
+
+    #[test]
+    fn a_command_is_named_and_never_carries_an_argv_over_the_verb_surface() {
+        assert_eq!(
+            Deed::parse("command:louder"),
+            Some(Deed::Command("louder".to_owned()))
+        );
+        assert_eq!(Deed::parse("command:"), None);
+        assert_eq!(Deed::parse("command:rm -rf /"), None);
+        assert_eq!(Deed::parse("command:a;b"), None);
+    }
+
+    #[test]
+    fn a_world_command_reads_each_kind_and_refuses_what_it_cannot() {
+        use serde_json::json;
+        let cases = [
+            (
+                json!({"kind": "run", "argv": ["a", "b"]}),
+                SeatCommand::Run(vec!["a".into(), "b".into()]),
+            ),
+            (
+                json!({"kind": "deed", "verb": "spawn_terminal"}),
+                SeatCommand::Deed(Deed::SpawnTerminal),
+            ),
+            (
+                json!({"kind": "volume", "step_pct": -5}),
+                SeatCommand::Volume(-5),
+            ),
+            (json!({"kind": "mute"}), SeatCommand::Mute),
+            (
+                json!({"kind": "backlight", "step_pct": 5}),
+                SeatCommand::Backlight(5),
+            ),
+            (
+                json!({"kind": "screenshot", "dir": "/p"}),
+                SeatCommand::Screenshot("/p".into()),
+            ),
+        ];
+        for (value, want) in cases {
+            assert_eq!(SeatCommand::from_world(&value).unwrap(), want);
+        }
+        for bad in [
+            json!({"kind": "run", "argv": []}),
+            json!({"kind": "run", "argv": [1]}),
+            json!({"kind": "deed", "verb": "explode"}),
+            json!({"kind": "deed", "verb": "command:x"}),
+            json!({"kind": "volume", "step_pct": 101}),
+            json!({"kind": "nope"}),
+            json!({}),
+        ] {
+            assert!(SeatCommand::from_world(&bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn the_media_keys_work_with_no_world_at_all() {
+        let (mut m, clashes) = default_bindings();
+        assert!(clashes.is_empty(), "{clashes:?}");
+        for (key, deed) in [
+            (Key::VolumeUp, Deed::Volume(5)),
+            (Key::VolumeDown, Deed::Volume(-5)),
+            (Key::Mute, Deed::Mute),
+            (Key::BrightnessUp, Deed::Backlight(5)),
+            (Key::BrightnessDown, Deed::Backlight(-5)),
+        ] {
+            assert_eq!(hit(&mut m, Hotkey::new(Modifiers::NONE, key)), Some(deed));
+            assert!(crate::chord::key_is_reachable(key), "{key:?} has no keysym");
+        }
+    }
+
     #[test]
     fn a_bare_key_is_never_a_deed() {
         let (mut m, _) = default_bindings();
@@ -486,7 +924,52 @@ impl crate::state::Omoya {
     #[must_use = "a deed can be REFUSED — dropping the outcome is what made \
                   `deeds_performed` count no-ops as successes"]
     pub fn perform(&mut self, deed: Deed) -> DeedOutcome {
+        if self.session_lock.machine.hides_desktop() && !self.runs_behind_lock(&deed) {
+            return DeedOutcome::Refused("the session is locked");
+        }
+        if let Deed::Command(name) = &deed
+            && self.session_lock.machine.hides_desktop()
+            && matches!(
+                self.world.commands.get(name),
+                Some(SeatCommand::Screenshot(_))
+            )
+        {
+            return DeedOutcome::Refused("the session is locked");
+        }
         match deed {
+            Deed::Lock => {
+                if self.lock_session() {
+                    DeedOutcome::Performed
+                } else {
+                    DeedOutcome::Refused("this seat has no lock client (lock.client)")
+                }
+            }
+            Deed::Suspend => self.power_command(crate::power::PowerCommand::Suspend),
+            Deed::Screenshot => {
+                self.screenshot(None);
+                DeedOutcome::Performed
+            }
+            Deed::DismissNote => {
+                if self.dismiss_note() {
+                    DeedOutcome::Performed
+                } else {
+                    DeedOutcome::Refused("no note to dismiss")
+                }
+            }
+            Deed::Nothing => DeedOutcome::Refused("this chord is configured off"),
+            Deed::Volume(step) => self.power_command(crate::power::PowerCommand::Volume(step)),
+            Deed::Mute => self.power_command(crate::power::PowerCommand::Mute),
+            Deed::Backlight(step) => {
+                self.power_command(crate::power::PowerCommand::Backlight(step))
+            }
+            Deed::NextLayout => {
+                if self.next_layout() {
+                    DeedOutcome::Performed
+                } else {
+                    DeedOutcome::Refused("this seat has one layout")
+                }
+            }
+            Deed::Command(name) => self.perform_command(&name),
             Deed::Focus(dir) => {
                 // ★ THE ANSWER IS REPORTED. This discarded `focus_direction`'s
                 // result and always said Performed — so a chord that moved
@@ -711,6 +1194,50 @@ impl crate::state::Omoya {
         }
     }
 
+    #[must_use]
+    fn runs_behind_lock(&self, deed: &Deed) -> bool {
+        match deed {
+            Deed::Volume(_) | Deed::Mute | Deed::Backlight(_) | Deed::Lock | Deed::Suspend => true,
+            Deed::Command(name) => self.world.behind_lock.iter().any(|a| a == name),
+            other => self
+                .world
+                .behind_lock
+                .iter()
+                .any(|a| Deed::parse(&a.replace('_', "-")).as_ref() == Some(other)),
+        }
+    }
+
+    fn power_command(&self, command: crate::power::PowerCommand) -> DeedOutcome {
+        if self.power.as_ref().is_some_and(|p| p.send(command)) {
+            DeedOutcome::Performed
+        } else {
+            DeedOutcome::Refused("this seat has no power thread")
+        }
+    }
+
+    fn perform_command(&mut self, name: &str) -> DeedOutcome {
+        let Some(command) = self.world.commands.get(name).cloned() else {
+            return DeedOutcome::Refused("no such command in this world");
+        };
+        match command {
+            SeatCommand::Run(argv) => {
+                if crate::spawn::into_seat(&argv, &self.socket_name, "world command") {
+                    DeedOutcome::Performed
+                } else {
+                    DeedOutcome::Refused("the command's program could not be started")
+                }
+            }
+            SeatCommand::Deed(deed) => self.perform(deed),
+            SeatCommand::Volume(step) => self.perform(Deed::Volume(step)),
+            SeatCommand::Mute => self.perform(Deed::Mute),
+            SeatCommand::Backlight(step) => self.perform(Deed::Backlight(step)),
+            SeatCommand::Screenshot(dir) => {
+                self.screenshot(Some(dir));
+                DeedOutcome::Performed
+            }
+        }
+    }
+
     /// Move focus to the neighbour in `dir`. Returns whether focus MOVED.
     fn focus_direction(&mut self, dir: Direction) -> bool {
         // ── ★ FLOATING WINDOWS HAVE NO TREE TO WALK ──────────────────────
@@ -843,6 +1370,9 @@ impl crate::state::Omoya {
     /// can see, and every subsequent verb would act on it.
     pub fn focus_any_visible(&mut self) {
         use smithay::reexports::wayland_server::Resource as _;
+        if self.session_lock.machine.hides_desktop() {
+            return;
+        }
         let next = self
             .space
             .elements()
@@ -872,6 +1402,9 @@ impl crate::state::Omoya {
     /// while every window still looks inactive — which reads as the keyboard
     /// going to the wrong place.
     pub fn focus_window(&mut self, window: &smithay::desktop::Window) {
+        if self.session_lock.machine.hides_desktop() {
+            return;
+        }
         // ★ RECORDED BEFORE THE MOVE, so `tab-join` has a host. Taken from the
         // SEAT rather than remembered at the call sites: every path into focus
         // funnels through here, which is the one place a fifth caller cannot
@@ -1005,13 +1538,7 @@ impl crate::state::Omoya {
         };
         // ★ ONE spawn path, so the "no zombie can form" guarantee installed at
         // startup covers everything this seat starts. See `crate::spawn`.
-        crate::spawn::into_seat(&cmd, &self.socket_name, what);
-        // Known limit, stated rather than papered over: `into_seat` returns
-        // `()` and swallows an empty argv and a `spawn()` error (ENOENT on a
-        // mistyped command). So `true` means "a command was configured and
-        // handed to the spawner", not "a process exists". Threading that
-        // answer back is a separate change to `spawn`.
-        true
+        crate::spawn::into_seat(&cmd, &self.socket_name, what)
     }
 }
 

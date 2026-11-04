@@ -352,6 +352,25 @@ pub struct Omoya {
     pub ground: crate::ground::Ground,
     pub bar_status: crate::bar::StatusLine,
     pub presence: crate::presence::Presence,
+    pub world: crate::world::SeatWorld,
+    pub power: Option<crate::power::Power>,
+    pub session_lock: crate::session_lock::LockState,
+    pub idle: omoya_spec::idle::Idle,
+    pub panel: omoya_spec::idle::Panel,
+    pub panel_flip_in_flight: bool,
+    pub panel_dark_due: bool,
+    pub panel_wake_due: bool,
+    pub wake_swallow: omoya_spec::idle::WakeSwallow,
+    pub sleep_wait: bool,
+    pub shots: crate::screencopy::ScreenShots,
+    pub primary_selection_state:
+        smithay::wayland::selection::primary_selection::PrimarySelectionState,
+    pub wlr_data_control_state: smithay::wayland::selection::wlr_data_control::DataControlState,
+    pub ext_data_control_state: smithay::wayland::selection::ext_data_control::DataControlState,
+    pub shelf: crate::notes::NoteShelf,
+    pub notes: Option<crate::notes::Notes>,
+    pub idle_inhibit_state: smithay::wayland::idle_inhibit::IdleInhibitManagerState,
+    pub inhibiting: Vec<WlSurface>,
 }
 
 impl Omoya {
@@ -387,6 +406,24 @@ impl Omoya {
         let relative_pointer_state =
             smithay::wayland::relative_pointer::RelativePointerManagerState::new::<Self>(&dh);
         let popups = PopupManager::default();
+        let idle_inhibit_state =
+            smithay::wayland::idle_inhibit::IdleInhibitManagerState::new::<Self>(&dh);
+        Self::create_session_lock_global(&dh);
+        Self::create_screencopy_global(&dh);
+        let primary_selection_state =
+            smithay::wayland::selection::primary_selection::PrimarySelectionState::new::<Self>(&dh);
+        let wlr_data_control_state =
+            smithay::wayland::selection::wlr_data_control::DataControlState::new::<Self, _>(
+                &dh,
+                Some(&primary_selection_state),
+                |_| true,
+            );
+        let ext_data_control_state =
+            smithay::wayland::selection::ext_data_control::DataControlState::new::<Self, _>(
+                &dh,
+                Some(&primary_selection_state),
+                |_| true,
+            );
 
         let mut seat: Seat<Self> = seat_state.new_wl_seat(&dh, "omoya");
         // Repeat rate/delay: the fleet's, not the toolkit default — and read
@@ -456,6 +493,24 @@ impl Omoya {
             ground: crate::ground::Ground::default(),
             bar_status: crate::bar::StatusLine::default(),
             presence: crate::presence::Presence::default(),
+            world: crate::world::SeatWorld::default(),
+            power: None,
+            session_lock: crate::session_lock::LockState::default(),
+            idle: omoya_spec::idle::Idle::new(start_time),
+            panel: omoya_spec::idle::Panel::default(),
+            panel_flip_in_flight: false,
+            panel_dark_due: false,
+            panel_wake_due: false,
+            wake_swallow: omoya_spec::idle::WakeSwallow::default(),
+            sleep_wait: false,
+            shots: crate::screencopy::ScreenShots::default(),
+            primary_selection_state,
+            wlr_data_control_state,
+            ext_data_control_state,
+            shelf: crate::notes::NoteShelf::default(),
+            notes: None,
+            idle_inhibit_state,
+            inhibiting: Vec::new(),
             mode,
             reserved,
             owed_vt_switches: 0,
@@ -565,6 +620,15 @@ impl Omoya {
         use smithay::desktop::{WindowSurfaceType as Wst, layer_map_for_output};
         use smithay::wayland::shell::wlr_layer::Layer;
 
+        if self.session_lock.machine.hides_desktop() {
+            return self
+                .session_lock
+                .surfaces_of_holder()
+                .into_iter()
+                .next()
+                .map(|s| (s, (0.0, 0.0).into()));
+        }
+
         let Some(output) = self.space.outputs().next() else {
             // No output means no layer map to consult; fall back to windows.
             return self
@@ -628,6 +692,9 @@ impl Omoya {
     /// "something asked and was refused".
     pub fn focus_exclusive_layer(&mut self) -> bool {
         use smithay::wayland::shell::wlr_layer::{KeyboardInteractivity, Layer};
+        if self.session_lock.machine.hides_desktop() {
+            return false;
+        }
         let Some(output) = self.space.outputs().next().cloned() else {
             return false;
         };

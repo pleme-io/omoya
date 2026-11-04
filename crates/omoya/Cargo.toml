@@ -122,6 +122,8 @@ zvariant = "5"
 # kernel does not already provide through /dev/input and /sys.
 evdev = "0.13"
 nazoru = { path = "../nazoru" }
+blue-lang-worker = { git = "https://github.com/pleme-io/blue" }
+notify = { version = "8.2", default-features = false }
 
 # ★ The zombie invariant (see `src/spawn.rs`). Setting SIGCHLD to SIG_IGN is a
 # kernel-level guarantee that a dead child cannot become a corpse, and `libc`
@@ -147,6 +149,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rmcp = { version = "0.15", features = ["server", "transport-io"] }
 tokio = { version = "1", features = ["rt", "io-util", "macros", "sync", "time"] }
 schemars = "1"
+
+[dev-dependencies]
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 
 [dependencies.smithay]
 version = "0.7"

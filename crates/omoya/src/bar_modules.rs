@@ -55,6 +55,8 @@ pub enum Module {
     Battery,
     /// Physical connectivity, while it is absent.
     Network,
+    Layout,
+    Blue,
 }
 
 impl Module {
@@ -62,7 +64,14 @@ impl Module {
     ///
     /// ★ Ordering is specificity: focused-window state, then seat state, then
     /// machine state — the same left-to-right the parcels already use.
-    pub const ALL: [Self; 4] = [Self::Tab, Self::Hidden, Self::Battery, Self::Network];
+    pub const ALL: [Self; 6] = [
+        Self::Tab,
+        Self::Hidden,
+        Self::Battery,
+        Self::Network,
+        Self::Layout,
+        Self::Blue,
+    ];
 
     /// A stable name, for the gate and for diagnostics. Never rendered.
     #[must_use]
@@ -72,6 +81,8 @@ impl Module {
             Self::Hidden => "hidden",
             Self::Battery => "battery",
             Self::Network => "network",
+            Self::Layout => "layout",
+            Self::Blue => "blue",
         }
     }
 }
@@ -155,6 +166,8 @@ pub fn render_all(
     readings: Readings,
     tab: Option<(usize, usize)>,
     hidden: usize,
+    layout: Option<&str>,
+    blue: Option<&str>,
 ) -> Vec<(Module, String)> {
     Module::ALL
         .into_iter()
@@ -164,6 +177,8 @@ pub fn render_all(
                 Module::Hidden => (hidden > 0).then(|| format!("{hidden} hidden")),
                 Module::Battery => readings.battery.and_then(Battery::render),
                 Module::Network => readings.network.and_then(Network::render),
+                Module::Layout => layout.map(str::to_owned),
+                Module::Blue => blue.map(str::to_owned),
             }?;
             Some((m, text))
         })
@@ -320,6 +335,8 @@ mod tests {
                 0,
                 "net down",
             ),
+            (Module::Layout, Readings::default(), None, 0, "us+intl"),
+            (Module::Blue, Readings::default(), None, 0, "3h"),
         ];
 
         for m in Module::ALL {
@@ -331,7 +348,7 @@ mod tests {
                 m.name()
             );
             let (_, readings, tab, hidden, expect) = row.expect("checked");
-            let out = render_all(*readings, *tab, *hidden);
+            let out = render_all(*readings, *tab, *hidden, Some("us+intl"), Some("3h"));
             assert_eq!(
                 out.iter().find(|(mm, _)| *mm == m).map(|(_, t)| t.as_str()),
                 Some(*expect),
@@ -361,7 +378,7 @@ mod tests {
             network: Some(Network::Up),
         };
         assert!(
-            render_all(healthy, None, 0).is_empty(),
+            render_all(healthy, None, 0, None, None).is_empty(),
             "a healthy seat must render nothing in the right zone"
         );
     }

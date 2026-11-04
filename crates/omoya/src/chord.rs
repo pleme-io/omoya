@@ -147,9 +147,74 @@ pub fn key_from(sym: Keysym) -> Option<Key> {
         keysyms::KEY_Return => Key::Return,
         keysyms::KEY_space => Key::Space,
 
+        keysyms::KEY_a | keysyms::KEY_A => Key::A,
+        keysyms::KEY_b | keysyms::KEY_B => Key::B,
+        keysyms::KEY_c | keysyms::KEY_C => Key::C,
+        keysyms::KEY_d | keysyms::KEY_D => Key::D,
+        keysyms::KEY_e | keysyms::KEY_E => Key::E,
+        keysyms::KEY_g | keysyms::KEY_G => Key::G,
+        keysyms::KEY_i | keysyms::KEY_I => Key::I,
+        keysyms::KEY_n | keysyms::KEY_N => Key::N,
+        keysyms::KEY_o | keysyms::KEY_O => Key::O,
+        keysyms::KEY_p | keysyms::KEY_P => Key::P,
+        keysyms::KEY_r | keysyms::KEY_R => Key::R,
+        keysyms::KEY_s | keysyms::KEY_S => Key::S,
+        keysyms::KEY_u | keysyms::KEY_U => Key::U,
+        keysyms::KEY_v | keysyms::KEY_V => Key::V,
+        keysyms::KEY_w | keysyms::KEY_W => Key::W,
+        keysyms::KEY_x | keysyms::KEY_X => Key::X,
+        keysyms::KEY_y | keysyms::KEY_Y => Key::Y,
+        keysyms::KEY_z | keysyms::KEY_Z => Key::Z,
+        keysyms::KEY_0 | keysyms::KEY_parenright => Key::Num0,
+        keysyms::KEY_1 | keysyms::KEY_exclam => Key::Num1,
+        keysyms::KEY_2 | keysyms::KEY_at => Key::Num2,
+        keysyms::KEY_3 | keysyms::KEY_numbersign => Key::Num3,
+        keysyms::KEY_4 | keysyms::KEY_dollar => Key::Num4,
+        keysyms::KEY_5 | keysyms::KEY_percent => Key::Num5,
+        keysyms::KEY_6 | keysyms::KEY_asciicircum => Key::Num6,
+        keysyms::KEY_7 | keysyms::KEY_ampersand => Key::Num7,
+        keysyms::KEY_8 | keysyms::KEY_asterisk => Key::Num8,
+        keysyms::KEY_9 | keysyms::KEY_parenleft => Key::Num9,
+        keysyms::KEY_grave | keysyms::KEY_asciitilde => Key::Grave,
+        keysyms::KEY_minus | keysyms::KEY_underscore => Key::Minus,
+        keysyms::KEY_equal | keysyms::KEY_plus => Key::Equal,
+        keysyms::KEY_bracketleft | keysyms::KEY_braceleft => Key::LeftBracket,
+        keysyms::KEY_bracketright | keysyms::KEY_braceright => Key::RightBracket,
+        keysyms::KEY_backslash | keysyms::KEY_bar => Key::Backslash,
+        keysyms::KEY_semicolon | keysyms::KEY_colon => Key::Semicolon,
+        keysyms::KEY_apostrophe | keysyms::KEY_quotedbl => Key::Quote,
+        keysyms::KEY_comma | keysyms::KEY_less => Key::Comma,
+        keysyms::KEY_period | keysyms::KEY_greater => Key::Period,
+        keysyms::KEY_slash | keysyms::KEY_question => Key::Slash,
+        keysyms::KEY_Escape => Key::Escape,
+        keysyms::KEY_Home => Key::Home,
+        keysyms::KEY_End => Key::End,
+        keysyms::KEY_Prior => Key::PageUp,
+        keysyms::KEY_Next => Key::PageDown,
+        keysyms::KEY_XF86AudioRaiseVolume => Key::VolumeUp,
+        keysyms::KEY_XF86AudioLowerVolume => Key::VolumeDown,
+        keysyms::KEY_XF86AudioMute => Key::Mute,
+        keysyms::KEY_XF86MonBrightnessUp => Key::BrightnessUp,
+        keysyms::KEY_XF86MonBrightnessDown => Key::BrightnessDown,
+        keysyms::KEY_XF86AudioPlay | keysyms::KEY_XF86AudioPause => Key::PlayPause,
+        keysyms::KEY_XF86AudioNext => Key::NextTrack,
+        keysyms::KEY_XF86AudioPrev => Key::PreviousTrack,
+        keysyms::KEY_Print | keysyms::KEY_Sys_Req => Key::PrintScreen,
+
         _ => return None,
     };
     Some(k)
+}
+
+#[must_use]
+pub fn key_is_reachable(key: Key) -> bool {
+    let latin = 0x20..0x7f_u32;
+    let special = 0xfe00..=0xffff_u32;
+    let vendor = 0x1008_ff00..=0x1008_ffff_u32;
+    latin
+        .chain(special)
+        .chain(vendor)
+        .any(|raw| key_from(Keysym::new(raw)) == Some(key))
 }
 
 /// The full translation: modifier state + keysym → a hotkey awase can adjudicate.
@@ -163,6 +228,47 @@ mod tests {
     use super::*;
     use awase::Reserved;
 
+    #[test]
+    fn a_world_can_reach_every_letter_digit_and_media_key() {
+        for spelled in [
+            "a",
+            "z",
+            "0",
+            "9",
+            "grave",
+            "slash",
+            "escape",
+            "volume_up",
+            "volume_down",
+            "mute",
+            "brightness_up",
+            "brightness_down",
+            "play_pause",
+            "next_track",
+            "previous_track",
+            "print_screen",
+        ] {
+            let hotkey = Hotkey::parse(spelled).unwrap_or_else(|e| panic!("{spelled}: {e}"));
+            assert!(key_is_reachable(hotkey.key), "{spelled} has no keysym");
+        }
+        assert!(
+            !key_is_reachable(Key::F20),
+            "a key with no arm must read as unreachable"
+        );
+    }
+
+    #[test]
+    fn a_shifted_keysym_finds_the_same_key() {
+        for (plain, shifted) in [
+            (keysyms::KEY_a, keysyms::KEY_A),
+            (keysyms::KEY_1, keysyms::KEY_exclam),
+            (keysyms::KEY_slash, keysyms::KEY_question),
+        ] {
+            assert_eq!(key_from(Keysym::new(plain)), key_from(Keysym::new(shifted)));
+            assert!(key_from(Keysym::new(plain)).is_some());
+        }
+    }
+
     fn mods(ctrl: bool, alt: bool) -> ModifiersState {
         ModifiersState {
             ctrl,
@@ -175,6 +281,16 @@ mod tests {
     /// "could the adapter ever PRODUCE this key?" without a second hand-list of
     /// the mapping itself.
     const MAPPED_SYMS: &[u32] = &[
+        keysyms::KEY_Escape,
+        keysyms::KEY_Print,
+        keysyms::KEY_n,
+        keysyms::KEY_s,
+        keysyms::KEY_S,
+        keysyms::KEY_XF86AudioRaiseVolume,
+        keysyms::KEY_XF86AudioLowerVolume,
+        keysyms::KEY_XF86AudioMute,
+        keysyms::KEY_XF86MonBrightnessUp,
+        keysyms::KEY_XF86MonBrightnessDown,
         keysyms::KEY_F1,
         keysyms::KEY_F2,
         keysyms::KEY_F3,
@@ -338,10 +454,14 @@ mod tests {
         // ★ `KEY_Tab` USED TO BE IN THIS LIST and was removed when Logo+Tab
         // became tab-next. That is the fixture going stale, not the rule
         // changing: the rule is "mapped iff bound", and Tab is now bound.
+        let (mut map, _) = crate::deed::default_bindings();
         for raw in [keysyms::KEY_a, keysyms::KEY_z, keysyms::KEY_Escape] {
-            assert_eq!(
-                key_from(Keysym::from(raw)),
-                None,
+            let hotkey = Hotkey::new(Modifiers::NONE, key_from(Keysym::from(raw)).unwrap());
+            assert!(
+                !matches!(
+                    map.match_key(hotkey, &awase::MatchContext::default()),
+                    awase::mode::MatchResult::Matched { .. }
+                ),
                 "an unbound key must stay the client's"
             );
         }
@@ -401,8 +521,8 @@ mod tests {
         // The common case, and the one that must stay cheap and quiet: a key
         // outside the mapped set produces no hotkey at all, so it never reaches
         // the catalog.
-        assert!(key_from(Keysym::from(keysyms::KEY_a)).is_none());
-        assert!(hotkey_from(&mods(true, true), Keysym::from(keysyms::KEY_a)).is_none());
+        let hotkey = hotkey_from(&mods(true, true), Keysym::from(keysyms::KEY_a)).unwrap();
+        assert!(Reserved::fleet_linux().claim_on(&hotkey).is_none());
     }
 
     #[test]

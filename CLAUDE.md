@@ -53,6 +53,13 @@ three findings that cost the most to reach, so nobody re-derives them:
 the next.** Three fixes in a row were justified by a plausible story about
 where the time went, and all three stories were wrong.
 
+## The daily seat
+
+**[`docs/DAILY-SEAT.md`](./docs/DAILY-SEAT.md)** is the plan and the ledger for omoya as
+a person's whole session: the blue world (`~/.config/omoya/omoya.b`, served by a child,
+never on the render thread), lock, idle, sleep, notes and shots. Read it before you
+touch `world.rs`, `session_lock.rs`, `notes.rs` or `screencopy.rs`.
+
 ## Verification
 
 [`docs/VERIFICATION.md`](./docs/VERIFICATION.md).

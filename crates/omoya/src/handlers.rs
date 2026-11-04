@@ -108,6 +108,7 @@ impl CompositorHandler for Omoya {
         // painting at all — the render loop no longer composes speculatively
         // and will sit idle forever without it.
         self.owed.mark(crate::owed::Owed::Commit);
+        self.lock_surface_committed(surface);
         if !is_sync_subsurface(surface) {
             let mut root = surface.clone();
             while let Some(parent) = get_parent(&root) {
@@ -225,7 +226,9 @@ impl XdgShellHandler for Omoya {
         // `send_pending_configure` is what actually tells the client, because
         // `Activated` is xdg-shell STATE rather than a method — the same
         // pending-state seam the click path uses a few lines down in `input.rs`.
-        if let Some(kb) = self.seat.get_keyboard() {
+        if !self.session_lock.machine.hides_desktop()
+            && let Some(kb) = self.seat.get_keyboard()
+        {
             let serial = smithay::utils::SERIAL_COUNTER.next_serial();
             if let Some(t) = window.toplevel() {
                 t.with_pending_state(|state| {
@@ -758,6 +761,7 @@ impl SeatHandler for Omoya {
     fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&WlSurface>) {
         let dh = &self.display_handle;
         let client = focused.and_then(|s| dh.get_client(s.id()).ok());
+        smithay::wayland::selection::primary_selection::set_primary_focus(dh, seat, client.clone());
         set_data_device_focus(dh, seat, client);
     }
 }
@@ -832,3 +836,52 @@ impl smithay::wayland::dmabuf::DmabufHandler for Omoya {
 }
 
 smithay::delegate_dmabuf!(Omoya);
+
+impl smithay::wayland::idle_inhibit::IdleInhibitHandler for Omoya {
+    fn inhibit(&mut self, surface: WlSurface) {
+        if !self.inhibiting.contains(&surface) {
+            self.inhibiting.push(surface);
+            self.idle.inhibit();
+        }
+    }
+
+    fn uninhibit(&mut self, surface: WlSurface) {
+        let before = self.inhibiting.len();
+        self.inhibiting.retain(|s| s != &surface);
+        if self.inhibiting.len() < before {
+            self.idle.release(std::time::Instant::now());
+        }
+    }
+}
+
+smithay::delegate_idle_inhibit!(Omoya);
+
+impl smithay::wayland::selection::primary_selection::PrimarySelectionHandler for Omoya {
+    fn primary_selection_state(
+        &self,
+    ) -> &smithay::wayland::selection::primary_selection::PrimarySelectionState {
+        &self.primary_selection_state
+    }
+}
+
+smithay::delegate_primary_selection!(Omoya);
+
+impl smithay::wayland::selection::wlr_data_control::DataControlHandler for Omoya {
+    fn data_control_state(
+        &self,
+    ) -> &smithay::wayland::selection::wlr_data_control::DataControlState {
+        &self.wlr_data_control_state
+    }
+}
+
+smithay::delegate_data_control!(Omoya);
+
+impl smithay::wayland::selection::ext_data_control::DataControlHandler for Omoya {
+    fn data_control_state(
+        &self,
+    ) -> &smithay::wayland::selection::ext_data_control::DataControlState {
+        &self.ext_data_control_state
+    }
+}
+
+smithay::delegate_ext_data_control!(Omoya);

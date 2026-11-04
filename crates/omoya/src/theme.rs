@@ -415,7 +415,7 @@ mod tests {
 
         // Plain DRM_FORMAT_ARGB8888 (what `drm.rs` actually passes): the bytes
         // go straight to scanout, so they must already BE nord8.
-        let [r, g, b, a] = focus_border_for_surface(false);
+        let [r, g, b, a] = focus_border_for_surface(false, crate::config::Accent::default());
         assert_eq!(
             (byte(r), byte(g), byte(b)),
             (136, 192, 208),
@@ -425,7 +425,7 @@ mod tests {
 
         // An sRGB-storage surface encodes on write, so it must be handed
         // linear — the mirror of the background's second assertion.
-        let [lr, lg, lb, _] = focus_border_for_surface(true);
+        let [lr, lg, lb, _] = focus_border_for_surface(true, crate::config::Accent::default());
         assert!(
             byte(lr) < 136 && byte(lg) < 192 && byte(lb) < 208,
             "an sRGB surface must receive LINEAR values, which are darker; \
@@ -463,7 +463,10 @@ mod tests {
                 && srgb_surface[2] <= plain[2]
         };
         assert!(darker(background_for_surface), "background");
-        assert!(darker(focus_border_for_surface), "focus border");
+        assert!(
+            darker(|srgb| focus_border_for_surface(srgb, crate::config::Accent::default())),
+            "focus border"
+        );
         assert!(darker(cursor_for_surface), "cursor");
         // ★ ENROLLED 2026-09-03, AFTER SHIPPING THE DEFECT THIS TEST EXISTS
         // TO CATCH. The chrome colours were added without being listed here
@@ -528,6 +531,17 @@ mod tests {
     }
 }
 
+#[must_use]
+pub const fn accent_color(accent: crate::config::Accent) -> irodori::Color {
+    use crate::config::Accent;
+    NORD.frost[match accent {
+        Accent::Frost0 => 0,
+        Accent::Frost1 => 1,
+        Accent::Frost2 => 2,
+        Accent::Frost3 => 3,
+    }]
+}
+
 /// The focused window's border, in whichever encoding the framebuffer needs.
 ///
 /// ★ `frost[2]` — the palette's ACCENT family, not a foreground tone.
@@ -543,13 +557,13 @@ mod tests {
 /// is the cursor's, in miniature: a border too dark to see is a border that
 /// is not there.
 #[must_use]
-pub fn focus_border_for_surface(format_is_srgb: bool) -> [f32; 4] {
+pub fn focus_border_for_surface(format_is_srgb: bool, accent: crate::config::Accent) -> [f32; 4] {
     // ★ nord8, NOT nord9. `frost[2]` is nord9 (#81A1C1), which Nord defines as
     // a SECONDARY frost — recessive UI chrome. The accent Nord reserves for
     // "this one" is nord8 (#88C0D0), `frost[1]`. They sit 1.35:1 apart, so the
     // substitution is invisible as a mistake and merely reads as a slightly
     // duller seat.
-    let c = NORD.frost[1];
+    let c = accent_color(accent);
     // ★ THE BRANCHES WERE INVERTED, AND BACKWARDS FROM BOTH SIBLINGS.
     //
     // `background_for_surface` and `cursor_for_surface` both read

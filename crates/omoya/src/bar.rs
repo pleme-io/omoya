@@ -135,6 +135,7 @@ fn role_text_dim() -> irodori::Color {
 }
 
 /// The accent. Means "here", and nothing else, and appears at most twice.
+#[cfg(test)]
 fn role_primary() -> irodori::Color {
     role(|r| r.primary)
 }
@@ -264,6 +265,7 @@ fn find_file(dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
 /// looking at the screen, and a timezone admission dressed as information.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct BarState {
+    pub accent: crate::config::Accent,
     /// One entry per parcel on this output, in layout order. `true` marks the
     /// focused one — at most one may be true.
     pub parcels: Vec<bool>,
@@ -296,6 +298,8 @@ pub struct BarState {
     /// reader has not published yet shows no indicator rather than a zero.
     pub readings: crate::bar_modules::Readings,
     pub status: Option<String>,
+    pub layout: Option<String>,
+    pub blue: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -598,7 +602,7 @@ pub fn rasterize_h(state: &BarState, width: i32, height: i32) -> Option<Vec<u8>>
         if *focused {
             // The accent, spent here and nowhere else: a 2 px underline the
             // width of the cell, sitting on the hairline.
-            let p = role_primary();
+            let p = crate::theme::accent_color(state.accent);
             underline(&mut buf, w, h, x, CELL, p);
         }
         x += CELL + GUTTER;
@@ -658,11 +662,16 @@ pub fn rasterize_h(state: &BarState, width: i32, height: i32) -> Option<Vec<u8>>
         // matrix that fails the build when a variant lands without a row.
         // Adding battery and network here is now a variant, not an edit to
         // this function.
-        let parts: Vec<String> =
-            crate::bar_modules::render_all(state.readings, state.tab, state.hidden)
-                .into_iter()
-                .map(|(_, text)| text)
-                .collect();
+        let parts: Vec<String> = crate::bar_modules::render_all(
+            state.readings,
+            state.tab,
+            state.hidden,
+            state.layout.as_deref(),
+            state.blue.as_deref(),
+        )
+        .into_iter()
+        .map(|(_, text)| text)
+        .collect();
         if !parts.is_empty() {
             let text = parts.join("   ");
             let tw = measure(font, &text);
@@ -692,6 +701,60 @@ pub fn rasterize_h(state: &BarState, width: i32, height: i32) -> Option<Vec<u8>>
 /// ★ Hoisted out of `rasterize`. `Font::from_bytes` re-parsed the whole file
 /// on every call — which is once a minute now, and was once a frame before
 /// the damage gate landed.
+pub const NOTE_W: i32 = 420;
+pub const NOTE_LINE: i32 = 26;
+pub const NOTE_H: i32 = NOTE_LINE * 2 + 4;
+
+#[must_use]
+pub fn rasterize_note(
+    summary: &str,
+    body: &str,
+    critical: bool,
+    accent: crate::config::Accent,
+) -> Option<Vec<u8>> {
+    let font = font()?;
+    let (w, h) = (NOTE_W as usize, NOTE_H as usize);
+    let bg = role_surface();
+    let mut buf = vec![0u8; w * h * 4];
+    for px in buf.chunks_exact_mut(4) {
+        px[0] = bg.b;
+        px[1] = bg.g;
+        px[2] = bg.r;
+        px[3] = 0xff;
+    }
+    let edge = if critical {
+        role_warning()
+    } else {
+        crate::theme::accent_color(accent)
+    };
+    for px in buf[..w * 4].chunks_exact_mut(4) {
+        px[0] = edge.b;
+        px[1] = edge.g;
+        px[2] = edge.r;
+    }
+    let room = w as f32 - PAD * 2.0;
+    let (first, second) = buf.split_at_mut(w * (NOTE_LINE as usize + 2) * 4);
+    draw_text(
+        first,
+        w,
+        NOTE_LINE as usize + 2,
+        font,
+        fit(font, summary, room),
+        PAD,
+        &Blend::new(bg, role_text()),
+    );
+    draw_text(
+        second,
+        w,
+        h - NOTE_LINE as usize - 2,
+        font,
+        fit(font, body, room),
+        PAD,
+        &Blend::new(bg, role_text_dim()),
+    );
+    Some(buf)
+}
+
 pub(crate) fn font() -> Option<&'static fontdue::Font> {
     static PARSED: OnceLock<Option<fontdue::Font>> = OnceLock::new();
     PARSED
@@ -804,6 +867,7 @@ mod tests {
 
     fn state(n: usize, focused: Option<usize>) -> BarState {
         BarState {
+            accent: crate::config::Accent::default(),
             hidden: 0,
             tab: None,
             parcels: (0..n).map(|i| Some(i) == focused).collect(),
@@ -812,6 +876,8 @@ mod tests {
             // want a module to speak set this explicitly.
             readings: crate::bar_modules::Readings::default(),
             status: None,
+            layout: None,
+            blue: None,
         }
     }
 
@@ -1080,6 +1146,48 @@ mod tests {
             "with nothing focused the accent must not appear anywhere — \
              an always-present accent is decoration, not information"
         );
+    }
+
+    #[test]
+    fn the_default_accent_is_the_palette_role_and_the_world_can_name_another() {
+        use crate::config::Accent;
+        let role = role_primary();
+        let default = crate::theme::accent_color(Accent::default());
+        assert_eq!((default.r, default.g, default.b), (role.r, role.g, role.b));
+        let chosen = crate::theme::accent_color(Accent::Frost3);
+        assert_ne!((chosen.r, chosen.g, chosen.b), (role.r, role.g, role.b));
+        let drawn = BarState {
+            accent: Accent::Frost3,
+            ..state(3, Some(1))
+        };
+        let Some(buf) = rasterize(&drawn, 400) else {
+            return;
+        };
+        let count = |c: irodori::Color| {
+            buf.chunks_exact(4)
+                .filter(|px| px[0] == c.b && px[1] == c.g && px[2] == c.r)
+                .count()
+        };
+        assert!(
+            count(chosen) > 0,
+            "the world's accent never reached the bar"
+        );
+        assert_eq!(count(role), 0, "the default accent still drew");
+    }
+
+    #[test]
+    fn a_note_takes_the_accent_and_a_critical_one_keeps_the_warning() {
+        use crate::config::Accent;
+        let chosen = crate::theme::accent_color(Accent::Frost3);
+        let Some(calm) = rasterize_note("a", "b", false, Accent::Frost3) else {
+            return;
+        };
+        let top = &calm[..4];
+        assert_eq!((top[2], top[1], top[0]), (chosen.r, chosen.g, chosen.b));
+        let warn = role_warning();
+        let urgent = rasterize_note("a", "b", true, Accent::Frost3).unwrap();
+        let top = &urgent[..4];
+        assert_eq!((top[2], top[1], top[0]), (warn.r, warn.g, warn.b));
     }
 
     #[test]

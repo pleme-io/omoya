@@ -1297,6 +1297,14 @@ mod tests {
         assert_eq!(code::EV_ABS, E::ABSOLUTE.0);
         assert_eq!(code::SYN_REPORT, evdev::SynchronizationCode::SYN_REPORT.0);
         assert_eq!(code::KEY_A, K::KEY_A.0);
+        assert_eq!(code::KEY_MUTE, K::KEY_MUTE.0);
+        assert_eq!(code::KEY_VOLUMEDOWN, K::KEY_VOLUMEDOWN.0);
+        assert_eq!(code::KEY_VOLUMEUP, K::KEY_VOLUMEUP.0);
+        assert_eq!(code::KEY_NEXTSONG, K::KEY_NEXTSONG.0);
+        assert_eq!(code::KEY_PLAYPAUSE, K::KEY_PLAYPAUSE.0);
+        assert_eq!(code::KEY_PREVIOUSSONG, K::KEY_PREVIOUSSONG.0);
+        assert_eq!(code::KEY_BRIGHTNESSDOWN, K::KEY_BRIGHTNESSDOWN.0);
+        assert_eq!(code::KEY_BRIGHTNESSUP, K::KEY_BRIGHTNESSUP.0);
         assert_eq!(code::BTN_MISC, K::BTN_0.0);
         assert_eq!(code::BTN_LEFT, K::BTN_LEFT.0);
         assert_eq!(code::BTN_RIGHT, K::BTN_RIGHT.0);

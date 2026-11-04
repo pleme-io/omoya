@@ -535,6 +535,17 @@ pub struct OmoyaIntrospect {
     /// here may touch `Omoya`; the socket thread enqueues, the compositor
     /// thread drains.
     pub pending_deeds: Mutex<Vec<crate::deed::Deed>>,
+    pub world_state: Mutex<String>,
+    pub world_refusals: Mutex<Vec<String>>,
+    pub world_commands: Mutex<Vec<String>>,
+    pub world_generation: AtomicU64,
+    pub lock_engaged: AtomicU64,
+    pub lock_holder_deaths: AtomicU64,
+    pub lock_state: Mutex<String>,
+    pub panel_state: Mutex<String>,
+    pub sleeps: AtomicU64,
+    pub notes_shown: AtomicU64,
+    pub resumes: AtomicU64,
     /// Synthetic input awaiting the render thread. Same shape and same reason
     /// as `pending_deeds`: the socket thread may not touch `Omoya`.
     pub pending_input: Mutex<Vec<crate::synth::Synth>>,
@@ -901,6 +912,43 @@ impl OmoyaIntrospect {
     ///
     /// A no-op before the gate is installed — nothing is rendering yet, so
     /// there is no frame to owe.
+    pub fn publish_world(
+        &self,
+        state: &crate::world::WorldState,
+        refusals: &[blue_lang_worker::Refusal],
+        generation: u64,
+        commands: &std::collections::BTreeMap<String, crate::deed::SeatCommand>,
+    ) {
+        let word = match state {
+            crate::world::WorldState::Absent => "absent",
+            crate::world::WorldState::Loaded => "loaded",
+            crate::world::WorldState::Refused(_) => "refused",
+        };
+        *self.world_state.lock().unwrap_or_else(|e| e.into_inner()) = word.to_owned();
+        *self
+            .world_refusals
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) =
+            refusals.iter().map(ToString::to_string).collect();
+        if !matches!(state, crate::world::WorldState::Refused(_)) {
+            *self
+                .world_commands
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = commands.keys().cloned().collect();
+        }
+        self.world_generation.store(generation, Ordering::Relaxed);
+    }
+
+    pub fn push_world_refusal(&self, refusal: String) {
+        let mut list = self
+            .world_refusals
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if !list.contains(&refusal) {
+            list.push(refusal);
+        }
+    }
+
     pub fn mark(&self, cause: crate::owed::Owed) {
         if let Some(l) = self.owed.get() {
             l.mark(cause);
@@ -928,6 +976,17 @@ impl OmoyaIntrospect {
 ///
 /// One constant, two readers: the drift is no longer expressible.
 pub const LEAVES: &[&str] = &[
+    "world_state",
+    "world_refusals",
+    "world_commands",
+    "world_generation",
+    "lock_engaged",
+    "lock_holder_deaths",
+    "lock_state",
+    "panel_state",
+    "sleeps",
+    "notes_shown",
+    "resumes",
     "backend",
     "frames",
     "presented",
@@ -1039,6 +1098,42 @@ impl Introspect for OmoyaIntrospect {
                     _ => "unknown",
                 }
             )),
+            "world_state" => Ok(serde_json::json!(
+                self.world_state
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone()
+            )),
+            "world_refusals" => Ok(serde_json::json!(
+                self.world_refusals
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone()
+            )),
+            "world_commands" => Ok(serde_json::json!(
+                self.world_commands
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone()
+            )),
+            "world_generation" => Ok(n(&self.world_generation)),
+            "lock_engaged" => Ok(n(&self.lock_engaged)),
+            "lock_holder_deaths" => Ok(n(&self.lock_holder_deaths)),
+            "lock_state" => Ok(serde_json::json!(
+                self.lock_state
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone()
+            )),
+            "panel_state" => Ok(serde_json::json!(
+                self.panel_state
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone()
+            )),
+            "sleeps" => Ok(n(&self.sleeps)),
+            "notes_shown" => Ok(n(&self.notes_shown)),
+            "resumes" => Ok(n(&self.resumes)),
             "frames" => Ok(n(&self.frames)),
             "presented" => Ok(n(&self.presented)),
             // ── ★ THE ONE MUTATING LEAF ──────────────────────────────
@@ -2019,14 +2114,11 @@ mod capture_identity_tests {
         // Take it and let it die the way an early `?` would.
         drop(i.take_capture_request().expect("a request was pending"));
 
-        let got = i
-            .capture_result
-            .lock()
-            .unwrap()
-            .clone()
-            .expect("an abandoned request must still produce a result — a \
+        let got = i.capture_result.lock().unwrap().clone().expect(
+            "an abandoned request must still produce a result — a \
                      client polling this slot has no other way to learn the \
-                     frame gave up");
+                     frame gave up",
+        );
         let v: serde_json::Value = serde_json::from_str(&got).unwrap();
         assert_eq!(v["request_id"], 77, "the result must name ITS request");
         let outcome = v["outcome"].as_str().unwrap();

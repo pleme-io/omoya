@@ -97,7 +97,11 @@ pub const KEY_RIGHTALT: u32 = 100;
 pub fn keymap_for(published: &str) -> hairetsu::Keymap {
     // `<bare>` and `<xkb default>` are both the built-in US keymap — the same
     // one `Keymap::us()` builds — so they resolve there rather than failing.
-    hairetsu::Keymap::for_layout(published).unwrap_or_else(hairetsu::Keymap::us)
+    match published.split_once('+') {
+        Some((layout, variant)) => hairetsu::Keymap::for_names(layout, variant),
+        None => hairetsu::Keymap::for_layout(published),
+    }
+    .unwrap_or_else(hairetsu::Keymap::us)
 }
 
 /// Which evdev key, with which modifiers, produces `c` on THIS layout.

@@ -356,6 +356,9 @@ Correct order: **(a′)** land an omoya rev that *accepts and ignores* `--drm-de
 
 ### S-8 — Lock and idle
 
+**Landed 2026-11-03, see [`DAILY-SEAT.md`](./DAILY-SEAT.md) sections 7 to 9.** The text
+below is the decision it closed.
+
 **Entry:** S-4.
 
 `roles.lock = null` is honest and is a security regression against the Hyprland seat it replaced, on a host holding sops-decrypted material. Decide: a pleme-io lock role, or DPMS + idle blank as a floor with the gap written into §7. Do not leave it as one passing mention.

@@ -70,36 +70,48 @@ privately. A second copy is a bug, so they move to one crate, `blue-lang-worker`
 ### The world: `~/.config/omoya/omoya.b`
 
 ```blue
-use("kurashi", %i[backlight bar_module bind command idle keyboard lock_with look notes run sleep swaylock volume])
+use("kousei", %i[config off tune])
+use("kurashi", %i[backlight bar_module bind command idle keyboard lock_with look notes sleep swaylock volume])
 
 def omoya()
   [
     keyboard(%w[us us+intl]),
-    look({accent: :frost2, bar_height: 26}),
+    look({accent: :frost1, bar_height: 26}),
     idle({blank_s: 300, lock_s: 600}),
     sleep({lock_before: true}),
-    lock_with(swaylock(:nord)),
-    notes({ms: 6000, max: 3}),
+    lock_with(swaylock(:night0)),
+    notes({enabled: true, ms: 6000, max: 3}),
+    config(:layout, {mode: "floating", snap_threshold: 16}),
     command(:louder, volume(5)),
     command(:brighter, backlight(5)),
+    command(:term, %w[mado]),
     bind("volume_up", :louder, {locked: true}),
     bind("brightness_up", :brighter, {locked: true}),
-    bind("super+shift+s", :screenshot),
-    bar_module("uptime", {every_s: 60, allow: [:filesystem]})
+    bind("super+return", :term),
+    bar_module("uptime", {every_s: 60, allow: [:filesystem]}),
+    bar_module("spare", {every_s: 5}),
+    off(:bar_module, "spare"),
+    tune(:bar_module, "uptime", {every_s: 120})
   ]
 end
 ```
+
+A list in `command` is a program's argv, and no shell reads it. `kousei` owns `config`,
+`off` and `tune`, the words that any world of any host shares, so a world names both
+bidamas.
 
 The host calls `omoya()` in a child, passes the list through `kurashi::declare`, and
 reads `accepted`, `off` and `refusals`. `look`, `idle`, `sleep`, `lock_with`, `notes`
 and `keyboard` lower to `config(group, fields)`, so one trial merge per field checks
 them against the same Rust schema the YAML has. YAML keeps working. A world lays over it.
+A test reads this block and refuses to pass if the world it shows draws a refusal.
 
 ### A bar module: `~/.config/omoya/bar/uptime.b`
 
 ```blue
 def render()
-  "#{floor(uptime_s / 3600)}h"
+  seconds = to_int(split(read_file("/proc/uptime"), ".")[0])
+  "#{seconds / 3600}h"
 end
 ```
 
@@ -250,8 +262,32 @@ Each step lands on `main` when green, so a stop anywhere leaves working code.
 
 ## 13. What is built, by tier
 
-Updated as each step lands.
+"VM" means `checks.vkms-daily`: a real kernel, vkms, logind, PAM, swaylock, grim and
+notify-send. "Wire" means a real wayland-client against the real dispatch in a unit test.
 
-| Piece | Tier |
-|---|---|
-| This plan | written |
+| Piece | Tier | Proof |
+|---|---|---|
+| World file, entries refused alone, hot reload | ✅ VM | saved world reloads, a broken world leaves what stood |
+| Bar modules as `.b`, a hang or abort fails alone | ✅ real binary | `tests/world.rs` |
+| Named commands | ✅ VM | a world command stands, `command_why` refuses a bad one |
+| `us+intl`, layout switch | ✅ VM | leaf follows `next-layout`. Dead keys on real hands: ➖ |
+| Media keys reach a deed | ✅ VM | a real `volumeup` reaches the volume deed |
+| Backlight through logind | ⚠️ unit only | `SetBrightness` needs a panel. vkms has none |
+| Volume through `wpctl` | ⚠️ argv only | no audio in the VM. `pending-omoya-pipewire` |
+| Idle blank, DPMS, wake | ✅ VM | connector DPMS goes off and on. An AMOLED panel: ➖ |
+| Session lock, no bypass | ✅ wire + VM | second client's unlock changes nothing; PAM unlocks |
+| Crash: the screen stays locked | ✅ wire + VM | `SIGKILL` on swaylock, every pixel is the hidden field, a new client takes over |
+| Lock before sleep | ✅ VM | `PrepareForSleep`, inhibitor released after the lock, suspend stubbed |
+| Real suspend, resume, lid | ➖ his hands | the VM stubs `systemd-suspend` |
+| Notifications | ✅ VM | `notify-send` reaches the shelf |
+| Screenshot chord, screencopy | ✅ VM | a whole PNG, atomically; `grim` reads the frame |
+| Primary selection, data control | ⚠️ advertised | smithay's own plumbing, no client test |
+| Touchpad | ➖ his hands | `pending-nazoru-witness` |
+
+Mutation: `cargo mutants` on `omoya-spec` session_lock and idle, 64 caught, 3 unviable,
+0 missed. kurashi: heni 12 of 12. Red runs, one fault at a time, each reddened its guard:
+a dead holder opens the seat, any unlock opens the seat, a key passes a lock, a lock does
+not hide the scene, the watcher ignores blue, the watcher reloads on any file.
+
+**A seat needs polkit.** Without it logind refuses `Inhibit` and `Suspend`. The refusal
+stands alone in `world_refusals`, and the seat keeps running with no lock before sleep.
