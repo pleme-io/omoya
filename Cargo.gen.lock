@@ -1,8 +1,8 @@
 {
   "schema_version": 2,
-  "cargo_lock_sha256": "2d83d8c1da77c160f861f5a6fd77a83eb32a611e00bb52d85cfe65f92619aa45",
+  "cargo_lock_sha256": "f3b170e37ce39e06315e4690348d57b8f101ad416abec79850f9c75ee122fb17",
   "manifest_sha256": {
-    "Cargo.toml": "51661ab52f7f8305ca53a78901878be3cb7ce22f76bc9aca014b3116116b979a",
+    "Cargo.toml": "f548ec3a54e6556e459ae4583eb4a7902ae41229bfd8fd3c65184b59c537e615",
     "crates/hairetsu/Cargo.toml": "67a784b3f0dc716e74f9257bed09bef7c637618269586ecf20b1ff223114b0da",
     "crates/kasane/Cargo.toml": "369669a052055aaa3c836309e6f1cb667e7740f7e74e84b96a9d4dd64dc8ddff",
     "crates/nazoru/Cargo.toml": "bc61172a7ce19ad846b81096d9ef3960ab6ba073127f1a510aaf2cd91322295b",
@@ -2996,7 +2996,7 @@
           "wgsl-in"
         ]
       },
-      "nazoru-0.1.132": {
+      "nazoru-0.1.133": {
         "runtime_dependencies": [
           {
             "name": "ishou_tokens",
@@ -3133,7 +3133,7 @@
           "std"
         ]
       },
-      "nuri-0.1.132": {
+      "nuri-0.1.133": {
         "runtime_dependencies": [
           {
             "name": "thiserror",
@@ -3154,7 +3154,7 @@
         "build_dependencies": [],
         "features": []
       },
-      "omoya-0.1.132": {
+      "omoya-0.1.133": {
         "runtime_dependencies": [
           {
             "name": "awase",
@@ -3238,7 +3238,7 @@
           },
           {
             "name": "kasane",
-            "package_key": "kasane-0.1.132",
+            "package_key": "kasane-0.1.133",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -3278,7 +3278,7 @@
           },
           {
             "name": "nazoru",
-            "package_key": "nazoru-0.1.132",
+            "package_key": "nazoru-0.1.133",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -3288,7 +3288,7 @@
           },
           {
             "name": "nuri",
-            "package_key": "nuri-0.1.132",
+            "package_key": "nuri-0.1.133",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -3298,7 +3298,7 @@
           },
           {
             "name": "omoya_spec",
-            "package_key": "omoya-spec-0.1.132",
+            "package_key": "omoya-spec-0.1.133",
             "kind": "normal",
             "features": [],
             "uses_default_features": true,
@@ -3473,7 +3473,7 @@
           "default"
         ]
       },
-      "omoya-spec-0.1.132": {
+      "omoya-spec-0.1.133": {
         "runtime_dependencies": [
           {
             "name": "thiserror",
@@ -8008,7 +8008,7 @@
               "fallback"
             ]
           },
-          "kasane-0.1.132": {
+          "kasane-0.1.133": {
             "runtime_dependencies": [
               {
                 "name": "thiserror",
@@ -8459,7 +8459,7 @@
             "build_dependencies": [],
             "features": []
           },
-          "kasane-0.1.132": {
+          "kasane-0.1.133": {
             "runtime_dependencies": [
               {
                 "name": "ash",
@@ -9060,7 +9060,7 @@
             "build_dependencies": [],
             "features": []
           },
-          "kasane-0.1.132": {
+          "kasane-0.1.133": {
             "runtime_dependencies": [
               {
                 "name": "ash",
@@ -9595,7 +9595,7 @@
               "fallback"
             ]
           },
-          "kasane-0.1.132": {
+          "kasane-0.1.133": {
             "runtime_dependencies": [
               {
                 "name": "thiserror",
@@ -10020,7 +10020,7 @@
             "build_dependencies": [],
             "features": []
           },
-          "kasane-0.1.132": {
+          "kasane-0.1.133": {
             "runtime_dependencies": [
               {
                 "name": "ash",
@@ -10595,7 +10595,7 @@
             "build_dependencies": [],
             "features": []
           },
-          "kasane-0.1.132": {
+          "kasane-0.1.133": {
             "runtime_dependencies": [
               {
                 "name": "ash",
@@ -11333,7 +11333,7 @@
       "edition": "2024",
       "proc_macro": true
     },
-    "kasane-0.1.132": {
+    "kasane-0.1.133": {
       "edition": "2024",
       "build_script": "build.rs",
       "lib_target": {
@@ -11392,7 +11392,7 @@
       "edition": "2021",
       "build_script": "build.rs"
     },
-    "nazoru-0.1.132": {
+    "nazoru-0.1.133": {
       "edition": "2024",
       "lib_target": {
         "name": "nazoru",
@@ -11416,7 +11416,7 @@
       "edition": "2021",
       "build_script": "build.rs"
     },
-    "nuri-0.1.132": {
+    "nuri-0.1.133": {
       "edition": "2024",
       "lib_target": {
         "name": "nuri",
@@ -11426,7 +11426,7 @@
     "okiba-0.2.1": {
       "edition": "2024"
     },
-    "omoya-0.1.132": {
+    "omoya-0.1.133": {
       "edition": "2024",
       "binaries": [
         {
@@ -11435,7 +11435,7 @@
         }
       ]
     },
-    "omoya-spec-0.1.132": {
+    "omoya-spec-0.1.133": {
       "edition": "2024",
       "lib_target": {
         "name": "omoya_spec",

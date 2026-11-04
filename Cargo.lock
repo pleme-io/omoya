@@ -1301,7 +1301,7 @@ dependencies = [
 
 [[package]]
 name = "kasane"
-version = "0.1.132"
+version = "0.1.133"
 dependencies = [
  "ash",
  "libc",
@@ -1506,7 +1506,7 @@ dependencies = [
 
 [[package]]
 name = "nazoru"
-version = "0.1.132"
+version = "0.1.133"
 dependencies = [
  "ishou-tokens",
  "serde",
@@ -1625,7 +1625,7 @@ dependencies = [
 
 [[package]]
 name = "nuri"
-version = "0.1.132"
+version = "0.1.133"
 dependencies = [
  "thiserror 2.0.20",
 ]
@@ -1841,7 +1841,7 @@ checksum = "bb7f9cb9982c5086e786c73b7c5dcca67937ffede389cc9c92928a7ab5b01148"
 
 [[package]]
 name = "omoya"
-version = "0.1.132"
+version = "0.1.133"
 dependencies = [
  "awase",
  "blake3",
@@ -1876,7 +1876,7 @@ dependencies = [
 
 [[package]]
 name = "omoya-spec"
-version = "0.1.132"
+version = "0.1.133"
 dependencies = [
  "thiserror 2.0.20",
  "tracing",
