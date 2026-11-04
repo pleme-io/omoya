@@ -35,6 +35,9 @@
 //! agreement with reality nobody has checked — which is worse than an honest
 //! gap. See `theory/OMOYA.md` §5a and M2.
 
+pub mod idle;
+pub mod session_lock;
+
 use core::marker::PhantomData;
 
 /// Sealing module — [`ModeState`] may not be implemented outside this crate.

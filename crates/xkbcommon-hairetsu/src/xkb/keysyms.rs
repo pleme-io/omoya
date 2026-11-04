@@ -2581,3 +2581,24 @@ pub const KEY_zerosubscript: u32 = 0x1002080;
 pub const KEY_zerosuperior: u32 = 0x1002070;
 pub const KEY_zstroke: u32 = 0x10001b6;
 pub const KEY_Zstroke: u32 = 0x10001b5;
+
+#[allow(non_upper_case_globals)]
+pub const KEY_0: u32 = 0x30;
+#[allow(non_upper_case_globals)]
+pub const KEY_1: u32 = 0x31;
+#[allow(non_upper_case_globals)]
+pub const KEY_2: u32 = 0x32;
+#[allow(non_upper_case_globals)]
+pub const KEY_3: u32 = 0x33;
+#[allow(non_upper_case_globals)]
+pub const KEY_4: u32 = 0x34;
+#[allow(non_upper_case_globals)]
+pub const KEY_5: u32 = 0x35;
+#[allow(non_upper_case_globals)]
+pub const KEY_6: u32 = 0x36;
+#[allow(non_upper_case_globals)]
+pub const KEY_7: u32 = 0x37;
+#[allow(non_upper_case_globals)]
+pub const KEY_8: u32 = 0x38;
+#[allow(non_upper_case_globals)]
+pub const KEY_9: u32 = 0x39;

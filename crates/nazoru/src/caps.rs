@@ -21,7 +21,8 @@ impl Capabilities {
     #[must_use]
     pub fn classify(&self) -> Class {
         Class {
-            keyboard: self.keys.contains(&code::KEY_A),
+            keyboard: self.keys.contains(&code::KEY_A)
+                || code::SEAT_KEYS.iter().any(|key| self.keys.contains(key)),
             pointer: self.keys.contains(&code::BTN_LEFT) || self.rel.contains(&code::REL_X),
             touchpad: self.is_touchpad(),
         }

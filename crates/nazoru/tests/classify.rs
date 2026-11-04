@@ -145,3 +145,21 @@ fn a_keyboard_key_makes_a_keyboard_and_a_left_button_alone_stays_a_legacy_pointe
     let empty = from_proc("0", "", "", "").classify();
     assert!(!empty.pointer && !empty.keyboard && !empty.touchpad);
 }
+
+#[test]
+fn a_node_with_only_seat_keys_is_a_keyboard() {
+    let mut video_bus = from_proc("0", "", "", "");
+    video_bus
+        .keys
+        .extend([code::KEY_BRIGHTNESSDOWN, code::KEY_BRIGHTNESSUP]);
+    assert!(
+        video_bus.classify().keyboard,
+        "the ACPI Video Bus carries brightness keys"
+    );
+    let mut power_button = from_proc("0", "", "", "");
+    power_button.keys.insert(116);
+    assert!(
+        !power_button.classify().keyboard,
+        "logind owns the power button"
+    );
+}

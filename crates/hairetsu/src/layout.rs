@@ -42,6 +42,7 @@ pub enum KeyType {
     /// [`Self::Alphabetic`] is distinct from [`Self::TwoLevel`]: Caps Lock must
     /// reach `ç` and must not reach `¹`.
     FourLevelAlphabetic,
+    FourLevelSemiAlphabetic,
 }
 
 impl KeyType {
@@ -57,6 +58,7 @@ impl KeyType {
             Self::ControlLevel2 => "PC_CONTROL_LEVEL2",
             Self::FourLevel => "FOUR_LEVEL",
             Self::FourLevelAlphabetic => "FOUR_LEVEL_ALPHABETIC",
+            Self::FourLevelSemiAlphabetic => "FOUR_LEVEL_SEMIALPHABETIC",
         }
     }
 
@@ -87,11 +89,19 @@ impl KeyType {
             // Shift, not Caps: both reach level 2, and Shift is the one a
             // synthesiser can release again without leaving the seat in a
             // different state than it found it.
-            (Self::Alphabetic | Self::FourLevelAlphabetic, 0) => Some(0),
-            (Self::Alphabetic | Self::FourLevelAlphabetic, 1) => Some(SHIFT),
+            (Self::Alphabetic | Self::FourLevelAlphabetic | Self::FourLevelSemiAlphabetic, 0) => {
+                Some(0)
+            }
+            (Self::Alphabetic | Self::FourLevelAlphabetic | Self::FourLevelSemiAlphabetic, 1) => {
+                Some(SHIFT)
+            }
 
-            (Self::FourLevel | Self::FourLevelAlphabetic, 2) => Some(MOD5),
-            (Self::FourLevel | Self::FourLevelAlphabetic, 3) => Some(SHIFT | MOD5),
+            (Self::FourLevel | Self::FourLevelAlphabetic | Self::FourLevelSemiAlphabetic, 2) => {
+                Some(MOD5)
+            }
+            (Self::FourLevel | Self::FourLevelAlphabetic | Self::FourLevelSemiAlphabetic, 3) => {
+                Some(SHIFT | MOD5)
+            }
 
             // ★ NumLock, and NOT Shift — `level_for_key` resolves the keypad
             // as `num && !shift`, matching xkeyboard-config's default type,
@@ -129,7 +139,7 @@ impl KeyType {
             | Self::Keypad
             | Self::AltLevel2
             | Self::ControlLevel2 => n == 2,
-            Self::FourLevel | Self::FourLevelAlphabetic => n == 4,
+            Self::FourLevel | Self::FourLevelAlphabetic | Self::FourLevelSemiAlphabetic => n == 4,
         }
     }
 }
@@ -279,6 +289,11 @@ pub static US: &[KeyEntry] = &[
     k(133, "LWIN", OneLevel, &[key::Super_L]),
     k(134, "RWIN", OneLevel, &[key::Super_R]),
     k(135, "MENU", OneLevel, &[key::Menu]),
+    k(171, "I171", OneLevel, &[key::XF86_AudioNext]),
+    k(172, "I172", OneLevel, &[key::XF86_AudioPlay]),
+    k(173, "I173", OneLevel, &[key::XF86_AudioPrev]),
+    k(232, "I232", OneLevel, &[key::XF86_MonBrightnessDown]),
+    k(233, "I233", OneLevel, &[key::XF86_MonBrightnessUp]),
 ];
 
 /// Look up a key by XKB keycode in the `us` table.
@@ -316,6 +331,7 @@ pub fn lookup(keycode: u32) -> Option<&'static KeyEntry> {
 pub struct LayoutDef {
     /// The RMLVO layout name, as it appears in `services.xserver.xkb.layout`.
     pub rmlvo: &'static str,
+    pub variant: &'static str,
     /// `name[Group1]` in the emitted keymap — what a client displays.
     pub display: &'static str,
     /// The key table, ordered by keycode so lookup is a binary search.
@@ -340,13 +356,21 @@ impl LayoutDef {
 pub static LAYOUTS: &[LayoutDef] = &[
     LayoutDef {
         rmlvo: "us",
+        variant: "",
         display: "English (US)",
         keys: US,
     },
     LayoutDef {
         rmlvo: "br",
+        variant: "",
         display: "Portuguese (Brazil)",
         keys: BR,
+    },
+    LayoutDef {
+        rmlvo: "us",
+        variant: "intl",
+        display: "English (US, intl., with dead keys)",
+        keys: US_INTL,
     },
 ];
 
@@ -356,7 +380,17 @@ pub fn by_rmlvo(name: &str) -> Option<&'static LayoutDef> {
     if name.is_empty() {
         return LAYOUTS.first();
     }
-    LAYOUTS.iter().find(|l| l.rmlvo == name)
+    by_names(name, "")
+}
+
+#[must_use]
+pub fn by_names(layout: &str, variant: &str) -> Option<&'static LayoutDef> {
+    if layout.is_empty() && variant.is_empty() {
+        return LAYOUTS.first();
+    }
+    LAYOUTS
+        .iter()
+        .find(|l| l.rmlvo == layout && l.variant == variant)
 }
 
 // ── `br` (ABNT2) ──────────────────────────────────────────────────────────
@@ -396,7 +430,7 @@ const U1E9E: RawKeysym = 0x0100_1E9E;
 /// BULLET, as a Unicode-form keysym. See [`U1E9E`].
 const U2022: RawKeysym = 0x0100_2022;
 
-use KeyType::{FourLevel as F4, FourLevelAlphabetic as F4A};
+use KeyType::{FourLevel as F4, FourLevelAlphabetic as F4A, FourLevelSemiAlphabetic as F4S};
 
 /// The `br` layout — Brazilian ABNT2.
 ///
@@ -770,6 +804,327 @@ pub static BR: &[KeyEntry] = &[
     k(133, "LWIN", OneLevel, &[key::Super_L]),
     k(134, "RWIN", OneLevel, &[key::Super_R]),
     k(135, "MENU", OneLevel, &[key::Menu]),
+    k(171, "I171", OneLevel, &[key::XF86_AudioNext]),
+    k(172, "I172", OneLevel, &[key::XF86_AudioPlay]),
+    k(173, "I173", OneLevel, &[key::XF86_AudioPrev]),
+    k(232, "I232", OneLevel, &[key::XF86_MonBrightnessDown]),
+    k(233, "I233", OneLevel, &[key::XF86_MonBrightnessUp]),
+];
+
+pub static US_INTL: &[KeyEntry] = &[
+    k(9, "ESC", OneLevel, &[key::Escape]),
+    k(
+        10,
+        "AE01",
+        F4,
+        &[key::_1, key::exclam, key::exclamdown, key::onesuperior],
+    ),
+    k(
+        11,
+        "AE02",
+        F4,
+        &[key::_2, key::at, key::twosuperior, key::dead_doubleacute],
+    ),
+    k(
+        12,
+        "AE03",
+        F4,
+        &[
+            key::_3,
+            key::numbersign,
+            key::threesuperior,
+            key::dead_macron,
+        ],
+    ),
+    k(
+        13,
+        "AE04",
+        F4,
+        &[key::_4, key::dollar, key::currency, key::sterling],
+    ),
+    k(
+        14,
+        "AE05",
+        F4,
+        &[key::_5, key::percent, key::EuroSign, key::dead_cedilla],
+    ),
+    k(
+        15,
+        "AE06",
+        F4,
+        &[
+            key::_6,
+            key::dead_circumflex,
+            key::onequarter,
+            key::asciicircum,
+        ],
+    ),
+    k(
+        16,
+        "AE07",
+        F4,
+        &[key::_7, key::ampersand, key::onehalf, key::dead_horn],
+    ),
+    k(
+        17,
+        "AE08",
+        F4,
+        &[key::_8, key::asterisk, key::threequarters, key::dead_ogonek],
+    ),
+    k(
+        18,
+        "AE09",
+        F4,
+        &[
+            key::_9,
+            key::parenleft,
+            key::leftsinglequotemark,
+            key::dead_breve,
+        ],
+    ),
+    k(
+        19,
+        "AE10",
+        F4,
+        &[
+            key::_0,
+            key::parenright,
+            key::rightsinglequotemark,
+            key::dead_abovering,
+        ],
+    ),
+    k(
+        20,
+        "AE11",
+        F4,
+        &[key::minus, key::underscore, key::yen, key::dead_belowdot],
+    ),
+    k(
+        21,
+        "AE12",
+        F4,
+        &[key::equal, key::plus, key::multiply, key::division],
+    ),
+    k(22, "BKSP", OneLevel, &[key::BackSpace]),
+    k(23, "TAB", TwoLevel, &[key::Tab, key::ISO_Left_Tab]),
+    k(
+        24,
+        "AD01",
+        F4A,
+        &[key::q, key::Q, key::adiaeresis, key::Adiaeresis],
+    ),
+    k(25, "AD02", F4A, &[key::w, key::W, key::aring, key::Aring]),
+    k(26, "AD03", F4A, &[key::e, key::E, key::eacute, key::Eacute]),
+    k(
+        27,
+        "AD04",
+        F4S,
+        &[key::r, key::R, key::registered, key::trademark],
+    ),
+    k(28, "AD05", F4A, &[key::t, key::T, key::thorn, key::THORN]),
+    k(
+        29,
+        "AD06",
+        F4A,
+        &[key::y, key::Y, key::udiaeresis, key::Udiaeresis],
+    ),
+    k(30, "AD07", F4A, &[key::u, key::U, key::uacute, key::Uacute]),
+    k(31, "AD08", F4A, &[key::i, key::I, key::iacute, key::Iacute]),
+    k(32, "AD09", F4A, &[key::o, key::O, key::oacute, key::Oacute]),
+    k(
+        33,
+        "AD10",
+        F4A,
+        &[key::p, key::P, key::odiaeresis, key::Odiaeresis],
+    ),
+    k(
+        34,
+        "AD11",
+        F4,
+        &[
+            key::bracketleft,
+            key::braceleft,
+            key::guillemotleft,
+            key::leftdoublequotemark,
+        ],
+    ),
+    k(
+        35,
+        "AD12",
+        F4,
+        &[
+            key::bracketright,
+            key::braceright,
+            key::guillemotright,
+            key::rightdoublequotemark,
+        ],
+    ),
+    k(36, "RTRN", OneLevel, &[key::Return]),
+    k(37, "LCTL", OneLevel, &[key::Control_L]),
+    k(38, "AC01", F4A, &[key::a, key::A, key::aacute, key::Aacute]),
+    k(
+        39,
+        "AC02",
+        F4S,
+        &[key::s, key::S, key::ssharp, key::section],
+    ),
+    k(40, "AC03", F4A, &[key::d, key::D, key::eth, key::ETH]),
+    k(
+        41,
+        "AC04",
+        F4A,
+        &[key::f, key::F, key::ediaeresis, key::Ediaeresis],
+    ),
+    k(42, "AC05", F4A, &[key::g, key::G, key::g, key::G]),
+    k(43, "AC06", F4A, &[key::h, key::H, key::h, key::H]),
+    k(
+        44,
+        "AC07",
+        F4A,
+        &[key::j, key::J, key::idiaeresis, key::Idiaeresis],
+    ),
+    k(45, "AC08", F4A, &[key::k, key::K, key::oe, key::OE]),
+    k(46, "AC09", F4A, &[key::l, key::L, key::oslash, key::Oslash]),
+    k(
+        47,
+        "AC10",
+        F4,
+        &[key::semicolon, key::colon, key::paragraph, key::degree],
+    ),
+    k(
+        48,
+        "AC11",
+        F4,
+        &[
+            key::dead_acute,
+            key::dead_diaeresis,
+            key::apostrophe,
+            key::quotedbl,
+        ],
+    ),
+    k(
+        49,
+        "TLDE",
+        F4,
+        &[
+            key::dead_grave,
+            key::dead_tilde,
+            key::grave,
+            key::asciitilde,
+        ],
+    ),
+    k(50, "LFSH", OneLevel, &[key::Shift_L]),
+    k(
+        51,
+        "BKSL",
+        F4,
+        &[key::backslash, key::bar, key::notsign, key::brokenbar],
+    ),
+    k(52, "AB01", F4A, &[key::z, key::Z, key::ae, key::AE]),
+    k(
+        53,
+        "AB02",
+        F4S,
+        &[key::x, key::X, key::periodcentered, key::dead_stroke],
+    ),
+    k(
+        54,
+        "AB03",
+        F4S,
+        &[key::c, key::C, key::copyright, key::cent],
+    ),
+    k(55, "AB04", F4A, &[key::v, key::V, key::v, key::V]),
+    k(56, "AB05", F4A, &[key::b, key::B, key::b, key::B]),
+    k(57, "AB06", F4A, &[key::n, key::N, key::ntilde, key::Ntilde]),
+    k(58, "AB07", F4S, &[key::m, key::M, key::mu, key::plusminus]),
+    k(
+        59,
+        "AB08",
+        F4,
+        &[key::comma, key::less, key::ccedilla, key::Ccedilla],
+    ),
+    k(
+        60,
+        "AB09",
+        F4,
+        &[
+            key::period,
+            key::greater,
+            key::dead_abovedot,
+            key::dead_caron,
+        ],
+    ),
+    k(
+        61,
+        "AB10",
+        F4,
+        &[key::slash, key::question, key::questiondown, key::dead_hook],
+    ),
+    k(62, "RTSH", OneLevel, &[key::Shift_R]),
+    k(63, "KPMU", OneLevel, &[key::KP_Multiply]),
+    k(64, "LALT", OneLevel, &[key::Alt_L]),
+    k(65, "SPCE", OneLevel, &[key::space]),
+    k(66, "CAPS", OneLevel, &[key::Caps_Lock]),
+    k(67, "FK01", OneLevel, &[key::F1]),
+    k(68, "FK02", OneLevel, &[key::F2]),
+    k(69, "FK03", OneLevel, &[key::F3]),
+    k(70, "FK04", OneLevel, &[key::F4]),
+    k(71, "FK05", OneLevel, &[key::F5]),
+    k(72, "FK06", OneLevel, &[key::F6]),
+    k(73, "FK07", OneLevel, &[key::F7]),
+    k(74, "FK08", OneLevel, &[key::F8]),
+    k(75, "FK09", OneLevel, &[key::F9]),
+    k(76, "FK10", OneLevel, &[key::F10]),
+    k(77, "NMLK", OneLevel, &[key::Num_Lock]),
+    k(78, "SCLK", OneLevel, &[key::Scroll_Lock]),
+    k(79, "KP7", Keypad, &[key::KP_Home, key::KP_7]),
+    k(80, "KP8", Keypad, &[key::KP_Up, key::KP_8]),
+    k(81, "KP9", Keypad, &[key::KP_Prior, key::KP_9]),
+    k(82, "KPSU", OneLevel, &[key::KP_Subtract]),
+    k(83, "KP4", Keypad, &[key::KP_Left, key::KP_4]),
+    k(84, "KP5", Keypad, &[key::KP_Begin, key::KP_5]),
+    k(85, "KP6", Keypad, &[key::KP_Right, key::KP_6]),
+    k(86, "KPAD", OneLevel, &[key::KP_Add]),
+    k(87, "KP1", Keypad, &[key::KP_End, key::KP_1]),
+    k(88, "KP2", Keypad, &[key::KP_Down, key::KP_2]),
+    k(89, "KP3", Keypad, &[key::KP_Next, key::KP_3]),
+    k(90, "KP0", Keypad, &[key::KP_Insert, key::KP_0]),
+    k(91, "KPDL", Keypad, &[key::KP_Delete, key::KP_Decimal]),
+    k(
+        94,
+        "LSGT",
+        F4,
+        &[key::backslash, key::bar, key::backslash, key::bar],
+    ),
+    k(95, "FK11", OneLevel, &[key::F11]),
+    k(96, "FK12", OneLevel, &[key::F12]),
+    k(104, "KPEN", OneLevel, &[key::KP_Enter]),
+    k(105, "RCTL", OneLevel, &[key::Control_R]),
+    k(106, "KPDV", OneLevel, &[key::KP_Divide]),
+    k(107, "PRSC", AltLevel2, &[key::Print, key::Sys_Req]),
+    k(108, "RALT", OneLevel, &[key::ISO_Level3_Shift]),
+    k(110, "HOME", OneLevel, &[key::Home]),
+    k(111, "UP", OneLevel, &[key::Up]),
+    k(112, "PGUP", OneLevel, &[key::Prior]),
+    k(113, "LEFT", OneLevel, &[key::Left]),
+    k(114, "RGHT", OneLevel, &[key::Right]),
+    k(115, "END", OneLevel, &[key::End]),
+    k(116, "DOWN", OneLevel, &[key::Down]),
+    k(117, "PGDN", OneLevel, &[key::Next]),
+    k(118, "INS", OneLevel, &[key::Insert]),
+    k(119, "DELE", OneLevel, &[key::Delete]),
+    k(121, "MUTE", OneLevel, &[key::XF86_AudioMute]),
+    k(122, "VOL-", OneLevel, &[key::XF86_AudioLowerVolume]),
+    k(123, "VOL+", OneLevel, &[key::XF86_AudioRaiseVolume]),
+    k(127, "PAUS", ControlLevel2, &[key::Pause, key::Break]),
+    k(133, "LWIN", OneLevel, &[key::Super_L]),
+    k(134, "RWIN", OneLevel, &[key::Super_R]),
+    k(135, "MENU", OneLevel, &[key::Menu]),
+    k(171, "I171", OneLevel, &[key::XF86_AudioNext]),
+    k(172, "I172", OneLevel, &[key::XF86_AudioPlay]),
+    k(173, "I173", OneLevel, &[key::XF86_AudioPrev]),
+    k(232, "I232", OneLevel, &[key::XF86_MonBrightnessDown]),
+    k(233, "I233", OneLevel, &[key::XF86_MonBrightnessUp]),
 ];
 
 #[cfg(test)]
@@ -901,17 +1256,99 @@ mod tests {
         }
     }
 
+    fn fixture_rows(text: &str) -> std::collections::BTreeMap<String, Vec<String>> {
+        let mut rows = std::collections::BTreeMap::new();
+        for line in text.lines() {
+            let Some(rest) = line.trim().strip_prefix("key <") else {
+                continue;
+            };
+            let Some((name, tail)) = rest.split_once('>') else {
+                continue;
+            };
+            let Some(open) = tail.rfind('[') else {
+                continue;
+            };
+            let Some(close) = tail.rfind(']') else {
+                continue;
+            };
+            let levels = tail[open + 1..close]
+                .split(',')
+                .map(|w| w.trim().to_owned())
+                .collect();
+            rows.insert(name.to_owned(), levels);
+        }
+        rows
+    }
+
+    #[test]
+    fn us_intl_agrees_with_xkbcli() {
+        let want = fixture_rows(include_str!("../tests/fixtures/us-intl.xkb"));
+        assert!(
+            want.len() >= 90,
+            "the fixture parsed to {} rows",
+            want.len()
+        );
+        let def = by_names("us", "intl").expect("registered");
+        let text = crate::emit::keymap_text(def.keys, def.display);
+        let got = fixture_rows(&text);
+        let mut compared = 0;
+        for (name, levels) in &want {
+            if levels.len() == 4 {
+                assert_eq!(got.get(name), Some(levels), "{name}");
+                compared += 1;
+            }
+        }
+        assert!(compared >= 48, "only {compared} four-level keys compared");
+    }
+
+    #[test]
+    fn us_intl_is_not_us_and_a_variant_nobody_transcribed_refuses() {
+        let intl = by_names("us", "intl").expect("registered");
+        let us = by_rmlvo("us").expect("registered");
+        assert_ne!(
+            intl.lookup(48).unwrap().levels,
+            us.lookup(48).unwrap().levels
+        );
+        assert_eq!(intl.lookup(48).unwrap().levels[0], key::dead_acute);
+        assert_eq!(intl.lookup(108).unwrap().levels[0], key::ISO_Level3_Shift);
+        assert!(by_names("us", "dvorak").is_none());
+        assert!(by_names("br", "intl").is_none());
+    }
+
+    #[test]
+    fn every_layout_carries_the_media_keys() {
+        for l in LAYOUTS {
+            for (code, sym) in [
+                (121, key::XF86_AudioMute),
+                (122, key::XF86_AudioLowerVolume),
+                (123, key::XF86_AudioRaiseVolume),
+                (171, key::XF86_AudioNext),
+                (172, key::XF86_AudioPlay),
+                (173, key::XF86_AudioPrev),
+                (232, key::XF86_MonBrightnessDown),
+                (233, key::XF86_MonBrightnessUp),
+            ] {
+                assert_eq!(
+                    l.lookup(code).map(|e| e.levels[0]),
+                    Some(sym),
+                    "{} {code}",
+                    l.display
+                );
+            }
+        }
+    }
+
     #[test]
     fn rmlvo_names_are_unique_and_resolvable() {
         for l in LAYOUTS {
-            let found = by_rmlvo(l.rmlvo).expect("registered layout resolves");
-            assert_eq!(found.rmlvo, l.rmlvo);
+            let found = by_names(l.rmlvo, l.variant).expect("registered layout resolves");
+            assert_eq!((found.rmlvo, found.variant), (l.rmlvo, l.variant));
         }
-        let mut names: Vec<_> = LAYOUTS.iter().map(|l| l.rmlvo).collect();
+        let mut names: Vec<_> = LAYOUTS.iter().map(|l| (l.rmlvo, l.variant)).collect();
         names.sort_unstable();
         let before = names.len();
         names.dedup();
-        assert_eq!(before, names.len(), "duplicate rmlvo name in LAYOUTS");
+        assert_eq!(before, names.len(), "duplicate layout in LAYOUTS");
     }
 
     #[test]

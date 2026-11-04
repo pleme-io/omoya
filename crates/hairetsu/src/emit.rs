@@ -148,6 +148,22 @@ const TYPES: &str = r#"xkb_types "hairetsu" {
         level_name[Level3]= "Alt Base";
         level_name[Level4]= "Shift Alt";
     };
+    type "FOUR_LEVEL_SEMIALPHABETIC" {
+        modifiers= Shift+Lock+Mod5;
+        map[None]= Level1;
+        map[Shift]= Level2;
+        map[Lock]= Level2;
+        map[Mod5]= Level3;
+        map[Shift+Mod5]= Level4;
+        map[Lock+Mod5]= Level3;
+        map[Shift+Lock+Mod5]= Level4;
+        preserve[Lock+Mod5]= Lock;
+        preserve[Shift+Lock+Mod5]= Lock;
+        level_name[Level1]= "Base";
+        level_name[Level2]= "Shift";
+        level_name[Level3]= "Alt Base";
+        level_name[Level4]= "Shift Alt";
+    };
 };"#;
 
 /// Compatibility rules: how held keys become modifier state, and the LEDs.
@@ -343,6 +359,7 @@ mod parity {
             KeyType::Keypad,
             KeyType::FourLevel,
             KeyType::FourLevelAlphabetic,
+            KeyType::FourLevelSemiAlphabetic,
             KeyType::AltLevel2,
             KeyType::ControlLevel2,
         ] {
@@ -378,7 +395,8 @@ mod parity {
 
         let mut checked = 0_u32;
         for def in LAYOUTS {
-            let keymap = Arc::new(Keymap::for_layout(def.rmlvo).expect("registered layout"));
+            let keymap =
+                Arc::new(Keymap::for_names(def.rmlvo, def.variant).expect("registered layout"));
             for entry in def.keys {
                 let ty = parsed
                     .get(entry.kind.xkb_name())

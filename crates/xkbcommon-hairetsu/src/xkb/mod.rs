@@ -223,10 +223,8 @@ impl Keymap {
         _options: Option<String>,
         _flags: KeymapCompileFlags,
     ) -> Option<Self> {
-        if !variant.borrow().is_empty() {
-            return None;
-        }
-        hairetsu::Keymap::for_layout(layout.borrow()).map(|k| Self { inner: Arc::new(k) })
+        hairetsu::Keymap::for_names(layout.borrow(), variant.borrow())
+            .map(|k| Self { inner: Arc::new(k) })
     }
 
     /// Compile a keymap from a shared-memory fd, as a Wayland client sends one.

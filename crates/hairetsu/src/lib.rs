@@ -142,6 +142,11 @@ impl Keymap {
         layout::by_rmlvo(rmlvo).map(Self::from_def)
     }
 
+    #[must_use]
+    pub fn for_names(rmlvo: &str, variant: &str) -> Option<Self> {
+        layout::by_names(rmlvo, variant).map(Self::from_def)
+    }
+
     fn from_def(def: &layout::LayoutDef) -> Self {
         let keys: Vec<CompiledKey> = def
             .keys
@@ -522,6 +527,13 @@ impl State {
             layout::KeyType::Alphabetic | layout::KeyType::FourLevelAlphabetic => {
                 u32::from(shift ^ caps)
             }
+            layout::KeyType::FourLevelSemiAlphabetic => {
+                if level3 {
+                    u32::from(shift)
+                } else {
+                    u32::from(shift ^ caps)
+                }
+            }
             // ★ `num && !shift`, NOT `shift || num`. Found by the emit-parity
             // test the moment it existed, then settled against
             // xkeyboard-config 2.46 `types/numpad`, whose DEFAULT ("pc") type
@@ -605,7 +617,7 @@ mod tests {
         // than the one requested — silently, because every step succeeds.
         let mut checked = 0_u32;
         for def in layout::LAYOUTS {
-            let km = Arc::new(Keymap::for_layout(def.rmlvo).expect("registered"));
+            let km = Arc::new(Keymap::for_names(def.rmlvo, def.variant).expect("registered"));
             for entry in def.keys {
                 for level in 0..u32::try_from(entry.levels.len()).expect("small") {
                     let Some(mods) = entry.kind.mods_for_level(level) else {
