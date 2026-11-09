@@ -93,7 +93,7 @@ const PARCEL_CELLS: usize = 9;
 // resolves through the fleet's role binding, so a change there reaches this
 // bar by construction and a divergence has nowhere to live.
 //
-// PENTE §X: a phase's done-predicate is a DELETION. This is that deletion.
+// A phase's done-predicate is a DELETION. This is that deletion.
 
 /// Resolve a fleet semantic role to a colour.
 ///

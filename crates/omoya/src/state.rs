@@ -59,7 +59,7 @@ impl SeatMode {
             "entrance" => Ok(Self::Entrance),
             "session" => Ok(Self::Session),
             "lock" => Err(
-                "`lock` is not a launchable mode — it is in-process session state (OMOYA.md §4.2)"
+                "`lock` is not a launchable mode — it is in-process session state"
                     .to_string(),
             ),
             other => Err(format!("unknown mode `{other}` (entrance | session)")),
@@ -746,7 +746,7 @@ mod tests {
 
     /// ★ `lock` is refused with a REASON, not merely rejected as unknown.
     ///
-    /// Lock is in-process session state (OMOYA.md §4.2); accepting `--mode
+    /// Lock is in-process session state; accepting `--mode
     /// lock` would advertise a spawn shape the design rejects, and rejecting it
     /// as "unknown mode" would hide why.
     #[test]

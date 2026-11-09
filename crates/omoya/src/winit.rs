@@ -6,7 +6,7 @@
 //! console. M4 is the same compositor on `backend_drm`.
 //!
 //! The renderer here is whatever `backend_winit` provides (GLES). That is **not**
-//! a commitment against OMOYA.md §5a's pixman-first decision, which is about the
+//! a commitment against the pixman-first decision, which is about the
 //! **scanout** path on real hardware — nested rendering does not scan out at
 //! all, it hands a buffer to the host compositor.
 

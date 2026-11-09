@@ -210,7 +210,7 @@
             wayland-protocols
             wayland-scanner
             # xkbcommon turns keycodes into symbols. This is also where omoya's
-            # `awase::Key` adapter attaches (OMOYA.md §5), so it is M2-relevant
+            # `awase::Key` adapter attaches, so it is M2-relevant
             # rather than deferred with the rest of the input stack.
             libxkbcommon
             # winit's X11 arm — winit auto-detects at runtime and needs both

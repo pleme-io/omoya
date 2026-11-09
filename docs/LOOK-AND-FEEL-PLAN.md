@@ -149,7 +149,7 @@ control is where you expect it, and the whole thing comes from one place.
 > value. Every constant in the compositor is a local `pub const`.
 
 So the compliant version of "make the desktop beautiful" is: **adopt the spine
-that exists, and delete the hand tables.** Per PENTE §X, *"a phase's
+that exists, and delete the hand tables.** *"A phase's
 done-predicate is a DELETION"* — a phase that lands a spec, an emitter and a
 green test while the hand table survives has **failed**.
 
