@@ -59,6 +59,6 @@ clippy pedantic clean.
 
 Everything the compositor actually does. There is no compositing, no rendering,
 no protocol object, no output, no input, and no DRM device anywhere in this
-crate — by design, per `theory/OMOYA.md` §"What this crate deliberately does NOT
-model". M0 says the *mode machine* is right. It says nothing about whether omoya
+crate — by design; see "What this crate deliberately does NOT
+model" in `crates/omoya-spec/src/lib.rs`. M0 says the *mode machine* is right. It says nothing about whether omoya
 can draw a pixel; that is M2.

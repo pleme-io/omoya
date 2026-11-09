@@ -360,6 +360,6 @@ existed and are what make this tractable; every kasane row is DESIGN.
 ★ **Corpus-checked 2026-09-03, and the check earned its keep.** The first
 candidate was `yakitsuke` (焼き付け, *burning-in*), cleared by reasoning — and
 `pleme-io/yakitsuke` is a **live repo** with its own `src/` and `CLAUDE.md`.
-That is exactly the silent failure `theory/NAMING.md` records: a word is free
+That is exactly the silent failure the naming check exists for: a word is free
 only when the CORPUS says so. `kasane` and `utsushi` were then checked across
 1202 repos; neither names a pleme-io repo.

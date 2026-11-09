@@ -1,6 +1,6 @@
 //! The nested backend — omoya running as a window inside an existing session.
 //!
-//! This is the DEV LOOP host, not a shipping surface: `theory/OMOYA.md` M2 uses
+//! This is the DEV LOOP host, not a shipping surface: M2 uses
 //! it because it needs no DRM device, no root and no VT, so the question *"does
 //! omoya composite at all?"* can be answered without risking the machine's only
 //! console. M4 is the same compositor on `backend_drm`.

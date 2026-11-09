@@ -60,7 +60,7 @@ omoya-spec = { path = "../omoya-spec", version = "0.1.0" }
 # The palette. NOT a hex literal in this crate — `irodori::NORD` is where Nord
 # is BORN in this fleet (ishou-tokens itself reads it), so the compositor's
 # clear colour is a projection of the fleet theme rather than a second copy of
-# it. theory/THEME-ARCHITECTURE.md is the rule this obeys.
+# it.
 irodori = "0.2"
 # `Refined<T, Bounds>` — the fleet's bounded-value type, and the reason the
 # key-repeat knobs cannot carry an out-of-band value. Adopted rather than

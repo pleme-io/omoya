@@ -4,7 +4,7 @@
 //! `awase::Reserved::fleet_linux()` says WHICH chords a compositor must not
 //! swallow. It says nothing about xkb, because it cannot: awase is a portable
 //! keymap library and keysyms are a Wayland/X detail. This module is the join,
-//! and `theory/OMOYA.md` §5 calls it out as "what omoya genuinely needs from
+//! and it is "what omoya genuinely needs from
 //! awase".
 //!
 //! ── WHY THE COVERAGE IS TEST-ENFORCED, NOT EYEBALLED ──────────────────────

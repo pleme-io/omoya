@@ -6,7 +6,7 @@
 //! its own buffers.
 //!
 //! ── ★ DUMB BUFFERS AND PIXMAN, DELIBERATELY ───────────────────────────────
-//! `theory/OMOYA.md` §5a chose the software path FIRST, on the reasoning that a
+//! omoya chose the software path FIRST, on the reasoning that a
 //! fallback nobody exercises is not a fallback. Two things since then turned
 //! that from prudent into simply correct:
 //!

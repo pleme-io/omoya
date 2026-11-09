@@ -1,4 +1,4 @@
-//! The seals: every illegal state in `theory/OMOYA.md`'s M0 table, proven to be
+//! The seals: every illegal state of M0, proven to be
 //! a COMPILE error rather than a runtime check.
 //!
 //! Each case's committed `.stderr` is the receipt. If one of these starts

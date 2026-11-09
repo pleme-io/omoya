@@ -53,8 +53,8 @@
 // `NuriRenderer`, and changing that decides what a live desktop runs on, which
 // is a separate change with its own risk.
 //
-// This is NOT the "primitive with zero consumers" that `theory/RENDERING.md`
-// warns is the fleet's real problem. That warning is about primitives nobody
+// This is NOT the "primitive with zero consumers" the fleet
+// warns is its real problem. That warning is about primitives nobody
 // reached for; this one has a named consumer whose bound it already meets.
 //
 // **Done-predicate for deleting this allow:** the seat selects a renderer by

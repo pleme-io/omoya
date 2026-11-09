@@ -203,7 +203,7 @@
           # it deletes the entire failing subtree rather than working around it.
           #
           # libinput / seatd / libdrm / mesa / libgbm / udev come back with M4,
-          # where they are actually used — see theory/OMOYA.md's phase ladder.
+          # where they are actually used.
           compositorDeps = with pkgs; [
             # Wayland itself + the protocol XML the scanner reads.
             wayland
@@ -349,7 +349,7 @@
               echo "omoya dev shell — $(rustc --version)"
               ${pkgs.lib.optionalString (!pkgs.stdenv.hostPlatform.isLinux) ''
                 echo "NOTE: this is not Linux. \`omoya-spec\` builds and tests here;"
-                echo "      the compositor itself does not — see theory/OMOYA.md M2."
+                echo "      the compositor itself does not."
               ''}
             '';
           };

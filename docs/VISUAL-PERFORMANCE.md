@@ -321,7 +321,7 @@ a decision over a small typed space — exactly what a `(def…)` form is for.
 - **`(defprobe …)`** — the typed probe set, so a counter and its denominator are
   declared together and a denominator-less counter has no constructor.
 
-**Two measured traps, from `theory/TATARA-LISP-SURFACE.md`, that this design
+**Two measured traps that this design
 must respect:** a typo'd keyword yields an **empty `Vec` reported as success**
 (so every form must assert a compiled count and refuse zero), and there is
 **no computation at the compile layer** — no arithmetic, no lambda. So derived

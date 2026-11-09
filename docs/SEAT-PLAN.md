@@ -373,7 +373,7 @@ below is the decision it closed.
 
 A ~50-line probe on plo first: allocate a linear ARGB8888 image on the nvidia Vulkan device, export via `VK_KHR_external_memory_fd`, `mmap` the fd. **If it fails, the entire CPU-import path is dead** and the answer is GLES/MultiRenderer for session mode with nuri kept as the mandatory CPU tier for `entrance`/`lock`. If it succeeds: implement `import_dmabuf` (mirroring the working `Bind<Dmabuf>` in READ mode, `sync_plane START|READ` / `END|READ` per the pixman oracle) **before** any global; add a dumb-buffer import case to `vkms-seat`; then land the global behind `--dmabuf`, **default off**, with v4 default feedback.
 
-**Done-predicate:** the probe result recorded either way, with the error if it fails. If landed: an A/B table from the sensor — fps, `pixels_painted`, `nvidia-smi` utilization — with and without. **The default flips only if dmabuf wins**, and `theory/OMOYA.md:213`'s parked wgpu-vs-GLES decision is closed by that number.
+**Done-predicate:** the probe result recorded either way, with the error if it fails. If landed: an A/B table from the sensor — fps, `pixels_painted`, `nvidia-smi` utilization — with and without. **The default flips only if dmabuf wins**, and the parked wgpu-vs-GLES decision is closed by that number.
 
 Default-off is not caution theatre — it is the only thing decoupling a push from a live seat with no human at it.
 

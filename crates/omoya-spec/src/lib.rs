@@ -14,7 +14,7 @@
 //! no `wayland-server`, no `libc`, no `wgpu`. Its invariants are checkable on a
 //! Mac, in CI, with no GPU and no seat.
 //!
-//! `theory/OMOYA.md` M0. The shape is deliberately the same one `mukae-spec`
+//! This is M0. The shape is deliberately the same one `mukae-spec`
 //! M0 used, because that is the one rung in this family already proven to work.
 //!
 //! # The illegal states, and the mechanism for each
@@ -33,7 +33,7 @@
 //! Compositing, rendering, protocol objects, output topology, input. Those need
 //! the platform, and pretending to model them here would produce a mock whose
 //! agreement with reality nobody has checked — which is worse than an honest
-//! gap. See `theory/OMOYA.md` §5a and M2.
+//! gap. Those arrive with the compositor at M2.
 
 pub mod idle;
 pub mod session_lock;
@@ -57,8 +57,8 @@ pub trait ModeState: sealed::Sealed {
     const NAME: &'static str;
 }
 
-/// The greeter. Composites **zero** clients — see `theory/OMOYA.md` §4.1, which
-/// rejects the layer-shell-client shape, and §5a, which is why entrance mode
+/// The greeter. Composites **zero** clients (the layer-shell-client shape is
+/// rejected), so entrance mode
 /// needs scanout but never dmabuf import.
 pub struct Entrance;
 

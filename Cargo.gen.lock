@@ -8,7 +8,7 @@
     "crates/nazoru/Cargo.toml": "bc61172a7ce19ad846b81096d9ef3960ab6ba073127f1a510aaf2cd91322295b",
     "crates/nuri/Cargo.toml": "3116435ecbd4619097d2879f5a26924834f5550aa4c732e667c3617e28d2865d",
     "crates/omoya-spec/Cargo.toml": "75cd6d31f2ef617df89556610445abab8cf9cddb49d7bbf04c28ac5b7fc89031",
-    "crates/omoya/Cargo.toml": "e3f66cb34aa940986822a9ab9e50712ffe0a4752ba20c20e462d5555d75f5c15",
+    "crates/omoya/Cargo.toml": "f02b48ca45b21d4e0d15ff27f1b39856fd4a43226dff9f04286876b78bd522b8",
     "crates/xkbcommon-hairetsu/Cargo.toml": "47e976fa1c8c185b17a5c2ced9fcec14a3fa5521a7bc9c046f3d23cf94af19b2"
   },
   "target_resolves": {

@@ -1,6 +1,6 @@
 //! omoya (母屋) — the pleme-io-native Wayland compositor.
 //!
-//! `theory/OMOYA.md` M2: a nested compositor that composites real clients, with
+//! M2: a nested compositor that composites real clients, with
 //! the Nord background sourced from the fleet palette and the mode machine from
 //! `omoya-spec`.
 //!
@@ -365,7 +365,7 @@ fn parse_args() -> Result<Args, String> {
                     "                  should be a script. Absent means Ctrl+Space says so\n",
                     "                  in the log rather than opening something else.\n\n",
                     "`lock` is not a launchable mode: it is in-process session\n",
-                    "state (theory/OMOYA.md §4.2)."
+                    "state."
                 )
                 .to_string());
             }

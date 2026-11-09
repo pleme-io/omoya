@@ -1,7 +1,7 @@
 //! The compositor's colours — a **projection** of the fleet palette, never a
 //! second copy of it.
 //!
-//! `theory/THEME-ARCHITECTURE.md` settles where Nord lives: it is born in
+//! Where Nord lives is settled: it is born in
 //! ishou's Rust tokens, which themselves read `irodori::NORD`. So this module
 //! contains no hex value. It contains the conversion nobody else can do for us
 //! — sRGB bytes to the **linear** floats a compositor's clear colour is

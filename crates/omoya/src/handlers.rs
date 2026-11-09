@@ -10,7 +10,7 @@
 //! M2 omits them. `move_request`/`resize_request` therefore accept the request
 //! and do nothing, which is a legal compositor response — a client asking to be
 //! dragged is asking, not commanding. Window-management POLICY is omoya's own
-//! essence (`theory/OMOYA.md` §3) and lands with the mode faces, not here.
+//! essence and lands with the mode faces, not here.
 
 use smithay::backend::renderer::utils::on_commit_buffer_handler;
 use smithay::{

@@ -42,7 +42,7 @@ use crate::CalloopData;
 /// this records where we are for the renderer and the logs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SeatMode {
-    /// The greeter. Composites zero clients — see `theory/OMOYA.md` §4.1.
+    /// The greeter. Composites zero clients.
     Entrance,
     /// The operator's desktop. The only mode that composites foreign clients.
     Session,
@@ -53,7 +53,7 @@ impl SeatMode {
     ///
     /// `lock` is deliberately NOT accepted: lock is not a mode you *launch*
     /// into, it is a state the session enters in-process, and accepting it here
-    /// would advertise a spawn shape `theory/OMOYA.md` §4.2 rejects.
+    /// would advertise a rejected spawn shape.
     pub fn parse(s: &str) -> Result<Self, String> {
         match s {
             "entrance" => Ok(Self::Entrance),
