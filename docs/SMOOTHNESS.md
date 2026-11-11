@@ -95,6 +95,12 @@ carries no `Pass`, and drawing takes one. The GPU-side twin is
 skipping the draw also skips the present — which is what mado's original
 attempt could not express, and why it produced the shadow regression.
 
+Advertising the global made the seat about 400× slower. plo is a 360 Hz
+display that we drove at 60, with latency as the only symptom. In omoya the
+composite runs inside `pass.spend`, so "decided to skip, drew anyway" has no
+shape to write. `mekuri` is its own crate, consumed from crates.io, so fix the
+frame decision there, not in omoya; mado implements `needs_frame`.
+
 **Region damage was deliberately NOT extracted**: mado tracks 1-D row spans,
 omoya 2-D rects. Same goal, different shapes; one type would fit neither.
 

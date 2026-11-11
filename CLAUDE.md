@@ -26,32 +26,18 @@ this seat, so that work is compose-don't-build rather than a new repo.
 
 ## Smoothness — read before touching the render loop or the mode
 
-**[`docs/SMOOTHNESS.md`](./docs/SMOOTHNESS.md)** carries the measurements. The
-three findings that cost the most to reach, so nobody re-derives them:
+**[`docs/SMOOTHNESS.md`](./docs/SMOOTHNESS.md)** carries the measurements and the
+full findings; read it before you change a protocol global, the mode or the frame
+decision. In short:
 
-- **A protocol global is a PROMISE about what we serve WELL.** Advertising
-  `zwp_linux_dmabuf_v1` made the seat 400× slower: mado switched to it because
-  it appeared, and `import_dmabuf` reads the client's buffer — which for a GPU
-  client is a CPU readback of VRAM across PCIe. It is withheld behind
-  `OMOYA_ADVERTISE_DMABUF` until direct scanout means the buffer is never read.
-- **`PREFERRED` picks the RESOLUTION, never the RATE.** EDID's preferred timing
-  on a high-refresh panel is routinely the 60 Hz compatibility descriptor. plo
-  is a 360 Hz display and we were driving it at 60, with latency as the only
-  symptom. `scanout` now takes the fastest mode at the preferred resolution,
-  ranked by the DERIVED rate — `vrefresh` is 0 on this panel and would rank
-  every mode equally. The `modes` leaf publishes the list, selection starred.
-- **The frame decision is `mekuri`'s, and the verdict PRODUCES the permission.**
-  `crates/mekuri` — `Verdict::Skip` carries no `Pass`, and the composite runs
-  inside `pass.spend`, so "decided to skip, drew anyway" has no shape to write.
-  Extracted because mado had the identical defect with the operands reversed.
-  It is its own crate now — [`pleme-io/mekuri`](https://github.com/pleme-io/mekuri),
-  consumed from crates.io — so **fix the decision there, not here**. The GPU
-  twin is `madori::RenderCallback::needs_frame`, asked before the swapchain
-  acquire; mado implements it.
+- A protocol global is a promise about what we serve well:
+  `zwp_linux_dmabuf_v1` stays behind `OMOYA_ADVERTISE_DMABUF`.
+- `PREFERRED` picks the resolution, never the rate: `scanout` takes the fastest
+  mode at that resolution.
+- The frame decision is [`mekuri`](https://github.com/pleme-io/mekuri)'s: fix it
+  there, not here.
 
-**The rule the file exists to enforce: measure after each step before starting
-the next.** Three fixes in a row were justified by a plausible story about
-where the time went, and all three stories were wrong.
+**Measure after each step before starting the next.**
 
 ## The daily seat
 
